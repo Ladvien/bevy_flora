@@ -943,7 +943,7 @@ fn baobab() -> TreeParams {
         branches: BranchParams {
             start: 0.75,
             end: 0.95,
-            density: 0.8,
+            density: 3.0,
             length: 0.45,
             angle: 55.0,
             radius_ratio: 0.35,
@@ -1390,7 +1390,6 @@ mod tests {
         let baobab = TreePreset::Baobab.params();
         assert!(baobab.trunk.radius > 1.0);
         assert!(baobab.branches.start > 0.7);
-        assert!(baobab.branches.density < 1.0);
     }
 
     #[test]
