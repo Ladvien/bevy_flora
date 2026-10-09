@@ -110,12 +110,23 @@ impl bevy::app::Plugin for FloraPlugin {
     }
 }
 
+/// Share of diffuse light a leaf lets through to its other side, so leaves
+/// turned away from the sun are lit from behind instead of near-black.
+const LEAF_TRANSLUCENCY: f32 = 0.5;
+
 fn material(base_color: bevy::color::Color) -> StandardMaterial {
     StandardMaterial {
         base_color,
         perceptual_roughness: 1.0,
         cull_mode: Some(Face::Back),
         ..Default::default()
+    }
+}
+
+fn leaf_material(base_color: bevy::color::Color) -> StandardMaterial {
+    StandardMaterial {
+        diffuse_transmission: LEAF_TRANSLUCENCY,
+        ..material(base_color)
     }
 }
 
@@ -150,7 +161,7 @@ pub fn rebuild_trees(
         match render {
             None => {
                 let trunk_material = materials.add(material(params.trunk_color));
-                let foliage_material = materials.add(material(params.foliage.color));
+                let foliage_material = materials.add(leaf_material(params.foliage.color));
                 let trunk = commands
                     .spawn((
                         MeshMaterial3d(trunk_material.clone()),
