@@ -445,7 +445,7 @@ fn palm() -> TreeParams {
         branches: BranchParams {
             start: 0.85,
             end: 0.98,
-            density: 2.5,
+            density: 8.0,
             length: 0.6,
             angle: 60.0,
             radius_ratio: 0.28,
