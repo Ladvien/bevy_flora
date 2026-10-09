@@ -156,6 +156,9 @@ pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32
     }
 }
 
+/// Fewest sides of a non-adaptive branch tube; 4 read as flat square planks.
+const MIN_BRANCH_SEGMENTS: u32 = 6;
+
 /// Radial segment count for a branch node.
 fn radial_segments_for(node: &Node, params: &TreeParams) -> u32 {
     let m = &params.mesh;
@@ -163,9 +166,9 @@ fn radial_segments_for(node: &Node, params: &TreeParams) -> u32 {
         let segments = (node.base_radius * m.resolution_scale).round() as u32;
         segments.clamp(m.min_radial_segments, m.max_radial_segments)
     } else if node.depth > 0 {
-        4
+        MIN_BRANCH_SEGMENTS
     } else {
-        (params.trunk.radial_segments / 2).max(4)
+        (params.trunk.radial_segments / 2).max(MIN_BRANCH_SEGMENTS)
     }
 }
 
@@ -207,7 +210,8 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
             roots.extend(&root_segment(root, node.start, node.direction, segments, node.base_radius));
             if params.mesh.collar_enabled {
                 let collar_length = node.base_radius * params.mesh.collar_length;
-                let collar_segments = (params.trunk.radial_segments / 2).max(3);
+                // Same sides as the tube it wraps.
+                let collar_segments = segments;
                 mesh.extend(&collar_mesh(
                     node.start,
                     node.direction,
