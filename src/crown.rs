@@ -27,7 +27,9 @@ impl CrownShape {
 
         match self {
             CrownShape::Cylindrical => 1.0,
-            CrownShape::Conical => 0.2 + 0.8 * t,
+            // Silhouettes: Conical is widest at the bottom (a cone, e.g. pine),
+            // InverseConical widest at the top (a vase).
+            CrownShape::Conical => 1.0 - 0.8 * t,
             CrownShape::Spherical => 0.2 + 0.8 * (PI * t).sin(),
             CrownShape::Hemispherical => 0.2 + 0.8 * (PI * 0.5 * t).sin(),
             CrownShape::TaperedCylindrical => 1.0 - 0.5 * t,
@@ -39,7 +41,7 @@ impl CrownShape {
                     1.0 - 0.8 * ((t - peak) / (1.0 - peak))
                 }
             }
-            CrownShape::InverseConical => 1.0 - 0.8 * t,
+            CrownShape::InverseConical => 0.2 + 0.8 * t,
             CrownShape::TendFlame => {
                 let peak = 0.6;
                 if t < peak {
@@ -75,15 +77,15 @@ mod tests {
     }
 
     #[test]
-    fn conical_increases_with_height() {
+    fn conical_decreases_with_height() {
         let shape = CrownShape::Conical;
         let bottom = shape.length_multiplier(0.0);
         let middle = shape.length_multiplier(0.5);
         let top = shape.length_multiplier(1.0);
-        assert!(bottom < middle);
-        assert!(middle < top);
-        assert!((bottom - 0.2).abs() < 0.001);
-        assert!((top - 1.0).abs() < 0.001);
+        assert!(bottom > middle);
+        assert!(middle > top);
+        assert!((bottom - 1.0).abs() < 0.001);
+        assert!((top - 0.2).abs() < 0.001);
     }
 
     #[test]
@@ -104,13 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn inverse_conical_decreases_with_height() {
+    fn inverse_conical_increases_with_height() {
         let shape = CrownShape::InverseConical;
         let bottom = shape.length_multiplier(0.0);
         let top = shape.length_multiplier(1.0);
-        assert!(bottom > top);
-        assert!((bottom - 1.0).abs() < 0.001);
-        assert!((top - 0.2).abs() < 0.001);
+        assert!(bottom < top);
+        assert!((bottom - 0.2).abs() < 0.001);
+        assert!((top - 1.0).abs() < 0.001);
     }
 
     #[test]
