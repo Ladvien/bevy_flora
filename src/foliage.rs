@@ -179,11 +179,13 @@ fn add_cluster_leaves(
 ) {
     let height_mod = height_modifier(node.height_ratio, foliage);
     let count = ((foliage.cluster_size as f32 * height_mod) as i32).max(1);
-    let cluster_radius = foliage.leaf_size * 1.5;
+    // Leaves fill a ball within 3/4 of a leaf of the tip, so each one
+    // overlaps the twig end instead of floating on a shell around it.
+    let cluster_radius = foliage.leaf_size * 0.75;
     for _ in 0..count {
         let theta = rng.range(0.0, TAU);
         let phi = rng.range(0.0, PI);
-        let r = cluster_radius * rng.range(0.5, 1.0);
+        let r = cluster_radius * rng.range(0.0, 1.0);
         let mut offset = Vec3::new(
             r * phi.sin() * theta.cos(),
             r * phi.sin() * theta.sin(),
