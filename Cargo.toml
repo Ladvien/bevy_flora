@@ -1,0 +1,27 @@
+[package]
+name = "bevy_flora"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Parametric procedural trees that grow over time, for Bevy"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset", "bevy_color", "bevy_mesh", "bevy_pbr"] }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+bevy = { version = "0.20" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
