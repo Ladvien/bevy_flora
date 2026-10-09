@@ -611,7 +611,7 @@ fn bonsai() -> TreeParams {
         branches: BranchParams {
             start: 0.3,
             end: 0.8,
-            density: 0.8,
+            density: 2.5,
             length: 0.5,
             angle: 60.0,
             radius_ratio: 0.3,
