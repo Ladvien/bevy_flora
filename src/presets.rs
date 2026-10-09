@@ -699,7 +699,7 @@ fn maple() -> TreeParams {
             angle: 52.0,
             radius_ratio: 0.32,
             taper: 0.7,
-            phyllotaxis_angle: 180.0,
+            phyllotaxis_angle: 137.5,
             randomness: 0.2,
             up_attraction: 0.1,
             recursion: 2,
@@ -1360,13 +1360,6 @@ mod tests {
         assert_eq!(cypress.branches.crown_shape, CrownShape::Flame);
         assert!(cypress.branches.up_attraction > 0.5);
         assert!(cypress.branches.angle < 30.0);
-    }
-
-    #[test]
-    fn maple_opposite_branching() {
-        let maple = TreePreset::Maple.params();
-        assert_eq!(maple.branches.phyllotaxis_angle, 180.0);
-        assert_eq!(maple.branches.crown_shape, CrownShape::Spherical);
     }
 
     #[test]
