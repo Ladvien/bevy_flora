@@ -113,7 +113,7 @@ fn oak() -> TreeParams {
         branches: BranchParams {
             start: 0.35,
             end: 0.85,
-            density: 2.0,
+            density: 3.0,
             length: 0.65,
             angle: 55.0,
             radius_ratio: 0.35,
@@ -362,7 +362,7 @@ fn birch() -> TreeParams {
         branches: BranchParams {
             start: 0.4,
             end: 0.95,
-            density: 1.5,
+            density: 3.0,
             length: 0.35,
             angle: 40.0,
             radius_ratio: 0.2,
@@ -371,7 +371,7 @@ fn birch() -> TreeParams {
             randomness: 0.2,
             up_attraction: 0.3,
             recursion: 1,
-            sub_branch_count: 2,
+            sub_branch_count: 3,
             sub_branch_scale: 0.5,
             length_variation: 0.15,
             sub_branch_position_bias: 0.1,
@@ -694,7 +694,7 @@ fn maple() -> TreeParams {
         branches: BranchParams {
             start: 0.35,
             end: 0.9,
-            density: 1.8,
+            density: 3.0,
             length: 0.55,
             angle: 52.0,
             radius_ratio: 0.32,
@@ -1109,7 +1109,7 @@ fn japanese_maple() -> TreeParams {
         branches: BranchParams {
             start: 0.25,
             end: 0.85,
-            density: 1.4,
+            density: 2.5,
             length: 0.45,
             angle: 65.0,
             radius_ratio: 0.25,
@@ -1263,7 +1263,7 @@ fn redwood() -> TreeParams {
         branches: BranchParams {
             start: 0.5,
             end: 0.95,
-            density: 1.2,
+            density: 2.4,
             length: 0.35,
             angle: 75.0,
             radius_ratio: 0.25,
