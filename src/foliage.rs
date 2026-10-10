@@ -61,7 +61,9 @@ pub fn leaf_points_for_node(
     points: &mut Vec<LeafPoint>,
 ) {
     let node = &skeleton.nodes[i];
-    if node.kind == NodeKind::Trunk {
+    // A sub-branch shortened to nothing by `keep_out_of_trunk` starts inside
+    // the trunk: it has no wood to carry leaves.
+    if node.kind == NodeKind::Trunk || node.length <= 0.0 {
         return;
     }
 
@@ -612,6 +614,24 @@ mod tests {
         let plain = FoliageParams { color_variation: 0.0, ..params.foliage.clone() };
         let mesh = foliage_mesh(&points, &plain);
         assert!(mesh.colors.iter().all(|c| *c == Vec4::ONE));
+    }
+
+    #[test]
+    fn branches_shortened_into_the_trunk_carry_no_leaves() {
+        // A cypress on a wobbly trunk has sub-branches whose parent runs inside
+        // the trunk; they are shortened to nothing, and their leaves sat
+        // inside the trunk.
+        let mut params = crate::presets::TreePreset::Cypress.params();
+        params.seed = 1;
+        params.trunk.randomness = 0.5;
+        params.trunk.twist = 180.0;
+        params.branches.twist = 90.0;
+        let s = crate::skeleton::generate_skeleton(&params);
+        let points = collect_leaf_points(&s, &params.foliage, &params.growth, &params.trunk, params.seed);
+        for p in &points {
+            let depth = trunk_depth(&params.trunk, params.seed, p.position);
+            assert!(depth <= p.size * 0.5, "leaf {depth} m inside the trunk at {:?}", p.position);
+        }
     }
 
     #[test]
