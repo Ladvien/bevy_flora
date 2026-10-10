@@ -267,6 +267,13 @@ fn scenarios() -> Vec<Scenario> {
         add(format!("split_{}", p.name()), params, inf);
     }
 
+    // Two smoothing passes on every other preset.
+    for p in TreePreset::ALL.into_iter().filter(|&p| p != TreePreset::Oak) {
+        let mut params = preset(p);
+        params.mesh.smooth_iterations = 2;
+        add(format!("smooth_{}", p.name()), params, inf);
+    }
+
     // Growth series at odd ages for drooping and forking presets.
     for p in [TreePreset::Willow, TreePreset::DragonTree] {
         for age in [1.0, 3.0, 5.0, 7.0, 9.0, inf] {
