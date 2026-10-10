@@ -700,7 +700,7 @@ mod tests {
             .nodes
             .iter()
             .skip(1)
-            .map(|n| n.axis(crate::skeleton::BENT_AXIS_POINTS).into_iter().map(|(c, _)| c).collect())
+            .map(|n| n.axis(n.axis_points()).into_iter().map(|(c, _)| c).collect())
             .collect();
         let off_wood = |p: Vec3| {
             axes.iter()

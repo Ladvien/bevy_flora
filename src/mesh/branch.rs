@@ -7,7 +7,7 @@ use super::rings::{RingBasis, connect_rings, emit_cap, emit_ring};
 use super::smoothing::laplacian_smooth;
 use super::trunk::trunk_mesh;
 use crate::params::TreeParams;
-use crate::skeleton::{BENT_AXIS_POINTS, Node, NodeKind, Skeleton};
+use crate::skeleton::{Node, NodeKind, Skeleton};
 
 /// Wood at or below this height is the trunk's base on the ground.
 const GROUND_EPSILON: f32 = 1.0e-4;
@@ -42,7 +42,7 @@ pub fn root_segment(root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f
 pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32) -> MeshData {
     let mut mesh = MeshData::default();
     let segments = radial_segments.max(3);
-    let rings = if twist_deg.abs() > 0.1 || node.bend > 0.0 { BENT_AXIS_POINTS } else { 2 };
+    let rings = if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 };
     let axis = node.axis(rings);
     let (centers, dirs): (Vec<Vec3>, Vec<Vec3>) = axis.into_iter().unzip();
 
@@ -321,7 +321,7 @@ mod tests {
                 for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary && n.length > 1e-4) {
                     let collar = collar_mesh(node, node.base_radius * params.mesh.collar_length, 6);
                     let end_ring = &collar.positions[collar.positions.len() - 7..];
-                    let axis: Vec<Vec3> = node.axis(BENT_AXIS_POINTS).into_iter().map(|(c, _)| c).collect();
+                    let axis: Vec<Vec3> = node.axis(node.axis_points()).into_iter().map(|(c, _)| c).collect();
                     for &p in end_ring {
                         let (dist, f) = axis
                             .windows(2)
@@ -436,7 +436,7 @@ mod tests {
                 );
                 // Every child starts on this node's wood axis.
                 for c in skeleton.children(i) {
-                    let axis = node.axis(crate::skeleton::BENT_AXIS_POINTS);
+                    let axis = node.axis(node.axis_points());
                     let on_axis = axis
                         .windows(2)
                         .map(|w| segment_distance(skeleton.nodes[c].start, w[0].0, w[1].0))

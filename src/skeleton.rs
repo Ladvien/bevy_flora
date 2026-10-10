@@ -129,8 +129,15 @@ impl Skeleton {
     }
 }
 
-/// Axis points of a bent branch; the branch mesher puts one ring on each.
+/// Fewest axis points (mesh rings) of a bent or twisted branch.
 pub const BENT_AXIS_POINTS: u32 = 6;
+
+/// Most axis points a bent branch gets, however far it droops.
+pub const MAX_AXIS_POINTS: u32 = 16;
+
+/// Largest change of direction, in radians, between two neighbouring axis
+/// points of a bent branch; keeps a drooping curve from showing facets.
+const MAX_AXIS_TURN: f32 = 0.08;
 
 impl Node {
     /// `points` samples of the wood's axis, base to tip: `(center, direction)`.
@@ -155,13 +162,37 @@ impl Node {
             .collect()
     }
 
+    /// How many axis points (mesh rings) this branch needs: `BENT_AXIS_POINTS`,
+    /// or more when gravity turns its direction by more than `MAX_AXIS_TURN`
+    /// between two points, up to `MAX_AXIS_POINTS`. Wood, children, leaves and
+    /// the floor test all sample the axis with this count, so they agree.
+    pub fn axis_points(&self) -> u32 {
+        if self.bend <= 0.0 {
+            return BENT_AXIS_POINTS;
+        }
+        // The direction turns fastest at the tip (d/dt of t² · bend · lever), so
+        // the last segment decides. Start from the linear estimate, then check.
+        let lever = Vec3::new(self.direction.x, 0.0, self.direction.z).length();
+        let estimate = (2.0 * self.bend * lever / MAX_AXIS_TURN).ceil() as u32 + 1;
+        let mut points = estimate.clamp(BENT_AXIS_POINTS, MAX_AXIS_POINTS);
+        let tip = self.bent_direction(1.0);
+        while points < MAX_AXIS_POINTS {
+            let before = self.bent_direction(1.0 - 1.0 / (points - 1) as f32);
+            if tip.dot(before).clamp(-1.0, 1.0).acos() <= MAX_AXIS_TURN {
+                break;
+            }
+            points += 1;
+        }
+        points
+    }
+
     /// Point at fraction `f` (clamped to 0–1) of the way along the wood's axis.
     pub fn point_at(&self, f: f32) -> Vec3 {
         let f = f.clamp(0.0, 1.0);
         if self.bend <= 0.0 {
             return self.start + self.direction * (self.length * f);
         }
-        let axis = self.axis(BENT_AXIS_POINTS);
+        let axis = self.axis(self.axis_points());
         let x = f * (axis.len() - 1) as f32;
         let k = (x as usize).min(axis.len() - 2);
         axis[k].0.lerp(axis[k + 1].0, x - k as f32)
@@ -178,7 +209,7 @@ impl Node {
 
     /// Lowest point of the wood's surface (axis height minus the radius there).
     fn lowest(&self) -> f32 {
-        let axis = self.axis(BENT_AXIS_POINTS);
+        let axis = self.axis(self.axis_points());
         let last = (axis.len() - 1) as f32;
         axis.iter()
             .enumerate()
@@ -797,7 +828,7 @@ mod tests {
         params.branches.stiffness = 0.0;
         let s = generate_skeleton(&params);
         for n in s.nodes.iter().skip(1) {
-            let axis = n.axis(BENT_AXIS_POINTS);
+            let axis = n.axis(n.axis_points());
             for w in axis.windows(2) {
                 assert!(
                     w[0].1.dot(w[1].1) > 0.0,
@@ -808,6 +839,31 @@ mod tests {
                     w[1].1
                 );
             }
+        }
+    }
+
+    #[test]
+    fn drooping_branches_get_enough_rings_to_look_smooth() {
+        // D-034: every bent branch was meshed on 6 rings, so a long willow limb
+        // turned up to 9° at each ring and showed facets along its curve.
+        for (gravity, stiffness) in [(0.5, 0.2), (1.0, 0.2), (2.0, 0.0)] {
+            let mut params = TreePreset::Willow.params();
+            params.branches.gravity_strength = gravity;
+            params.branches.stiffness = stiffness;
+            let s = generate_skeleton(&params);
+            let mut extra = false;
+            for n in s.nodes.iter().skip(1) {
+                let axis = n.axis(n.axis_points());
+                extra |= axis.len() > BENT_AXIS_POINTS as usize;
+                if axis.len() == MAX_AXIS_POINTS as usize {
+                    continue; // capped: the most rings a branch gets
+                }
+                for w in axis.windows(2) {
+                    let turn = w[0].1.dot(w[1].1).clamp(-1.0, 1.0).acos();
+                    assert!(turn < 0.1, "gravity {gravity}: {:?} {} turns {turn} rad per ring", n.kind, n.id);
+                }
+            }
+            assert!(extra, "gravity {gravity}: no branch got more than {BENT_AXIS_POINTS} rings");
         }
     }
 
