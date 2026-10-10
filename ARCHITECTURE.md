@@ -26,6 +26,9 @@ height; a sub-branch is born when its parent reaches `attach_t`. Radii thicken
 over `duration * thickening_lag`. Leaves appear after `leaf_threshold` progress
 and scale to full size. Each node draws leaf randomness from its own RNG stream
 (`SeededRng::from_parts(seed, node.id)`), so aging never re-rolls existing leaves.
+`Skeleton::aged` keeps each node's full-grown `child_count`, so tip placements
+(`TerminalBranches`, `TipClusters`) pick the same branches at every age and a
+leaf never disappears as the tree grows.
 
 ## Mesh conventions
 
