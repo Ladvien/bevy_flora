@@ -5,6 +5,22 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.3.4] - 2026-10-10
+
+Performance only; no API changes, and the meshes are bit-identical (all 319 gallery images
+byte-identical to 0.3.3).
+
+### Changed
+
+- Smoothing (`MeshParams::smooth_iterations`) is 3-5 times faster: the willow with 2 passes builds
+  in 3.0 ms instead of 14.7 ms, the oak in 1.6 ms instead of 4.7 ms (release build, Apple
+  M-series). Vertex welding probes one grid cell instead of 27 with a cheap hasher, adjacency is a
+  flat array built from one integer sort, smoothing passes reuse one buffer, and the "keep this
+  vertex put" spheres are bucketed on a grid instead of tested one by one for every vertex. The
+  15 presets with smoothing on build in 16 ms together instead of 55 ms.
+- `docs/growth.gif`, the README clip, was re-recorded for this release; it comes out
+  byte-identical.
+
 ## [0.3.3] - 2026-10-10
 
 Bug fixes found by a parameter sweep; no API changes.
@@ -207,6 +223,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.3.4]: https://github.com/Ladvien/bevy_flora/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/Ladvien/bevy_flora/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/Ladvien/bevy_flora/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Ladvien/bevy_flora/compare/v0.3.0...v0.3.1

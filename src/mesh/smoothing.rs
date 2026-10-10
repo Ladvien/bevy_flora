@@ -133,23 +133,54 @@ pub fn laplacian_smooth(
 
 /// Merge vertices within `epsilon`. Returns each vertex's group index and each
 /// group's position (that of its first vertex).
+///
+/// Groups are bucketed on a grid of `4 epsilon` cells; a vertex looks in its
+/// own cell and only in the neighbours whose boundary is within `epsilon`,
+/// usually one cell.
 fn weld(positions: &[Vec3], epsilon: f32) -> (Vec<u32>, Vec<Vec3>) {
-    let cell_of = |p: Vec3| (p / epsilon).floor().as_ivec3().to_array();
+    let size = 4.0 * epsilon;
     let mut cells: CellMap<Vec<u32>> = CellMap::default();
+    cells.reserve(positions.len());
     let mut group_positions: Vec<Vec3> = Vec::new();
     let mut group_of = Vec::with_capacity(positions.len());
     for &p in positions {
-        let [cx, cy, cz] = cell_of(p);
-        let existing = (-1..=1)
-            .flat_map(|dx| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dz| [cx + dx, cy + dy, cz + dz])))
-            .filter_map(|cell| cells.get(&cell))
-            .flatten()
-            .copied()
-            .find(|&g| group_positions[g as usize].distance_squared(p) <= epsilon * epsilon);
+        let scaled = p / size;
+        let base = scaled.floor();
+        let cell = base.as_ivec3().to_array();
+        // Per axis: the own cell, then a neighbour if p is within epsilon of it.
+        let reach = |axis: usize| -> ([i32; 3], usize) {
+            let f = (scaled[axis] - base[axis]) * size;
+            let mut out = [0, 0, 0];
+            let mut n = 1;
+            if f < epsilon {
+                out[n] = -1;
+                n += 1;
+            }
+            if size - f < epsilon {
+                out[n] = 1;
+                n += 1;
+            }
+            (out, n)
+        };
+        let ((ox, nx), (oy, ny), (oz, nz)) = (reach(0), reach(1), reach(2));
+        let mut existing = None;
+        'search: for &dx in &ox[..nx] {
+            for &dy in &oy[..ny] {
+                for &dz in &oz[..nz] {
+                    let Some(list) = cells.get(&[cell[0] + dx, cell[1] + dy, cell[2] + dz]) else { continue };
+                    if let Some(&g) =
+                        list.iter().find(|&&g| group_positions[g as usize].distance_squared(p) <= epsilon * epsilon)
+                    {
+                        existing = Some(g);
+                        break 'search;
+                    }
+                }
+            }
+        }
         let group = existing.unwrap_or_else(|| {
             let g = group_positions.len() as u32;
             group_positions.push(p);
-            cells.entry([cx, cy, cz]).or_default().push(g);
+            cells.entry(cell).or_default().push(g);
             g
         });
         group_of.push(group);
@@ -166,21 +197,22 @@ struct Topology {
 
 impl Topology {
     fn build(group_count: usize, group_of: &[u32], indices: &[u32]) -> Self {
-        let mut edges: Vec<(u32, u32)> = Vec::with_capacity(indices.len());
+        // Edges as (min << 32 | max), so sorting compares one integer.
+        let mut edges: Vec<u64> = Vec::with_capacity(indices.len());
         for &[a, b, c] in indices.as_chunks::<3>().0 {
             let (ga, gb, gc) = (group_of[a as usize], group_of[b as usize], group_of[c as usize]);
             if ga == gb || gb == gc || ga == gc {
                 continue; // collapsed triangle (zero-radius tip)
             }
             for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
-                edges.push((u.min(v), u.max(v)));
+                edges.push((u.min(v) as u64) << 32 | u.max(v) as u64);
             }
         }
         edges.sort_unstable();
         let mut pinned = vec![false; group_count];
         let mut unique: Vec<(u32, u32)> = Vec::with_capacity(edges.len() / 2 + 1);
         for run in edges.chunk_by(|a, b| a == b) {
-            let (u, v) = run[0];
+            let (u, v) = ((run[0] >> 32) as u32, run[0] as u32);
             if run.len() == 1 {
                 pinned[u as usize] = true;
                 pinned[v as usize] = true;
@@ -188,10 +220,11 @@ impl Topology {
             unique.push((u, v));
         }
         // Each row must be sorted so the f32 sums, and so the mesh, are
-        // bit-for-bit reproducible: pairs ordered by (row, item).
-        let mut pairs: Vec<(u32, u32)> = unique.iter().flat_map(|&(u, v)| [(u, v), (v, u)]).collect();
-        pairs.sort_unstable();
-        let neighbors = Rows::from_pairs(group_count, pairs.iter().copied());
+        // bit-for-bit reproducible. `unique` is ordered by (u, v) with u < v,
+        // so row r receives its smaller neighbours (as v) in ascending order
+        // before its larger ones (as u), also ascending.
+        let neighbors =
+            Rows::from_pairs(group_count, unique.iter().flat_map(|&(u, v)| [(u, v), (v, u)]));
         Self { neighbors, pinned }
     }
 }
