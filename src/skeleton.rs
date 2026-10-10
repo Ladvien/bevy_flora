@@ -190,7 +190,7 @@ impl Node {
     /// A branch whose base is already below the floor only has to stay above
     /// its base, so it keeps the droop it can.
     fn keep_above(&mut self, floor: f32) {
-        let floor = floor.min(self.start.y - self.base_radius);
+        let floor = if self.start.y < floor { floor.min(self.start.y - self.base_radius) } else { floor };
         if self.lowest() >= floor {
             return;
         }
