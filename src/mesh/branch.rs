@@ -174,22 +174,68 @@ fn radial_segments_for(node: &Node, params: &TreeParams) -> u32 {
     }
 }
 
+/// Whether primary `node` leaves the trunk too steeply to be extended back to
+/// the trunk axis: less than 0.5 of its direction points away from the trunk.
+fn leaves_steeply(node: &Node) -> bool {
+    let radial = (node.start - node.anchor).with_y(0.0);
+    node.direction.dot(radial.normalize_or_zero()) < 0.5
+}
+
 /// Where a primary's wood begins inside the trunk, so tube and collar have no
 /// open, flat-cut end at the trunk surface (`start`). `anchor` is the trunk
 /// axis point at the same height.
 ///
 /// A branch leaving the trunk at 30° or more is extended backward along its
 /// own axis to the trunk axis (at most twice the trunk radius), so it emerges
-/// from the trunk. A steeper branch would need a long extension that shows as
-/// a ridge down the trunk; its base is closed toward `anchor` instead.
-fn primary_root(node: &Node) -> Vec3 {
+/// from the trunk. A steeper branch (see [`leaves_steeply`]) would need a long
+/// extension that shows as a ridge down the trunk; `primary_base` closes it
+/// with a rounded end instead, and this returns `None`.
+fn primary_root(node: &Node) -> Option<Vec3> {
+    if leaves_steeply(node) {
+        return None;
+    }
     let radial = (node.start - node.anchor).with_y(0.0);
     let outward = node.direction.dot(radial.normalize_or_zero());
-    if outward < 0.5 {
-        return node.anchor;
-    }
     let back = (radial.length() / outward).min(0.9 * node.start.y / node.direction.y.max(1e-3));
-    node.start - node.direction * back
+    Some(node.start - node.direction * back)
+}
+
+/// The wood behind a primary's base ring at `at` (radius `radius`, around the
+/// branch axis): an extension into the trunk, or for a steep branch a rounded
+/// end, so the base ring coincides with the tube's or collar's and nothing
+/// shows a flat cut.
+fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
+    match primary_root(node) {
+        Some(root) => root_segment(root, at, node.direction, segments, radius),
+        None => root_dome(at, node.direction, segments, radius),
+    }
+}
+
+/// A rounded, closed end behind the ring of `radius` at `base` (three rings
+/// and a cap, about a hemisphere): the base of a branch that hugs the trunk,
+/// so it grows out of the trunk like a knot instead of ending in a flat disc.
+/// Its last ring coincides with the tube's base ring.
+pub fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
+    let mut mesh = MeshData::default();
+    let basis = RingBasis::from_axis(axis);
+    let segments = segments.max(3);
+    let latitudes = [70.0f32, 40.0, 0.0];
+    let (sin, cos) = latitudes[0].to_radians().sin_cos();
+    emit_cap(&mut mesh, base - axis * (radius * sin), basis, segments, 0.0, -axis, |_, _| radius * cos);
+    let mut prev = None;
+    for lat in latitudes {
+        let (sin, cos) = lat.to_radians().sin_cos();
+        let first = mesh.positions.len();
+        let ring = emit_ring(&mut mesh, base - axis * (radius * sin), basis, segments, 0.0, 0.0, |_, _| radius * cos);
+        for normal in &mut mesh.normals[first..] {
+            *normal = (*normal * cos - axis * sin).normalize_or_zero();
+        }
+        if let Some(prev) = prev {
+            connect_rings(&mut mesh, prev, ring, segments);
+        }
+        prev = Some(ring);
+    }
+    mesh
 }
 
 /// Wood mesh for the whole (aged) skeleton: trunk, collars and branch tubes,
@@ -208,19 +254,17 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
         }
         let segments = radial_segments_for(node, params);
         if node.kind == NodeKind::Primary {
-            let root = primary_root(node);
-            roots.extend(&root_segment(root, node.start, node.direction, segments, node.base_radius));
+            roots.extend(&primary_base(node, node.start, node.base_radius, segments));
             if params.mesh.collar_enabled {
                 let collar_length = node.base_radius * params.mesh.collar_length;
                 // Same sides as the tube it wraps.
                 let collar_segments = segments;
                 mesh.extend(&collar_mesh(node, collar_length, collar_segments));
-                roots.extend(&root_segment(
-                    root,
+                roots.extend(&primary_base(
+                    node,
                     collar_start(node.start, node.direction, collar_length),
-                    node.direction,
-                    collar_segments,
                     node.base_radius * COLLAR_FLARE,
+                    collar_segments,
                 ));
             }
         }
@@ -301,7 +345,7 @@ mod tests {
         let collar = collar_mesh(node, 0.3, 5);
         assert_indices_valid(&collar, "collar");
         assert_faces_outward(&collar, "collar");
-        let root = root_segment(primary_root(node), node.start, node.direction, 6, node.base_radius);
+        let root = primary_base(node, node.start, node.base_radius, 6);
         assert_indices_valid(&root, "root");
         assert_faces_outward(&root, "root");
     }
@@ -374,7 +418,7 @@ mod tests {
             let skeleton = generate_skeleton(&params);
             for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary) {
                 let mut wood = tube_mesh(node, 4, params.branches.twist);
-                wood.extend(&root_segment(primary_root(node), node.start, node.direction, 4, node.base_radius));
+                wood.extend(&primary_base(node, node.start, node.base_radius, 4));
                 assert_faces_outward(&wood, preset.name());
                 for p in open_boundary_vertices(&wood) {
                     let depth = crate::skeleton::trunk_depth(&params.trunk, params.seed, p);
@@ -382,6 +426,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn steep_primaries_end_in_a_closed_rounded_base() {
+        // D-032: a branch leaving the trunk steeply was closed by a flat,
+        // sheared prism toward the trunk axis; its base is now a closed dome
+        // that reaches back along the branch.
+        let mut steep = 0;
+        for preset in TreePreset::ALL {
+            let params = preset.params();
+            let skeleton = generate_skeleton(&params);
+            for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary && n.length > 1e-4) {
+                if !leaves_steeply(node) {
+                    continue;
+                }
+                steep += 1;
+                let mut wood = tube_mesh(node, 6, params.branches.twist);
+                wood.extend(&primary_base(node, node.start, node.base_radius, 6));
+                assert_faces_outward(&wood, preset.name());
+                assert!(
+                    open_boundary_vertices(&wood).is_empty(),
+                    "{}: steep primary {} has an open base",
+                    preset.name(),
+                    node.id
+                );
+                let back = wood
+                    .positions
+                    .iter()
+                    .map(|p| (node.start - *p).dot(node.direction))
+                    .fold(f32::MIN, f32::max);
+                assert!(back > 0.8 * node.base_radius, "{}: base reaches back only {back} m", preset.name());
+            }
+        }
+        assert!(steep > 10, "only {steep} steep primaries in all presets");
     }
 
     #[test]
@@ -396,8 +474,8 @@ mod tests {
         let copies = |p: Vec3| mesh.positions.iter().filter(|q| q.distance(p) < 1e-5).count();
         for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary && n.length > 1e-4) {
             let segments = radial_segments_for(node, &params);
-            let root = root_segment(primary_root(node), node.start, node.direction, segments, node.base_radius);
-            let outer_ring = &root.positions[root.positions.len() / 2..];
+            let root = primary_base(node, node.start, node.base_radius, segments);
+            let outer_ring = &root.positions[root.positions.len() - (segments as usize + 1)..];
             for &p in outer_ring {
                 assert!(copies(p) >= 2, "primary {}: junction vertex {p:?} has no matching tube vertex", node.id);
             }
