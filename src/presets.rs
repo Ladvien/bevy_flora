@@ -299,7 +299,7 @@ fn willow() -> TreeParams {
             start: 0.5,
             end: 1.0,
             density: 4.0,
-            length: 0.8,
+            length: 0.7,
             angle: 50.0,
             radius_ratio: 0.2,
             taper: 0.85,
@@ -307,8 +307,8 @@ fn willow() -> TreeParams {
             randomness: 0.3,
             up_attraction: -0.5,
             recursion: 3,
-            sub_branch_count: 3,
-            sub_branch_scale: 0.7,
+            sub_branch_count: 2,
+            sub_branch_scale: 0.9,
             length_variation: 0.25,
             sub_branch_position_bias: 0.3,
             apical_dominance: 0.2,
@@ -341,8 +341,8 @@ fn willow() -> TreeParams {
             enabled: true,
             style: LeafStyle::SingleQuad,
             placement: FoliagePlacement::AllBranches,
-            orientation: LeafOrientation::RandomUpward,
-            density: 6.0,
+            orientation: LeafOrientation::FollowBranch,
+            density: 10.0,
             cluster_size: 4,
             leaf_size: 0.26,
             leaf_size_variation: 0.25,
@@ -1427,6 +1427,24 @@ mod tests {
             .map(|n| n.start.y)
             .fold(f32::MIN, f32::max);
         assert!(highest >= 0.93 * top, "highest limb leaves the trunk at {highest} m of {top} m");
+    }
+
+    #[test]
+    fn willow_leaves_hang_along_their_twigs() {
+        // D-050: leaves pointed randomly upward on a thick tangle of 400
+        // branches, so the crown was a leafy mound; they now follow thin,
+        // long twigs that hang, so they are strung in strands.
+        let params = TreePreset::Willow.params();
+        let tree = crate::pipeline::build_tree(&params, f32::INFINITY);
+        let leaves = crate::foliage::collect_leaf_points(
+            &tree.skeleton,
+            &params.foliage,
+            &params.growth,
+            &params.trunk,
+            params.seed,
+        );
+        let hanging = leaves.iter().filter(|l| l.direction.y < -0.5).count();
+        assert!(hanging * 10 >= leaves.len() * 6, "{hanging} of {} leaves hang", leaves.len());
     }
 
     #[test]

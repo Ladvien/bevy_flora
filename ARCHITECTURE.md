@@ -66,11 +66,15 @@ its twigs the direction it has there, so they hang). Generated radii are floored
 by `BranchParams::min_twig_radius` at the base and half of it at the tip, and
 never exceed the wood they grow from (`skeleton::floored_radii`), so twigs taper
 but never shrink to hairlines. Sub-branches spreading toward the trunk and
-tip-cluster leaves landing inside it are mirrored away (`skeleton::trunk_depth`).
+tip-cluster leaves landing inside it are mirrored away (`skeleton::trunk_depth`);
+after seating and the gravity bend, a sub-branch whose wood still enters the trunk
+gets its bend relaxed, or is shortened (`Node::keep_out_of_trunk`).
 Each primary's tube and collar get a `root_segment` reaching into the trunk
 (`primary_root`); a branch hugging the trunk (less than half of its direction
 pointing away from it) gets a closed, rounded `root_dome` instead, since a long
-extension would show as a ridge down the trunk. Either way
+extension would show as a ridge down the trunk. The dome has four rings and a cap
+with twice the tube's side count, joined to the tube's own base ring, so it is
+round even on a hexagonal branch. Either way
 junctions have no open ends. Smoothing (Taubin λ|μ, so it does not shrink the
 wood) welds coincident vertices (UV seams) and pins open boundaries, the ground
 ring, branch-end caps and the parent surface under each child's seat, so it

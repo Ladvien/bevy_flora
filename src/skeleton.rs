@@ -89,8 +89,9 @@ impl Skeleton {
     /// Move every node hanging off a branch onto its parent's (bent) axis at
     /// `attach_t`, parents first so displacements cascade to descendants.
     /// [`Skeleton::aged`] places nodes the same way. With floor avoidance,
-    /// each node's bent wood is then kept above `floor_level`.
-    fn seat_on_parents(&mut self, branches: &BranchParams) {
+    /// each node's bent wood is then kept above `floor_level`, and a
+    /// sub-branch's wood is kept out of the trunk.
+    fn seat_on_parents(&mut self, branches: &BranchParams, trunk: &TrunkParams, seed: i32) {
         for i in 1..self.nodes.len() {
             let Some(p) = self.nodes[i].parent else { continue };
             let parent = &self.nodes[p as usize];
@@ -102,6 +103,9 @@ impl Skeleton {
             }
             if branches.floor_avoidance {
                 self.nodes[i].keep_above(branches.floor_level);
+            }
+            if self.nodes[i].kind == NodeKind::Sub {
+                self.nodes[i].keep_out_of_trunk(trunk, seed);
             }
         }
     }
@@ -246,6 +250,47 @@ impl Node {
             self.length = (drop / -self.direction.y).max(0.0);
         }
     }
+
+    /// Keep the wood out of the trunk: a sub-branch is checked against the
+    /// trunk when it is generated, as a straight chord, but seating it on a
+    /// bent parent and its own gravity bend can move it inside. Relax the
+    /// bend just enough, and if the straight branch is still inside, shorten
+    /// it until it clears.
+    fn keep_out_of_trunk(&mut self, trunk: &TrunkParams, seed: i32) {
+        let inside = |n: &Node| {
+            (1..=10).any(|k| trunk_depth(trunk, seed, n.point_at(k as f32 / 10.0)) > 0.0)
+        };
+        if !inside(self) {
+            return;
+        }
+        let full = self.bend;
+        self.bend = 0.0;
+        if !inside(self) {
+            let (mut lo, mut hi) = (0.0, full);
+            for _ in 0..16 {
+                let mid = 0.5 * (lo + hi);
+                self.bend = mid;
+                if inside(self) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            self.bend = lo;
+            return;
+        }
+        let (mut lo, mut hi) = (0.0, self.length);
+        for _ in 0..16 {
+            let mid = 0.5 * (lo + hi);
+            self.length = mid;
+            if inside(self) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        self.length = lo;
+    }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -382,7 +427,7 @@ pub fn generate_skeleton(params: &TreeParams) -> Skeleton {
             node.bend = bend;
         }
     }
-    skeleton.seat_on_parents(&params.branches);
+    skeleton.seat_on_parents(&params.branches, &params.trunk, params.seed);
     crate::growth::assign_birth_times(&mut skeleton, &params.growth);
     skeleton
 }
