@@ -864,7 +864,13 @@ fn spruce() -> TreeParams {
             color: Color::srgb(0.086, 0.278, 0.212),
             ..Default::default()
         },
-        growth: GrowthParams::default(),
+        growth: GrowthParams {
+            trunk_fraction: 0.6,
+            branch_fraction: 0.6,
+            thickening_lag: 1.2,
+            leaf_threshold: 0.15,
+            ..Default::default()
+        },
         trunk_color: Color::srgb(0.380, 0.243, 0.141),
     }
 }
@@ -1421,6 +1427,26 @@ mod tests {
             .map(|n| n.start.y)
             .fold(f32::MIN, f32::max);
         assert!(highest >= 0.93 * top, "highest limb leaves the trunk at {highest} m of {top} m");
+    }
+
+    #[test]
+    fn young_spruce_is_a_sapling_not_a_pole_of_wires() {
+        // D-031: at age 2 the spruce was 5 m tall with bare, hair-thin primaries
+        // up to 41% of its height (length / base radius up to 144).
+        let params = TreePreset::Spruce.params();
+        let tree = crate::pipeline::build_tree(&params, 2.0);
+        let height = tree.skeleton.nodes[0].length;
+        let primaries: Vec<_> = tree
+            .skeleton
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::skeleton::NodeKind::Primary)
+            .collect();
+        assert!(primaries.len() >= 5, "only {} primaries at age 2", primaries.len());
+        for n in &primaries {
+            assert!(n.length < 0.35 * height, "primary {} is {} m on a {height} m sapling", n.id, n.length);
+            assert!(n.length < 110.0 * n.base_radius, "primary {} is {} m long and {} m thick", n.id, n.length, n.base_radius);
+        }
     }
 
     #[test]
