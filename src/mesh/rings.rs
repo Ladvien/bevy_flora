@@ -14,7 +14,9 @@ use super::MeshData;
 /// right-handed (`right × forward = axis`) for [`connect_rings`] to face outward.
 #[derive(Clone, Copy, Debug)]
 pub struct RingBasis {
+    /// Unit vector along the ring plane's first axis.
     pub right: Vec3,
+    /// Unit vector along the ring plane's second axis, perpendicular to `right`.
     pub forward: Vec3,
 }
 

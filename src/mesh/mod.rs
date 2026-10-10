@@ -12,9 +12,13 @@ use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 /// Triangle-list geometry with positions, normals and one UV set.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MeshData {
+    /// Vertex positions, in metres.
     pub positions: Vec<Vec3>,
+    /// Unit vertex normals, one per position.
     pub normals: Vec<Vec3>,
+    /// Texture coordinates, one per position.
     pub uvs: Vec<Vec2>,
+    /// Triangle-list indices into the vertex arrays; length is a multiple of 3.
     pub indices: Vec<u32>,
 }
 

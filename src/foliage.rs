@@ -12,9 +12,11 @@ use crate::skeleton::{Node, NodeKind, Skeleton, trunk_depth};
 /// One leaf: where it sits and how it is oriented.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeafPoint {
+    /// World-space (tree-local) position of the leaf, in metres.
     pub position: Vec3,
     /// Primary orientation.
     pub direction: Vec3,
+    /// Leaf edge length in metres.
     pub size: f32,
     /// Rotation around `direction`, radians.
     pub rotation: f32,

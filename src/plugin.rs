@@ -45,6 +45,7 @@ impl Default for TreeAge {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct Growing {
+    /// Age units added to [`TreeAge`] per second.
     pub rate: f32,
 }
 
@@ -57,6 +58,7 @@ impl Default for Growing {
 /// Sent after a tree's meshes were (re)built.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct TreeGenerated {
+    /// The tree entity whose meshes were rebuilt.
     pub entity: Entity,
     /// Current trunk height (full height × growth progress).
     pub height: f32,

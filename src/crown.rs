@@ -7,14 +7,22 @@ use std::f32::consts::PI;
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CrownShape {
+    /// Constant branch length at every height.
     #[default]
     Cylindrical,
+    /// Longest branches at the bottom, shortening linearly to the top (a cone, e.g. pine).
     Conical,
+    /// Longest branches at mid-height, rounded at both ends.
     Spherical,
+    /// Longest branches at the top of the dome profile, with a sine falloff toward the bottom.
     Hemispherical,
+    /// Nearly constant length that shortens gently toward the top.
     TaperedCylindrical,
+    /// Short at the base, peaking at about 70% height, then tapering sharply to the top.
     Flame,
+    /// Shortest branches at the base, lengthening linearly to the top (a vase).
     InverseConical,
+    /// Like `Flame` but peaking at about 60% height with a quadratic falloff to the top.
     TendFlame,
     /// Widest at ~40% height, gradual taper above and below.
     Spreading,

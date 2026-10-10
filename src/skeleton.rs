@@ -28,6 +28,7 @@ pub enum NodeKind {
 pub struct Node {
     /// Index of this node in the full (unaged) skeleton; stable across [`Skeleton::aged`].
     pub id: u32,
+    /// Role of this node in the tree.
     pub kind: NodeKind,
     /// Parent index; `None` only for the trunk.
     pub parent: Option<u32>,
@@ -36,13 +37,18 @@ pub struct Node {
     /// Point on the parent's axis this node is attached to. Equals `start`
     /// except for trunk-attached nodes, which start on the trunk surface.
     pub anchor: Vec3,
+    /// Start of the segment in tree-local space, in metres.
     pub start: Vec3,
+    /// Unit direction the segment points in, before gravity bend.
     pub direction: Vec3,
+    /// Full segment length in metres.
     pub length: f32,
     /// Downward bend of the wood toward the tip (`gravity_strength × (1 −
     /// stiffness)`; 0 = straight, always 0 for the trunk). See [`Node::axis`].
     pub bend: f32,
+    /// Radius at the start of the segment, in metres.
     pub base_radius: f32,
+    /// Radius at the tip of the segment, in metres.
     pub tip_radius: f32,
     /// Recursion depth (0 for trunk, primaries, leader and splits).
     pub depth: u8,
@@ -63,6 +69,7 @@ pub struct Node {
 /// Nodes in pre-order: every parent index is smaller than its children's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Skeleton {
+    /// All nodes; index 0 is the trunk.
     pub nodes: Vec<Node>,
 }
 

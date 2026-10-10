@@ -9,20 +9,35 @@ use crate::crown::CrownShape;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TreePreset {
+    /// Broad, round-crowned deciduous tree.
     Oak,
+    /// Conical conifer with a straight leader and needles.
     Pine,
+    /// Drooping branches with long trailing foliage.
     Willow,
+    /// Slender tree with pale bark and a light crown.
     Birch,
+    /// Bare trunk with a tuft of fronds at the top.
     Palm,
+    /// Tall, narrow, columnar conifer.
     Cypress,
+    /// Small, compact potted-style tree.
     Bonsai,
+    /// Rounded deciduous tree with lobed foliage.
     Maple,
+    /// Dense, narrow conical conifer.
     Spruce,
+    /// Tall, narrow deciduous tree with upswept branches.
     Poplar,
+    /// Very thick, short trunk with a sparse crown.
     Baobab,
+    /// Thick trunk with an umbrella-like crown.
     DragonTree,
+    /// Small tree with a delicate, spreading crown.
     JapaneseMaple,
+    /// Leafless, broken-branched tree.
     DeadTree,
+    /// Very tall, thick-trunked conifer.
     Redwood,
 }
 

@@ -72,9 +72,13 @@ pub enum LeafOrientation {
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TrunkParams {
+    /// Trunk height in metres.
     pub height: f32,
+    /// Base trunk radius in metres.
     pub radius: f32,
+    /// Number of vertices around each trunk ring.
     pub radial_segments: u32,
+    /// Number of ring subdivisions along the trunk height.
     pub height_segments: u32,
     /// Top radius as a fraction of `radius` (0 = point, 1 = no taper).
     pub taper: f32,
@@ -90,6 +94,7 @@ pub struct TrunkParams {
     pub root_flare_spread: f32,
     /// Height of the root ridges as a fraction of trunk height.
     pub root_flare_height: f32,
+    /// How the trunk top is finished.
     pub termination: TrunkTermination,
     /// Leader length as a fraction of trunk height.
     pub leader_length: f32,
@@ -174,11 +179,13 @@ pub struct BranchParams {
     pub stiffness: f32,
     /// Chance that a branch is missing ("broke off").
     pub break_chance: f32,
+    /// Shape of the crown envelope that scales branch length by height.
     pub crown_shape: CrownShape,
     /// How strongly `crown_shape` affects branch length (0 = uniform).
     pub crown_influence: f32,
     /// Prevent branches from ending below `floor_level`.
     pub floor_avoidance: bool,
+    /// World-space y of the floor, in metres, used when `floor_avoidance` is on.
     pub floor_level: f32,
 }
 
@@ -220,6 +227,7 @@ impl Default for BranchParams {
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitParams {
+    /// Whether primary branches may split into Y-junctions.
     pub enabled: bool,
     /// Chance that a primary splits.
     pub probability: f32,
@@ -255,7 +263,9 @@ pub struct MeshParams {
     pub adaptive_resolution: bool,
     /// Segments per unit radius when `adaptive_resolution` is on.
     pub resolution_scale: f32,
+    /// Lower bound on radial segments when `adaptive_resolution` is on.
     pub min_radial_segments: u32,
+    /// Upper bound on radial segments when `adaptive_resolution` is on.
     pub max_radial_segments: u32,
     /// Recompute parent radii from children (Da Vinci's pipe model).
     pub pipe_radius_enabled: bool,
@@ -291,14 +301,19 @@ impl Default for MeshParams {
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FoliageParams {
+    /// Whether leaves are generated at all.
     pub enabled: bool,
+    /// Leaf mesh style.
     pub style: LeafStyle,
+    /// Where leaves are placed on the skeleton.
     pub placement: FoliagePlacement,
+    /// How leaves are oriented relative to their branch.
     pub orientation: LeafOrientation,
     /// Leaves per branch (terminal) or per unit length (all branches).
     pub density: f32,
     /// Leaves per cluster for [`FoliagePlacement::TipClusters`].
     pub cluster_size: u32,
+    /// Leaf edge length in metres.
     pub leaf_size: f32,
     /// Random size variation (0–0.5).
     pub leaf_size_variation: f32,
@@ -312,6 +327,7 @@ pub struct FoliageParams {
     pub rotation_variation: f32,
     /// Modulate density by crown height.
     pub use_crown_density: bool,
+    /// Leaf base color.
     pub color: Color,
 }
 
@@ -340,13 +356,21 @@ impl Default for FoliageParams {
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TreeParams {
+    /// Random seed; the same params and seed always generate the same tree.
     pub seed: i32,
+    /// Trunk shape.
     pub trunk: TrunkParams,
+    /// Branch generation.
     pub branches: BranchParams,
+    /// Y-junction splitting.
     pub split: SplitParams,
+    /// Mesh generation.
     pub mesh: MeshParams,
+    /// Leaf placement and geometry.
     pub foliage: FoliageParams,
+    /// Growth timing.
     pub growth: GrowthParams,
+    /// Trunk and branch color.
     pub trunk_color: Color,
 }
 
