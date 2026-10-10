@@ -536,6 +536,36 @@ mod tests {
     }
 
     #[test]
+    fn smoothing_never_folds_thin_twigs() {
+        // D-042: welding by a fixed 0.1 mm merged distinct ring vertices of
+        // sub-millimetre twigs, so smoothing folded them inside out (willow
+        // 132 triangles). Seams must still weld at large coordinates.
+        for preset in TreePreset::ALL {
+            let mut params = preset.params();
+            params.mesh.smooth_iterations = 2;
+            let mesh = skeleton_mesh(&generate_skeleton(&params), &params);
+            assert_faces_outward(&mesh, preset.name());
+        }
+        let mut giant = TreePreset::Oak.params();
+        giant.trunk.height = 40.0;
+        giant.trunk.radius = 3.0;
+        giant.mesh.smooth_iterations = 2;
+        let mesh = skeleton_mesh(&generate_skeleton(&giant), &giant);
+        assert_faces_outward(&mesh, "giant oak");
+        let cell = |p: Vec3| (p * 1.0e3).round().as_ivec3();
+        let mut groups: std::collections::HashMap<_, Vec<usize>> = Default::default();
+        for (i, p) in mesh.positions.iter().enumerate() {
+            groups.entry(cell(*p)).or_default().push(i);
+        }
+        for group in groups.values() {
+            for &i in group {
+                let gap = mesh.positions[i].distance(mesh.positions[group[0]]);
+                assert!(gap < 1e-3, "giant oak: seam torn by {gap} m");
+            }
+        }
+    }
+
+    #[test]
     fn pipe_radius_combines_children() {
         assert_eq!(calculate_pipe_radius(&[], 2.0, 0.1), 0.1);
         let r = calculate_pipe_radius(&[0.3, 0.4], 2.0, 0.01);

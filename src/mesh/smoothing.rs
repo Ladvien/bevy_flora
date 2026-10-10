@@ -4,9 +4,17 @@ use std::collections::HashMap;
 
 use bevy::math::Vec3;
 
-/// Vertices closer than this are the same surface point. UV seams and
-/// cap rings repeat positions, and those repeats must stay together.
-const WELD_EPSILON: f32 = 1.0e-4;
+/// Vertices closer than this fraction of the mesh's extent (at least 1 m) are
+/// the same surface point. UV seams and cap rings repeat positions (to within
+/// f32 rounding), and those repeats must stay together; a fixed tolerance
+/// would either tear seams on large trees or merge distinct ring vertices of
+/// sub-millimetre twigs, folding them inside out.
+const WELD_RELATIVE: f32 = 1.0e-6;
+
+/// Wood whose edges are shorter than this many weld tolerances is left as
+/// generated: hairline twigs, whose ring vertices are within a few f32 steps
+/// of each other, would otherwise be partly welded and fold inside out.
+const MIN_SMOOTH_EDGE: f32 = 100.0;
 
 /// Taubin pass-band frequency `k_PB`: each shrinking pass (`λ`) is followed by
 /// an inflating one (`μ`, with `1/λ + 1/μ = k_PB`), so noise is smoothed out
@@ -21,8 +29,11 @@ const TAUBIN_PASS_BAND: f32 = 0.1;
 ///
 /// Vertices at the same position (UV seams) move as one, so seams stay closed.
 /// Vertices on an open boundary (an edge used by a single triangle, such as
-/// the base of a branch tube) and vertices for which `fixed(position)` holds
-/// do not move, so branches stay attached and the trunk stays on the ground.
+/// the base of a branch tube), vertices with an edge shorter than
+/// [`MIN_SMOOTH_EDGE`] welds (wood too fine for f32 to tell its ring vertices
+/// from seam copies) and vertices for which `fixed(position)` holds do not
+/// move, so branches stay attached, hairline twigs cannot fold, and the trunk
+/// stays on the ground.
 pub fn laplacian_smooth(
     positions: &mut [Vec3],
     indices: &[u32],
@@ -33,10 +44,16 @@ pub fn laplacian_smooth(
     if positions.is_empty() || indices.is_empty() || iterations == 0 {
         return;
     }
-    let (group_of, mut points) = weld(positions);
+    let extent = positions.iter().fold(1.0f32, |m, p| m.max(p.abs().max_element()));
+    let epsilon = WELD_RELATIVE * extent;
+    let (group_of, mut points) = weld(positions, epsilon);
     let mut topology = Topology::build(points.len(), &group_of, indices);
-    for (pinned, &point) in topology.pinned.iter_mut().zip(&points) {
-        *pinned |= fixed(point);
+    let min_edge = MIN_SMOOTH_EDGE * epsilon;
+    for (g, &point) in points.iter().enumerate() {
+        let fine = topology.neighbors[g]
+            .iter()
+            .any(|&n| points[n as usize].distance_squared(point) < min_edge * min_edge);
+        topology.pinned[g] |= fine || fixed(point);
     }
     let inflate = factor / (TAUBIN_PASS_BAND * factor - 1.0);
     for _ in 0..iterations {
@@ -50,10 +67,10 @@ pub fn laplacian_smooth(
     }
 }
 
-/// Merge vertices within [`WELD_EPSILON`]. Returns each vertex's group index
-/// and each group's position (that of its first vertex).
-fn weld(positions: &[Vec3]) -> (Vec<u32>, Vec<Vec3>) {
-    let cell_of = |p: Vec3| (p / WELD_EPSILON).floor().as_ivec3().to_array();
+/// Merge vertices within `epsilon`. Returns each vertex's group index and each
+/// group's position (that of its first vertex).
+fn weld(positions: &[Vec3], epsilon: f32) -> (Vec<u32>, Vec<Vec3>) {
+    let cell_of = |p: Vec3| (p / epsilon).floor().as_ivec3().to_array();
     let mut cells: HashMap<[i32; 3], Vec<u32>> = HashMap::new();
     let mut group_positions: Vec<Vec3> = Vec::new();
     let mut group_of = Vec::with_capacity(positions.len());
@@ -64,7 +81,7 @@ fn weld(positions: &[Vec3]) -> (Vec<u32>, Vec<Vec3>) {
             .filter_map(|cell| cells.get(&cell))
             .flatten()
             .copied()
-            .find(|&g| group_positions[g as usize].distance_squared(p) <= WELD_EPSILON * WELD_EPSILON);
+            .find(|&g| group_positions[g as usize].distance_squared(p) <= epsilon * epsilon);
         let group = existing.unwrap_or_else(|| {
             let g = group_positions.len() as u32;
             group_positions.push(p);
