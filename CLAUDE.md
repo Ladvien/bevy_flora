@@ -1,87 +1,33 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code in this repository.
 
-## Critical Info
-- Use Godot 4.6
-- Always consult documentation, download it if needed
-- Prefer Godot `export` variables over magic numbers or constants
+## Project
 
-## Docs
-- MTree Updated branch - https://github.com/GoodPie/modular_tree
-- Godot Rust Book - https://godot-rust.github.io/book/
-- Godot API Docs - https://godot-rust.github.io/docs/ and https://godot-rust.github.io/docs/gdext/master/godot/
-- Godot Github - https://github.com/godot-rust/gdext
-- Other local Godot Addon projects for reference:
-    - Terrain Editor - ~/pixy_terrain
+`bevy_flora`: a pure-Rust Bevy 0.20 crate that generates parametric, stylized procedural trees which can grow over time. See `ARCHITECTURE.md`.
 
-## Project Overview
-
-Pixy Tree is a Godot 4 procedural tree generation tool written in Rust using GDExtension (godot-rust/gdext). It creates stylized trees for 3D pixel art games.
-
-## Build Commands
+## Commands
 
 ```bash
-# Build the Rust GDExtension library
-cd rust && cargo build
-
-# Build release version
-cd rust && cargo build --release
-
-# Run tests
-cd rust && cargo test
-
-# Check code without building
-cd rust && cargo check
-
-# Format code
-cd rust && cargo fmt
-
-# Lint code
-cd rust && cargo clippy
+cargo build
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo run --example showcase   # orbit: right-drag/wheel; [ ] presets; N reseed; Space grow; R restart; M mature; G rebuild
+cargo run --example gallery -- --out target/gallery/latest [--filter <substr>]... [--no-shadows]   # 4-view PNG + stats.tsv per scenario
 ```
 
-## Project Structure
+## Layout
 
-```
-pixy_tree/
-├── godot/                        # Godot project files
-│   ├── project.godot             # Godot project configuration
-│   ├── pixy_tree.gdextension     # GDExtension configuration
-│   ├── scenes/
-│   │   └── test_scene.tscn       # Test scene with tree node
-│   └── scripts/
-│       └── orbit_camera.gd       # Camera controller for testing
-└── rust/                         # Rust GDExtension library
-    ├── Cargo.toml
-    └── src/
-        ├── lib.rs                # Extension entry point
-        └── tree.rs               # PixyTree node implementation
-```
+- `src/params.rs`, `crown.rs`, `presets.rs`: `TreeParams` and the 15 presets
+- `src/skeleton.rs`, `growth.rs`: node tree and age model
+- `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
+- `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves, `build_tree`, Bevy components/systems
+- `examples/showcase.rs`, `examples/gallery.rs` (visual QA renderer), `examples/capture_growth.rs` (records `docs/growth.gif` for the README)
+- Publishing: `Cargo.toml` `include` keeps `qa/`, `slop/`, `docs/` out of the package; README media use absolute GitHub URLs
+- `qa/visual_findings.md`: visual QA defect log (open / fixed / proposed / iterations)
 
-## Architecture
+## Conventions
 
-- **GDExtension Entry**: `rust/src/lib.rs` - Registers the extension with Godot via `#[gdextension]` macro
-- **PixyTree Node**: `rust/src/tree.rs` - Main tree generation node (extends Node3D)
-- **Library Output**: Compiled to `rust/target/{debug,release}/libpixy_tree.dylib` (macOS), `.so` (Linux), or `.dll` (Windows)
-- **Godot Integration**: The `.gdextension` file in `godot/` tells Godot where to find the compiled library
-
-## Development Workflow
-
-1. Make changes to Rust code in `rust/src/`
-2. Run `cargo build` from `rust/` directory
-3. Open Godot project from `godot/` directory - it auto-loads the extension
-4. Godot 4.2+ supports hot reloading - changes rebuild without restarting Godot
-
-## Key Dependencies
-
-- `godot` crate from godot-rust/gdext (master branch) - Rust bindings for Godot 4
-- `noise` crate - For procedural generation algorithms
-- `rayon` / `bevy_tasks` - For parallel processing
-
-## GDExtension Notes
-
-- Custom Godot classes are created using `#[derive(GodotClass)]`
-- Methods exposed to GDScript use `#[func]`
-- Signals use `#[signal]`
-- See https://godot-rust.github.io/book/ for gdext documentation
+- Prefer `TreeParams` fields over magic numbers.
+- Core modules depend only on `bevy::math` and `bevy::color`; only `mesh/mod.rs` and `plugin.rs` touch render/ECS types.
+- Docs: https://docs.rs/bevy/0.20.0, https://bevy.org/news/bevy-0-20/
