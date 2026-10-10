@@ -124,7 +124,10 @@ pub fn calculate_pipe_radius(child_radii: &[f32], exponent: f32, min_radius: f32
     accumulated.powf(1.0 / exponent).max(min_radius)
 }
 
-/// Recompute every non-trunk node's radii bottom-up from its children.
+/// Recompute every non-trunk node's radii bottom-up from its children. The
+/// `min_radius` floor scales with each node's `radius_progress`, so a branch
+/// that has only just been born stays thin instead of becoming a wide,
+/// paper-thin disc.
 pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32) {
     let n = skeleton.nodes.len();
     if n < 2 {
@@ -136,7 +139,8 @@ pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32
     let mut has_child = vec![false; n];
     for i in (1..n).rev() {
         if has_child[i] {
-            let tip = accumulated[i].powf(1.0 / exponent).max(min_radius);
+            let floor = min_radius * skeleton.nodes[i].radius_progress;
+            let tip = accumulated[i].powf(1.0 / exponent).max(floor);
             let node = &mut skeleton.nodes[i];
             node.tip_radius = tip;
             if node.base_radius < tip {
@@ -153,8 +157,9 @@ pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32
         if node.tip_radius > node.base_radius {
             node.tip_radius = node.base_radius * 0.8;
         }
-        node.base_radius = node.base_radius.max(min_radius);
-        node.tip_radius = node.tip_radius.max(min_radius * 0.5);
+        let floor = min_radius * node.radius_progress;
+        node.base_radius = node.base_radius.max(floor);
+        node.tip_radius = node.tip_radius.max(floor * 0.5);
     }
 }
 
@@ -782,6 +787,20 @@ mod tests {
             assert!(n.tip_radius <= n.base_radius, "node {i}");
             assert!(n.base_radius >= 0.02, "node {i}");
             assert!(n.tip_radius >= 0.01, "node {i}");
+        }
+    }
+
+    #[test]
+    fn growing_trees_with_pipe_radii_face_outward() {
+        // A just-born branch (1 mm long) was floored to the full 2 cm pipe
+        // radius, a paper-thin disc whose faces folded inside out (oak seed 3
+        // at age 9, willow seed 2 at age 5).
+        for (preset, seed, age) in [(TreePreset::Oak, 3, 9.0), (TreePreset::Willow, 2, 5.0)] {
+            let mut params = preset.params();
+            params.seed = seed;
+            params.mesh.pipe_radius_enabled = true;
+            let out = crate::pipeline::build_tree(&params, age);
+            crate::mesh::rings::tests::assert_faces_outward(&out.trunk, preset.name());
         }
     }
 }
