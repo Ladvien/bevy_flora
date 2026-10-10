@@ -231,7 +231,8 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
         // Smoothing softens creases but must not move the wood the skeleton
         // defines: the trunk's bottom cap stays on the ground, branch-end caps
         // keep their length, and a parent keeps its surface where a child is
-        // seated on it (the child's base is an open boundary and stays put).
+        // seated on it (the child's base or collar edge is an open boundary and
+        // stays put, so moving the surface around it would leave a lip).
         let keep: Vec<(Vec3, f32)> = skeleton
             .nodes
             .iter()
@@ -239,12 +240,14 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
             .skip(1)
             .flat_map(|(i, node)| {
                 let end = (skeleton.end(i), node.tip_radius * SMOOTH_PIN_REACH);
-                let seat = node.parent.and_then(|p| {
+                let seat = node.parent.map(|p| {
                     let parent = &skeleton.nodes[p as usize];
-                    (parent.kind != NodeKind::Trunk).then(|| {
+                    if parent.kind == NodeKind::Trunk {
+                        (node.start, node.base_radius * COLLAR_FLARE * SMOOTH_PIN_REACH)
+                    } else {
                         let radius = parent.base_radius + (parent.tip_radius - parent.base_radius) * node.attach_t;
                         (node.anchor, (radius + node.base_radius) * SMOOTH_PIN_REACH)
-                    })
+                    }
                 });
                 std::iter::once(end).chain(seat)
             })
@@ -506,6 +509,28 @@ mod tests {
                 let radius = parent.base_radius + (parent.tip_radius - parent.base_radius) * n.attach_t;
                 let gap = near(n.anchor) - radius;
                 assert!(gap < 0.01, "{} {:?} {}: anchor {gap} m off its parent's wood", preset.name(), n.kind, n.id);
+            }
+        }
+    }
+
+    #[test]
+    fn smoothing_leaves_trunk_junctions_in_place() {
+        // D-041: the trunk surface around a primary's collar moved up to
+        // 1.9 cm while the collar's open edge stayed pinned, leaving a lip.
+        for preset in [TreePreset::Oak, TreePreset::Redwood, TreePreset::Maple] {
+            let mut params = preset.params();
+            params.mesh.smooth_iterations = 0;
+            let skeleton = generate_skeleton(&params);
+            let raw = skeleton_mesh(&skeleton, &params);
+            params.mesh.smooth_iterations = 2;
+            let smooth = skeleton_mesh(&skeleton, &params);
+            for n in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary) {
+                for (a, b) in raw.positions.iter().zip(&smooth.positions) {
+                    if a.distance(n.start) < n.base_radius * COLLAR_FLARE {
+                        let moved = a.distance(*b);
+                        assert!(moved < 2e-3, "{} primary {}: junction vertex moved {moved} m", preset.name(), n.id);
+                    }
+                }
             }
         }
     }
