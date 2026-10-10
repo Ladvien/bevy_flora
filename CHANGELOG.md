@@ -5,6 +5,27 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.3.3] - 2026-10-10
+
+Bug fixes found by a parameter sweep; no API changes.
+
+### Fixed
+
+- With `MeshParams::pipe_radius_enabled`, a growing tree's just-born branches (1 mm long) were
+  floored to the full `pipe_radius_min` radius: wide, paper-thin discs whose faces folded inside
+  out (oak and willow at intermediate ages). The floor now grows with the branch's radius.
+  Mature trees are unchanged.
+- A sub-branch that `keep_out_of_trunk` shortened to nothing (its parent runs inside a wobbly or
+  steep trunk) still grew leaves, which sat inside the trunk. Branches without wood carry no
+  leaves now; the default presets are unchanged.
+
+### Changed
+
+- The `gallery` example renders 319 scenarios: pipe radii at age 5 (`pipeyoung_<preset>_5`) and a
+  wobbly, twisted trunk (`wobble_<preset>`) on every preset.
+- `docs/growth.gif`, the README clip, was re-recorded for this release; the oak it shows is not
+  touched by these changes, so the clip comes out byte-identical.
+
 ## [0.3.2] - 2026-10-10
 
 Appearance only; no API changes.
@@ -186,6 +207,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.3.3]: https://github.com/Ladvien/bevy_flora/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/Ladvien/bevy_flora/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Ladvien/bevy_flora/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Ladvien/bevy_flora/compare/v0.2.2...v0.3.0

@@ -288,6 +288,23 @@ fn scenarios() -> Vec<Scenario> {
         add(format!("pipe_{}", p.name()), params, inf);
     }
 
+    // Pipe radii while growing: just-born branches meet the radius floor (D-053).
+    for p in TreePreset::ALL {
+        let mut params = preset(p);
+        params.mesh.pipe_radius_enabled = true;
+        add(format!("pipeyoung_{}_5", p.name()), params, 5.0);
+    }
+
+    // A wobbly, twisted trunk under every preset: limbs that hug it can run
+    // back into it (D-054).
+    for p in TreePreset::ALL {
+        let mut params = preset(p);
+        params.trunk.randomness = 0.5;
+        params.trunk.twist = 180.0;
+        params.branches.twist = 90.0;
+        add(format!("wobble_{}", p.name()), params, inf);
+    }
+
     // Growth series at odd ages for drooping and forking presets.
     for p in [TreePreset::Willow, TreePreset::DragonTree] {
         for age in [1.0, 3.0, 5.0, 7.0, 9.0, inf] {
