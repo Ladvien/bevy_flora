@@ -62,3 +62,8 @@ pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, T
 pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
+
+// Compile the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -22,7 +22,8 @@ cargo run --example gallery -- --out target/gallery/latest [--filter <substr>]..
 - `src/skeleton.rs`, `growth.rs`: node tree and age model
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves, `build_tree`, Bevy components/systems
-- `examples/showcase.rs`, `examples/gallery.rs` (visual QA renderer)
+- `examples/showcase.rs`, `examples/gallery.rs` (visual QA renderer), `examples/capture_growth.rs` (records `docs/growth.gif` for the README)
+- Publishing: `Cargo.toml` `include` keeps `qa/`, `slop/`, `docs/` out of the package; README media use absolute GitHub URLs
 - `qa/visual_findings.md`: visual QA defect log (open / fixed / proposed / iterations)
 
 ## Conventions

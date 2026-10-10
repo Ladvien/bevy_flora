@@ -2,12 +2,35 @@
 name = "bevy_flora"
 version = "0.1.0"
 edition = "2024"
+# Bevy 0.20's own crates declare 1.97.1, and this crate cannot compile without
+# them, so claiming less would be a floor nothing can stand on.
 rust-version = "1.97.1"
-description = "Parametric procedural trees that grow over time, for Bevy"
+description = "Parametric, stylized procedural trees for Bevy that grow over time: 15 presets, bent and forking branches, leaf styles, deterministic per seed."
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ladvien/bevy_flora"
+documentation = "https://docs.rs/bevy_flora"
+readme = "README.md"
+authors = ["C. Thomas Brittain <cthomasbrittain@hotmail.com>"]
+# `bevy` first: it is the term a Bevy user searches, and crates.io weights
+# keyword position. At the 5-item cap.
+keywords = ["bevy", "procedural", "tree", "vegetation", "gamedev"]
+categories = ["game-development", "graphics", "rendering"]
+# The package is the library and its examples. `qa/` (the visual QA log),
+# `slop/` (old design notes), `docs/` (README media, served from GitHub) and the
+# agent guide stay in the repository only.
+include = [
+    "src/**/*",
+    "examples/**/*",
+    "Cargo.toml",
+    "README.md",
+    "CHANGELOG.md",
+    "ARCHITECTURE.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
 
-[lib]
-crate-type = ["rlib"]
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset", "bevy_color", "bevy_mesh", "bevy_pbr"] }
@@ -19,6 +42,16 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 bevy = { version = "0.20" }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
 
 [profile.dev]
 opt-level = 1
