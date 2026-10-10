@@ -358,7 +358,7 @@ impl Default for FoliageParams {
             rotation_variation: 0.5,
             use_crown_density: true,
             normal_bend: 0.8,
-            color_variation: 0.15,
+            color_variation: 0.3,
             color: Color::srgb(0.133, 0.545, 0.133),
         }
     }
