@@ -5,7 +5,7 @@ use bevy::math::Vec3;
 use std::f32::consts::{E, PI, TAU};
 
 use crate::mesh::rings::perpendicular;
-use crate::params::{TreeParams, TrunkParams, TrunkTermination};
+use crate::params::{BranchParams, TreeParams, TrunkParams, TrunkTermination};
 use crate::rng::SeededRng;
 
 /// Role of a node in the skeleton.
@@ -79,18 +79,21 @@ impl Skeleton {
 
     /// Move every node hanging off a branch onto its parent's (bent) axis at
     /// `attach_t`, parents first so displacements cascade to descendants.
-    /// [`Skeleton::aged`] places nodes the same way.
-    fn seat_on_parents(&mut self) {
+    /// [`Skeleton::aged`] places nodes the same way. With floor avoidance,
+    /// each node's bent wood is then kept above `floor_level`.
+    fn seat_on_parents(&mut self, branches: &BranchParams) {
         for i in 1..self.nodes.len() {
             let Some(p) = self.nodes[i].parent else { continue };
             let parent = &self.nodes[p as usize];
-            if parent.kind == NodeKind::Trunk {
-                continue;
+            if parent.kind != NodeKind::Trunk {
+                let shift = parent.point_at(self.nodes[i].attach_t) - self.nodes[i].anchor;
+                let node = &mut self.nodes[i];
+                node.anchor += shift;
+                node.start += shift;
             }
-            let shift = parent.point_at(self.nodes[i].attach_t) - self.nodes[i].anchor;
-            let node = &mut self.nodes[i];
-            node.anchor += shift;
-            node.start += shift;
+            if branches.floor_avoidance {
+                self.nodes[i].keep_above(branches.floor_level);
+            }
         }
     }
 
@@ -162,6 +165,43 @@ impl Node {
         let d = self.direction;
         let lever = Vec3::new(d.x, 0.0, d.z).length();
         Vec3::new(d.x, d.y - t * t * self.bend * lever, d.z).normalize_or_zero()
+    }
+
+    /// Lowest point of the wood's surface (axis height minus the radius there).
+    fn lowest(&self) -> f32 {
+        let axis = self.axis(BENT_AXIS_POINTS);
+        let last = (axis.len() - 1) as f32;
+        axis.iter()
+            .enumerate()
+            .map(|(k, (c, _))| c.y - lerp(self.base_radius, self.tip_radius, k as f32 / last))
+            .fold(f32::MAX, f32::min)
+    }
+
+    /// Keep the wood at or above `floor`: relax the gravity bend just enough
+    /// (the lowest point only drops as the bend grows), and if the straight
+    /// branch still points below the floor, shorten it to end on the floor.
+    fn keep_above(&mut self, floor: f32) {
+        if self.lowest() >= floor {
+            return;
+        }
+        let full = self.bend;
+        self.bend = 0.0;
+        if self.lowest() >= floor {
+            let (mut lo, mut hi) = (0.0, full);
+            for _ in 0..16 {
+                let mid = 0.5 * (lo + hi);
+                self.bend = mid;
+                if self.lowest() >= floor {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            self.bend = lo;
+        } else if self.direction.y < 0.0 {
+            let drop = self.start.y - floor - self.tip_radius;
+            self.length = (drop / -self.direction.y).max(0.0);
+        }
     }
 }
 
@@ -290,7 +330,7 @@ pub fn generate_skeleton(params: &TreeParams) -> Skeleton {
             node.bend = bend;
         }
     }
-    skeleton.seat_on_parents();
+    skeleton.seat_on_parents(&params.branches);
     crate::growth::assign_birth_times(&mut skeleton, &params.growth);
     skeleton
 }
@@ -753,6 +793,35 @@ mod tests {
                     n.id,
                     w[0].1,
                     w[1].1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bent_wood_stays_above_the_floor() {
+        // Floor avoidance must hold for the bent axis, not just the straight
+        // one: drooping willow twigs and downward branches low on the trunk.
+        let mut low = TreePreset::Oak.params();
+        low.branches.start = 0.05;
+        low.branches.gravity_strength = 2.0;
+        low.branches.stiffness = 0.0;
+        low.branches.up_attraction = -1.0;
+        let mut cases = vec![("droop low".to_string(), low)];
+        for seed in 1..=8 {
+            let mut willow = TreePreset::Willow.params();
+            willow.seed = seed;
+            cases.push((format!("willow seed {seed}"), willow));
+        }
+        for (label, params) in cases {
+            let s = generate_skeleton(&params);
+            for n in s.nodes.iter().skip(1) {
+                let lowest = n.lowest();
+                assert!(
+                    lowest >= params.branches.floor_level - 1e-4,
+                    "{label}: {:?} {} reaches {lowest} below the floor",
+                    n.kind,
+                    n.id
                 );
             }
         }
