@@ -30,9 +30,9 @@ const TAUBIN_PASS_BAND: f32 = 0.1;
 ///
 /// Vertices at the same position (UV seams) move as one, so seams stay closed.
 /// Vertices on an open boundary (an edge used by a single triangle, such as
-/// the base of a branch tube), vertices with an edge shorter than
-/// [`MIN_SMOOTH_EDGE`] welds (wood too fine for f32 to tell its ring vertices
-/// from seam copies) and vertices for which `fixed(position)` holds do not
+/// the base of a branch tube), vertices with an edge shorter than 100 weld
+/// tolerances (wood too fine for f32 to tell its ring vertices from seam
+/// copies) and vertices for which `fixed(position)` holds do not
 /// move, so branches stay attached, hairline twigs cannot fold, and the trunk
 /// stays on the ground.
 pub fn laplacian_smooth(
