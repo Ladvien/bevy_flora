@@ -215,7 +215,7 @@ fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
 /// and a cap, about a hemisphere): the base of a branch that hugs the trunk,
 /// so it grows out of the trunk like a knot instead of ending in a flat disc.
 /// Its last ring coincides with the tube's base ring.
-pub fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
+fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
     let mut mesh = MeshData::default();
     let basis = RingBasis::from_axis(axis);
     let segments = segments.max(3);

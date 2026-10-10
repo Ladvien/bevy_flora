@@ -5,6 +5,26 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.3.1] - 2026-10-10
+
+Appearance only; no API changes.
+
+### Changed
+
+- A primary branch that hugs the trunk (less than half of its direction pointing away from it:
+  steep upward or downward branches on the birch, cypress, poplar and some extremes) now ends in
+  a closed, rounded base that sits half in the trunk, instead of a flat, sheared cut toward the
+  trunk axis. Branches that leave the trunk at a wider angle are unchanged.
+- The willow's limbs now start all the way up to the top of the trunk (`branches.end` 0.9 -> 1.0),
+  so the crown drapes from the trunk top instead of sitting low under a bare end (401 nodes instead
+  of 321).
+- The spruce grows slower, so a young spruce is a sapling instead of a 5 m pole of hair-thin
+  2 m branches: `growth.trunk_fraction` 0.4 -> 0.6, `branch_fraction` 0.35 -> 0.6,
+  `thickening_lag` 2 -> 1.2 and `leaf_threshold` 0.5 -> 0.15. The mature spruce is unchanged; it is
+  fully grown at about age 16 instead of 12.
+- `docs/growth.gif`, the README clip, was re-recorded for this release; the oak it shows is not
+  touched by these changes, so the clip comes out byte-identical.
+
 ## [0.3.0] - 2026-10-10
 
 Thicker twigs, smoother drooping branches and a weeping willow. `BranchParams` gains a field, hence
@@ -141,6 +161,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.3.1]: https://github.com/Ladvien/bevy_flora/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Ladvien/bevy_flora/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Ladvien/bevy_flora/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Ladvien/bevy_flora/compare/v0.2.0...v0.2.1
