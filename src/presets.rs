@@ -181,6 +181,7 @@ fn oak() -> TreeParams {
             rotation_variation: 0.6,
             use_crown_density: true,
             color: Color::srgb(0.176, 0.314, 0.086),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.365, 0.227, 0.102),
@@ -264,6 +265,7 @@ fn pine() -> TreeParams {
             rotation_variation: 0.3,
             use_crown_density: true,
             color: Color::srgb(0.106, 0.302, 0.243),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.420, 0.267, 0.137),
@@ -347,6 +349,7 @@ fn willow() -> TreeParams {
             rotation_variation: 0.8,
             use_crown_density: true,
             color: Color::srgb(0.565, 0.690, 0.376),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.478, 0.361, 0.239),
@@ -430,6 +433,7 @@ fn birch() -> TreeParams {
             rotation_variation: 0.5,
             use_crown_density: true,
             color: Color::srgb(0.486, 0.804, 0.486),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.961, 0.961, 0.863),
@@ -513,6 +517,7 @@ fn palm() -> TreeParams {
             rotation_variation: 0.2,
             use_crown_density: false,
             color: Color::srgb(0.133, 0.545, 0.133),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.545, 0.451, 0.333),
@@ -596,6 +601,7 @@ fn cypress() -> TreeParams {
             rotation_variation: 0.4,
             use_crown_density: true,
             color: Color::srgb(0.208, 0.369, 0.231),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.290, 0.235, 0.165),
@@ -679,6 +685,7 @@ fn bonsai() -> TreeParams {
             rotation_variation: 0.7,
             use_crown_density: true,
             color: Color::srgb(0.208, 0.369, 0.231),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.361, 0.251, 0.200),
@@ -762,6 +769,7 @@ fn maple() -> TreeParams {
             rotation_variation: 0.6,
             use_crown_density: true,
             color: Color::srgb(0.133, 0.322, 0.133),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.32, 0.21, 0.12),
@@ -845,6 +853,7 @@ fn spruce() -> TreeParams {
             rotation_variation: 0.25,
             use_crown_density: true,
             color: Color::srgb(0.086, 0.278, 0.212),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.380, 0.243, 0.141),
@@ -928,6 +937,7 @@ fn poplar() -> TreeParams {
             rotation_variation: 0.45,
             use_crown_density: true,
             color: Color::srgb(0.404, 0.545, 0.306),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.553, 0.514, 0.435),
@@ -1011,6 +1021,7 @@ fn baobab() -> TreeParams {
             rotation_variation: 0.5,
             use_crown_density: false,
             color: Color::srgb(0.306, 0.463, 0.235),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.506, 0.424, 0.369),
@@ -1094,6 +1105,7 @@ fn dragon_tree() -> TreeParams {
             rotation_variation: 0.4,
             use_crown_density: false,
             color: Color::srgb(0.286, 0.443, 0.255),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.463, 0.396, 0.322),
@@ -1177,6 +1189,7 @@ fn japanese_maple() -> TreeParams {
             rotation_variation: 0.65,
             use_crown_density: true,
             color: Color::srgb(0.698, 0.133, 0.133),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.376, 0.282, 0.212),
@@ -1331,6 +1344,7 @@ fn redwood() -> TreeParams {
             rotation_variation: 0.3,
             use_crown_density: true,
             color: Color::srgb(0.12, 0.32, 0.21),
+            ..Default::default()
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.463, 0.263, 0.161),
