@@ -4,7 +4,7 @@ use bevy::math::Vec3;
 
 use super::MeshData;
 use super::rings::{RingBasis, connect_rings, emit_cap, emit_ring};
-use super::smoothing::{laplacian_smooth, recalculate_normals};
+use super::smoothing::laplacian_smooth;
 use super::trunk::trunk_mesh;
 use crate::params::TreeParams;
 use crate::skeleton::{BENT_AXIS_POINTS, Node, NodeKind, Skeleton};
@@ -254,12 +254,12 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
             .collect();
         laplacian_smooth(
             &mut mesh.positions,
+            &mut mesh.normals,
             &mesh.indices,
             params.mesh.smooth_iterations,
             params.mesh.smooth_factor,
             |p| p.y <= GROUND_EPSILON || keep.iter().any(|&(c, r)| p.distance_squared(c) <= r * r),
         );
-        recalculate_normals(&mesh.positions, &mesh.indices, &mut mesh.normals);
     }
     mesh.extend(&roots);
 
@@ -561,6 +561,58 @@ mod tests {
             for &i in group {
                 let gap = mesh.positions[i].distance(mesh.positions[group[0]]);
                 assert!(gap < 1e-3, "giant oak: seam torn by {gap} m");
+            }
+        }
+    }
+
+    #[test]
+    fn smoothing_keeps_normals_where_nothing_moved() {
+        // D-043: normals were recomputed from faces over the whole mesh, so
+        // unmoved collar ends got face-tilted normals and lit up as a rim
+        // against their branch (dragon tree closeup).
+        for preset in [TreePreset::DragonTree, TreePreset::Oak] {
+            let mut params = preset.params();
+            params.mesh.smooth_iterations = 0;
+            let skeleton = generate_skeleton(&params);
+            let raw = skeleton_mesh(&skeleton, &params);
+            params.mesh.smooth_iterations = 2;
+            let smooth = skeleton_mesh(&skeleton, &params);
+            let moved: Vec<bool> = raw.positions.iter().zip(&smooth.positions).map(|(a, b)| a != b).collect();
+            let mut touched = vec![false; raw.positions.len()];
+            for &[a, b, c] in raw.indices.as_chunks::<3>().0 {
+                if moved[a as usize] || moved[b as usize] || moved[c as usize] {
+                    for v in [a, b, c] {
+                        touched[v as usize] = true;
+                    }
+                }
+            }
+            let cell = |p: Vec3| (p * 1.0e5).round().as_ivec3();
+            let mut twins: std::collections::HashMap<_, Vec<usize>> = Default::default();
+            for (i, p) in raw.positions.iter().enumerate() {
+                twins.entry(cell(*p)).or_default().push(i);
+            }
+            let agree = |a: usize, b: usize| raw.normals[a].dot(raw.normals[b]) > 0.5;
+            // A vertex keeps its generated normal unless it, or a twin it
+            // shades with, borders a moved face.
+            let mut kept = 0;
+            for (v, p) in raw.positions.iter().enumerate() {
+                if twins[&cell(*p)].iter().any(|&u| touched[u] && agree(u, v)) {
+                    continue;
+                }
+                assert_eq!(raw.normals[v], smooth.normals[v], "{} vertex {v}: normal changed though nothing moved", preset.name());
+                kept += 1;
+            }
+            assert!(kept > 0, "{}: smoothing moved every vertex", preset.name());
+            // UV seam twins next to moved wood must shade alike. (Root segments
+            // are added after smoothing, inside the trunk, and never border a
+            // moved face.)
+            for group in twins.values() {
+                for &a in group {
+                    for &b in group.iter().filter(|&&b| touched[a] && touched[b] && raw.normals[a].dot(raw.normals[b]) > 0.99) {
+                        let gap = smooth.normals[a].distance(smooth.normals[b]);
+                        assert!(gap < 1e-3, "{} vertices {a} and {b}: seam normals differ by {gap}", preset.name());
+                    }
+                }
             }
         }
     }

@@ -40,8 +40,10 @@ tube and collar get a `root_segment` reaching into the trunk (`primary_root`),
 so junctions have no open ends. Smoothing (Taubin λ|μ, so it does not shrink the
 wood) welds coincident vertices (UV seams) and pins open boundaries, the ground
 ring, branch-end caps and the parent surface under each child's seat, so it
-never tears, lifts, retracts or detaches the wood; root segments are added after
-it, so junctions keep their shape.
+never tears, lifts, retracts or detaches the wood. Wood finer than ~100 weld
+tolerances (hairline twigs) stays as generated, and normals are recomputed only
+around moved vertices, pooled across seam twins, so unmoved pieces keep their
+generated shading. Root segments are added after it, so junctions keep their shape.
 
 ## Bevy integration (plugin.rs)
 

@@ -24,8 +24,9 @@ const TAUBIN_PASS_BAND: f32 = 0.1;
 
 /// Taubin λ|μ smoothing: each of the `iterations` moves every interior vertex
 /// toward the barycenter of its edge neighbours by `factor` (0–1), then away
-/// from it by the matching μ. Recompute normals afterwards with
-/// [`recalculate_normals`].
+/// from it by the matching μ. Normals are recomputed from the faces around
+/// moved vertices only; unmoved wood keeps its generated normals, so pinned
+/// pieces (collar ends, branch bases) shade exactly as before.
 ///
 /// Vertices at the same position (UV seams) move as one, so seams stay closed.
 /// Vertices on an open boundary (an edge used by a single triangle, such as
@@ -36,6 +37,7 @@ const TAUBIN_PASS_BAND: f32 = 0.1;
 /// stays on the ground.
 pub fn laplacian_smooth(
     positions: &mut [Vec3],
+    normals: &mut [Vec3],
     indices: &[u32],
     iterations: u32,
     factor: f32,
@@ -60,11 +62,15 @@ pub fn laplacian_smooth(
         smooth_pass(&mut points, &topology, factor);
         smooth_pass(&mut points, &topology, inflate);
     }
-    for (position, &group) in positions.iter_mut().zip(&group_of) {
-        if !topology.pinned[group as usize] {
-            *position = points[group as usize];
+    let mut moved = vec![false; positions.len()];
+    for ((position, &group), moved) in positions.iter_mut().zip(&group_of).zip(&mut moved) {
+        let point = points[group as usize];
+        if !topology.pinned[group as usize] && *position != point {
+            *position = point;
+            *moved = true;
         }
     }
+    refresh_normals(positions, indices, normals, &moved, &group_of, points.len());
 }
 
 /// Merge vertices within `epsilon`. Returns each vertex's group index and each
@@ -148,22 +154,67 @@ fn smooth_pass(points: &mut [Vec3], topology: &Topology, factor: f32) {
     points.copy_from_slice(&next);
 }
 
-/// Area-weighted smooth normals from triangle faces.
-pub fn recalculate_normals(positions: &[Vec3], indices: &[u32], normals: &mut [Vec3]) {
+/// Generated normals closer than this (cosine) belong to one smooth surface;
+/// further apart they are a hard edge (a cap rim) and stay separate.
+const SHARED_NORMAL_COS: f32 = 0.5;
+
+/// Area-weighted normals from the faces around every vertex that shares a
+/// face with a moved vertex; all other normals are left as they are. Welded
+/// copies of a vertex (UV seam twins) pool their faces when their generated
+/// normals agree, so a seam does not show; hard edges stay hard.
+fn refresh_normals(
+    positions: &[Vec3],
+    indices: &[u32],
+    normals: &mut [Vec3],
+    moved: &[bool],
+    group_of: &[u32],
+    group_count: usize,
+) {
     if positions.len() != normals.len() {
         return;
     }
-    normals.fill(Vec3::ZERO);
-    for &[a, b, c] in indices.as_chunks::<3>().0 {
+    let triangles = indices.as_chunks::<3>().0;
+    let mut stale = vec![false; positions.len()];
+    for &[a, b, c] in triangles {
+        if moved[a as usize] || moved[b as usize] || moved[c as usize] {
+            for v in [a, b, c] {
+                stale[v as usize] = true;
+            }
+        }
+    }
+    let mut sums = vec![Vec3::ZERO; positions.len()];
+    for &[a, b, c] in triangles {
         let (a, b, c) = (a as usize, b as usize, c as usize);
         let face = (positions[b] - positions[a]).cross(positions[c] - positions[a]);
-        normals[a] += face;
-        normals[b] += face;
-        normals[c] += face;
+        sums[a] += face;
+        sums[b] += face;
+        sums[c] += face;
     }
-    for n in normals.iter_mut() {
-        if n.length_squared() > 0.0001 {
-            *n = n.normalize();
+    let mut members: Vec<Vec<u32>> = vec![Vec::new(); group_count];
+    for (v, &g) in group_of.iter().enumerate() {
+        members[g as usize].push(v as u32);
+    }
+    let generated = normals.to_vec();
+    let agrees = |u: usize, v: usize| generated[u].dot(generated[v]) > SHARED_NORMAL_COS;
+    // A refreshed vertex takes its agreeing twins along, so they keep shading
+    // alike even when only one of them touches a moved face.
+    for v in 0..positions.len() {
+        if stale[v] {
+            for &u in &members[group_of[v] as usize] {
+                if agrees(u as usize, v) {
+                    stale[u as usize] = true;
+                }
+            }
+        }
+    }
+    for v in (0..positions.len()).filter(|&v| stale[v]) {
+        let sum = members[group_of[v] as usize]
+            .iter()
+            .map(|&u| u as usize)
+            .filter(|&u| agrees(u, v))
+            .fold(Vec3::ZERO, |acc, u| acc + sums[u]);
+        if sum.length_squared() > 0.0001 {
+            normals[v] = sum.normalize();
         }
     }
 }
@@ -183,7 +234,8 @@ mod tests {
         ];
         let indices = [0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4];
         let before = positions[4].y;
-        laplacian_smooth(&mut positions, &indices, 1, 0.5, |_| false);
+        let mut normals = vec![Vec3::Y; positions.len()];
+        laplacian_smooth(&mut positions, &mut normals, &indices, 1, 0.5, |_| false);
         assert!(positions[4].y < before);
     }
 
@@ -195,19 +247,20 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
         ];
         let original = positions.clone();
-        laplacian_smooth(&mut positions, &[0, 1, 2], 0, 0.5, |_| false);
+        let mut normals = vec![Vec3::Z; 3];
+        laplacian_smooth(&mut positions, &mut normals, &[0, 1, 2], 0, 0.5, |_| false);
         assert_eq!(positions, original);
     }
 
     #[test]
-    fn recalculate_normals_points_up() {
+    fn refreshed_normals_point_up() {
         let positions = [
             Vec3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
             Vec3::new(1.0, 0.0, 0.0),
         ];
-        let mut normals = vec![Vec3::ZERO; 3];
-        recalculate_normals(&positions, &[0, 1, 2], &mut normals);
+        let mut normals = vec![Vec3::X; 3];
+        refresh_normals(&positions, &[0, 1, 2], &mut normals, &[true, false, false], &[0, 1, 2], 3);
         for n in &normals {
             assert!(n.y > 0.5);
         }
@@ -237,7 +290,8 @@ mod tests {
     fn seam_duplicates_move_together() {
         let (mut positions, indices) = seamed_tube();
         let before = positions.clone();
-        laplacian_smooth(&mut positions, &indices, 2, 0.5, |_| false);
+        let mut normals = vec![Vec3::Y; positions.len()];
+        laplacian_smooth(&mut positions, &mut normals, &indices, 2, 0.5, |_| false);
         for ring in 0..3 {
             let (first, seam) = (positions[ring * 5], positions[ring * 5 + 4]);
             assert!((first - seam).length() < 1e-6, "ring {ring} seam torn: {first:?} vs {seam:?}");
@@ -250,7 +304,8 @@ mod tests {
     fn open_boundary_stays_put() {
         let (mut positions, indices) = seamed_tube();
         let before = positions.clone();
-        laplacian_smooth(&mut positions, &indices, 3, 0.5, |_| false);
+        let mut normals = vec![Vec3::Y; positions.len()];
+        laplacian_smooth(&mut positions, &mut normals, &indices, 3, 0.5, |_| false);
         for v in (0..5).chain(10..15) {
             assert_eq!(positions[v], before[v], "boundary vertex {v} moved");
         }
@@ -260,7 +315,8 @@ mod tests {
     fn fixed_vertices_stay_put() {
         let (mut positions, indices) = seamed_tube();
         let before = positions.clone();
-        laplacian_smooth(&mut positions, &indices, 3, 0.5, |p| p.y == 1.0);
+        let mut normals = vec![Vec3::Y; positions.len()];
+        laplacian_smooth(&mut positions, &mut normals, &indices, 3, 0.5, |p| p.y == 1.0);
         for v in 5..10 {
             assert_eq!(positions[v], before[v], "fixed vertex {v} moved");
         }
