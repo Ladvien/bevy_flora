@@ -78,23 +78,21 @@ fn collar_start(start: Vec3, direction: Vec3, collar_length: f32) -> Vec3 {
 /// Width of a collar's wide end relative to the branch radius.
 const COLLAR_FLARE: f32 = 1.3;
 
-/// Flared cone blending a primary branch into the trunk surface.
-pub fn collar_mesh(
-    start: Vec3,
-    direction: Vec3,
-    branch_radius: f32,
-    collar_length: f32,
-    radial_segments: u32,
-) -> MeshData {
+/// Flared cone blending primary `node` into the trunk surface. It ends half
+/// a `collar_length` along the branch (at most at its tip) with the tube's
+/// own radius there, so it never stands proud of a tapering branch.
+pub fn collar_mesh(node: &Node, collar_length: f32, radial_segments: u32) -> MeshData {
     let mut mesh = MeshData::default();
     let segments = radial_segments.max(3);
     let rings = 3u32;
+    let (start, direction) = (node.start, node.direction);
     let basis = RingBasis::from_axis(direction);
 
+    let along = (collar_length * 0.5 / node.length).min(1.0);
     let collar_start = collar_start(start, direction, collar_length);
-    let collar_end = start + direction * collar_length * 0.5;
-    let start_radius = branch_radius * COLLAR_FLARE;
-    let end_radius = branch_radius;
+    let collar_end = node.point_at(along);
+    let start_radius = node.base_radius * COLLAR_FLARE;
+    let end_radius = lerp(node.base_radius, node.tip_radius, along);
 
     let mut prev_ring = None;
     for k in 0..rings {
@@ -212,13 +210,7 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
                 let collar_length = node.base_radius * params.mesh.collar_length;
                 // Same sides as the tube it wraps.
                 let collar_segments = segments;
-                mesh.extend(&collar_mesh(
-                    node.start,
-                    node.direction,
-                    node.base_radius,
-                    collar_length,
-                    collar_segments,
-                ));
+                mesh.extend(&collar_mesh(node, collar_length, collar_segments));
                 roots.extend(&root_segment(
                     root,
                     collar_start(node.start, node.direction, collar_length),
@@ -279,12 +271,51 @@ mod tests {
         let tube = tube_mesh(node, 6, 45.0);
         assert_indices_valid(&tube, "tube");
         assert_faces_outward(&tube, "tube");
-        let collar = collar_mesh(node.start, node.direction, node.base_radius, 0.3, 5);
+        let collar = collar_mesh(node, 0.3, 5);
         assert_indices_valid(&collar, "collar");
         assert_faces_outward(&collar, "collar");
         let root = root_segment(primary_root(node), node.start, node.direction, 6, node.base_radius);
         assert_indices_valid(&root, "root");
         assert_faces_outward(&root, "root");
+    }
+
+    #[test]
+    fn collar_never_stands_proud_of_its_branch() {
+        // The collar's narrow end must lie on or inside the tube it wraps,
+        // even on short, fast-tapering branches (baobab, dead tree) and with
+        // collars longer than the branch.
+        for (label, collar_length) in [("default", None), ("long collar", Some(6.0))] {
+            for preset in TreePreset::ALL {
+                let mut params = preset.params();
+                if let Some(c) = collar_length {
+                    params.mesh.collar_length = c;
+                }
+                let skeleton = generate_skeleton(&params);
+                for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary && n.length > 1e-4) {
+                    let collar = collar_mesh(node, node.base_radius * params.mesh.collar_length, 6);
+                    let end_ring = &collar.positions[collar.positions.len() - 7..];
+                    let axis: Vec<Vec3> = node.axis(BENT_AXIS_POINTS).into_iter().map(|(c, _)| c).collect();
+                    for &p in end_ring {
+                        let (dist, f) = axis
+                            .windows(2)
+                            .enumerate()
+                            .map(|(k, w)| {
+                                let ab = w[1] - w[0];
+                                let t = ((p - w[0]).dot(ab) / ab.length_squared().max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
+                                (p.distance(w[0] + ab * t), (k as f32 + t) / (axis.len() - 1) as f32)
+                            })
+                            .fold((f32::MAX, 0.0), |a, b| if b.0 < a.0 { b } else { a });
+                        let tube_radius = lerp(node.base_radius, node.tip_radius, f);
+                        assert!(
+                            dist <= tube_radius + 2e-3,
+                            "{label} {}: primary {} collar end {dist} from the axis, tube radius {tube_radius}",
+                            preset.name(),
+                            node.id
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Vertices on edges used by exactly one triangle (open boundaries), with
