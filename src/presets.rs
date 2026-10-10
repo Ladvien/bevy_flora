@@ -297,7 +297,7 @@ fn willow() -> TreeParams {
         },
         branches: BranchParams {
             start: 0.5,
-            end: 0.9,
+            end: 1.0,
             density: 4.0,
             length: 0.8,
             angle: 50.0,
@@ -1405,6 +1405,22 @@ mod tests {
             .collect();
         let hanging = tips.iter().filter(|&&y| y < -0.7).count();
         assert!(hanging * 10 >= tips.len() * 7, "{hanging} of {} branch tips hang", tips.len());
+    }
+
+    #[test]
+    fn willow_crown_reaches_the_top_of_the_trunk() {
+        // D-049: the limbs stopped at 90% of the trunk, so the crown sat low
+        // under a bare top.
+        let params = TreePreset::Willow.params();
+        let s = crate::skeleton::generate_skeleton(&params);
+        let top = params.trunk.height;
+        let highest = s
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::skeleton::NodeKind::Primary)
+            .map(|n| n.start.y)
+            .fold(f32::MIN, f32::max);
+        assert!(highest >= 0.93 * top, "highest limb leaves the trunk at {highest} m of {top} m");
     }
 
     #[test]
