@@ -31,8 +31,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
-    FloraPlugin, FoliagePlacement, LeafStyle, MeshData, NodeKind, ProceduralTree, TreeAge,
-    TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
+    CrownShape, FloraPlugin, FoliagePlacement, LeafOrientation, LeafStyle, MeshData, NodeKind,
+    ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
 
 const WINDOW: UVec2 = UVec2::new(1280, 960);
@@ -230,6 +230,100 @@ fn scenarios() -> Vec<Scenario> {
         add(name.to_string(), params, inf);
     }
 
+    // Leaf orientations and crown envelopes, each on the oak.
+    for orientation in [
+        LeafOrientation::RadialOutward,
+        LeafOrientation::FollowBranch,
+        LeafOrientation::RandomUpward,
+        LeafOrientation::HorizontalSpread,
+    ] {
+        let mut params = preset(TreePreset::Oak);
+        params.foliage.orientation = orientation;
+        add(format!("orient_{orientation:?}"), params, inf);
+    }
+    for shape in [
+        CrownShape::Cylindrical,
+        CrownShape::Conical,
+        CrownShape::Spherical,
+        CrownShape::Hemispherical,
+        CrownShape::TaperedCylindrical,
+        CrownShape::Flame,
+        CrownShape::InverseConical,
+        CrownShape::TendFlame,
+        CrownShape::Spreading,
+    ] {
+        let mut params = preset(TreePreset::Oak);
+        params.branches.crown_shape = shape;
+        params.branches.crown_influence = 1.0;
+        add(format!("crown_{shape:?}"), params, inf);
+    }
+
+    // Forced Y-splits on every other preset.
+    for p in TreePreset::ALL.into_iter().filter(|&p| p != TreePreset::Oak) {
+        let mut params = preset(p);
+        params.split.enabled = true;
+        params.split.probability = 1.0;
+        params.split.radius_threshold = 0.0;
+        add(format!("split_{}", p.name()), params, inf);
+    }
+
+    // Growth series at odd ages for drooping and forking presets.
+    for p in [TreePreset::Willow, TreePreset::DragonTree] {
+        for age in [1.0, 3.0, 5.0, 7.0, 9.0, inf] {
+            add(format!("grow_{}_{age}", p.name()), preset(p), age);
+        }
+    }
+
+    // Second set of extremes: shape, size, growth timing, floor.
+    let extremes2: &[(&str, f32, Edit)] = &[
+        ("extreme_notaper", inf, |p| p.trunk.taper = 1.0),
+        ("extreme_needletrunk", inf, |p| p.trunk.taper = 0.0),
+        ("extreme_flare", inf, |p| p.trunk.flare = 3.0),
+        ("extreme_roots12", inf, |p| {
+            p.trunk.root_flare_count = 12;
+            p.trunk.root_flare_spread = 1.5;
+            p.trunk.root_flare_height = 0.3;
+        }),
+        ("extreme_norecursion", inf, |p| p.branches.recursion = 0),
+        ("extreme_longbranches", inf, |p| p.branches.length = 1.5),
+        ("extreme_dense", inf, |p| p.branches.density = 8.0),
+        ("extreme_bigleaves", inf, |p| p.foliage.leaf_size = 1.2),
+        ("extreme_tiny", inf, |p| {
+            p.trunk.height = 0.5;
+            p.trunk.radius = 0.05;
+        }),
+        ("extreme_giant", inf, |p| {
+            p.trunk.height = 40.0;
+            p.trunk.radius = 3.0;
+        }),
+        ("extreme_floor2", inf, |p| {
+            p.branches.floor_level = 2.0;
+            p.branches.start = 0.1;
+        }),
+        ("extreme_lateleaves_6", 6.0, |p| p.growth.leaf_threshold = 1.0),
+        ("extreme_lagthick_6", 6.0, |p| p.growth.thickening_lag = 5.0),
+        ("extreme_fastgrow_2", 2.0, |p| {
+            p.growth.trunk_fraction = 0.1;
+            p.growth.branch_fraction = 0.1;
+        }),
+        ("extreme_smooth_split", inf, |p| {
+            p.mesh.smooth_iterations = 3;
+            p.split.enabled = true;
+            p.split.probability = 1.0;
+            p.split.radius_threshold = 0.0;
+        }),
+        ("extreme_droop_wobble", inf, |p| {
+            p.trunk.randomness = 0.8;
+            p.branches.gravity_strength = 1.5;
+            p.branches.stiffness = 0.0;
+        }),
+    ];
+    for (name, age, edit) in extremes2 {
+        let mut params = preset(TreePreset::Oak);
+        edit(&mut params);
+        add(name.to_string(), params, *age);
+    }
+
     list
 }
 
@@ -294,12 +388,15 @@ fn analyze(params: &TreeParams, age: f32, out: &TreeMeshes) -> Stats {
     if nodes == 1 && age.is_infinite() {
         flags.push("NO_BRANCHES".to_string());
     }
+    // The trunk starts at the ground and branches attached below a raised
+    // floor may hang to their base, so the mesh check is against the lower of
+    // the two (raised floors are covered by skeleton unit tests).
     if params.branches.floor_avoidance
         && out
             .trunk
             .positions
             .iter()
-            .any(|p| p.y < params.branches.floor_level - 0.01)
+            .any(|p| p.y < params.branches.floor_level.min(0.0) - 0.01)
     {
         flags.push("BELOW_FLOOR".to_string());
     }
