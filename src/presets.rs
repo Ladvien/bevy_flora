@@ -882,18 +882,18 @@ fn poplar() -> TreeParams {
             twist: 0.0,
         },
         branches: BranchParams {
-            start: 0.2,
+            start: 0.12,
             end: 0.95,
-            density: 1.6,
-            length: 0.3,
-            angle: 15.0,
+            density: 2.5,
+            length: 0.35,
+            angle: 25.0,
             radius_ratio: 0.2,
             taper: 0.75,
             phyllotaxis_angle: 137.5,
             randomness: 0.05,
-            up_attraction: 0.92,
+            up_attraction: 0.6,
             recursion: 1,
-            sub_branch_count: 2,
+            sub_branch_count: 4,
             sub_branch_scale: 0.4,
             length_variation: 0.1,
             sub_branch_position_bias: -0.1,
@@ -927,7 +927,7 @@ fn poplar() -> TreeParams {
             style: LeafStyle::CrossedPlanes,
             placement: FoliagePlacement::TerminalBranches,
             orientation: LeafOrientation::RandomUpward,
-            density: 3.5,
+            density: 10.0,
             cluster_size: 4,
             leaf_size: 0.29,
             leaf_size_variation: 0.12,
@@ -1400,11 +1400,26 @@ mod tests {
     }
 
     #[test]
-    fn poplar_columnar() {
-        let poplar = TreePreset::Poplar.params();
-        assert!(poplar.branches.up_attraction > 0.9);
-        assert!(poplar.branches.angle < 20.0);
-        assert!(poplar.branches.apical_dominance > 0.9);
+    fn poplar_is_a_leafy_column() {
+        // D-048: short branches hugging the trunk left a 14 m pole with 71 leaves.
+        let params = TreePreset::Poplar.params();
+        let tree = crate::pipeline::build_tree(&params, f32::INFINITY);
+        let leaves = crate::foliage::collect_leaf_points(
+            &tree.skeleton,
+            &params.foliage,
+            &params.growth,
+            &params.trunk,
+            params.seed,
+        )
+        .len();
+        assert!(leaves >= 400, "{leaves} leaves");
+        let (min, max) = tree
+            .foliage
+            .positions
+            .iter()
+            .fold((bevy::math::Vec3::MAX, bevy::math::Vec3::MIN), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        let width = (max.x - min.x).max(max.z - min.z);
+        assert!(width < 0.3 * max.y, "crown {width} m wide on a {} m tree", max.y);
     }
 
     #[test]
