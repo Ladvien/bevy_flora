@@ -448,6 +448,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn drooping_willow_twigs_start_on_their_parents_wood() {
+        // D-030: willow twigs leave along the parent's bent tangent, and the
+        // forked willow has halves hanging from stubs; every child must still
+        // start on its parent's bent axis, so nothing floats beside the wood.
+        let willow = TreePreset::Willow.params();
+        let mut forked = willow.clone();
+        forked.split.enabled = true;
+        forked.split.probability = 1.0;
+        forked.split.radius_threshold = 0.0;
+        for params in [willow, forked] {
+            let skeleton = crate::pipeline::build_tree(&params, f32::INFINITY).skeleton;
+            let mut checked = 0;
+            for (i, node) in skeleton.nodes.iter().enumerate().skip(1) {
+                let axis = node.axis(node.axis_points());
+                for c in skeleton.children(i) {
+                    let on_axis = axis
+                        .windows(2)
+                        .map(|w| segment_distance(skeleton.nodes[c].start, w[0].0, w[1].0))
+                        .fold(f32::MAX, f32::min);
+                    assert!(on_axis < 1e-4, "child {c} of {i} is {on_axis} off the bent axis");
+                    checked += 1;
+                }
+            }
+            assert!(checked > 100, "only {checked} parent-child pairs");
+        }
+    }
+
     fn segment_distance(p: Vec3, a: Vec3, b: Vec3) -> f32 {
         let ab = b - a;
         let t = ((p - a).dot(ab) / ab.length_squared().max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
