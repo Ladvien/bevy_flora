@@ -5,6 +5,20 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.2.1] - 2026-10-10
+
+Appearance only; no API changes.
+
+### Changed
+
+- `FoliageParams::default().color_variation` is now 0.3 (was 0.15), so the per-leaf brightness
+  differences added in 0.2.0 are visible on the dark leaf greens. Set it back to 0.15 to keep the
+  0.2.0 look.
+- `leaf_size` is 1.3 times larger on the nine presets that use leaf-shaped cards, to make up for
+  cards covering about half the area of the old squares: oak 0.33, willow 0.26, birch 0.26,
+  palm 1.05, bonsai 0.33, maple 0.39, poplar 0.29, dragon tree 0.46 and Japanese maple 0.23.
+  Needle (pine, spruce, redwood) and octahedron (cypress, baobab) presets are unchanged.
+
 ## [0.2.0] - 2026-10-10
 
 A leaf look pass, done in the mesh with no custom shader. The API gains public fields and
@@ -77,6 +91,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.2.1]: https://github.com/Ladvien/bevy_flora/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Ladvien/bevy_flora/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Ladvien/bevy_flora/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ladvien/bevy_flora/releases/tag/v0.1.0
