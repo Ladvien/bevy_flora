@@ -876,9 +876,9 @@ fn poplar() -> TreeParams {
             root_flare_spread: 0.0,
             root_flare_height: 0.15,
             termination: TrunkTermination::LeaderBranch,
-            leader_length: 0.2,
+            leader_length: 0.12,
             leader_taper: 0.05,
-            leader_has_branches: false,
+            leader_has_branches: true,
             twist: 0.0,
         },
         branches: BranchParams {
@@ -1401,25 +1401,28 @@ mod tests {
 
     #[test]
     fn poplar_is_a_leafy_column() {
-        // D-048: short branches hugging the trunk left a 14 m pole with 71 leaves.
+        // D-048: short branches hugging the trunk left a 14 m pole with 71 leaves, and a
+        // 2.4 m bare leader stuck out above the crown like an antenna.
         let params = TreePreset::Poplar.params();
         let tree = crate::pipeline::build_tree(&params, f32::INFINITY);
-        let leaves = crate::foliage::collect_leaf_points(
+        let points = crate::foliage::collect_leaf_points(
             &tree.skeleton,
             &params.foliage,
             &params.growth,
             &params.trunk,
             params.seed,
-        )
-        .len();
-        assert!(leaves >= 400, "{leaves} leaves");
+        );
+        assert!(points.len() >= 400, "{} leaves", points.len());
+        let tip = tree.trunk.positions.iter().fold(f32::MIN, |hi, p| hi.max(p.y));
+        let crowned = points.iter().filter(|p| p.position.y > 0.85 * tip).count();
+        assert!(crowned >= 25, "only {crowned} leaves in the top 15% of the tree");
         let (min, max) = tree
             .foliage
             .positions
             .iter()
             .fold((bevy::math::Vec3::MAX, bevy::math::Vec3::MIN), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
         let width = (max.x - min.x).max(max.z - min.z);
-        assert!(width < 0.3 * max.y, "crown {width} m wide on a {} m tree", max.y);
+        assert!(width < 0.3 * tip, "crown {width} m wide on a {tip} m tree");
     }
 
     #[test]
