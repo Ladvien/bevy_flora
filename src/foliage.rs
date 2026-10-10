@@ -91,6 +91,7 @@ pub fn leaf_points_for_node(
         height_ratio: node.height_ratio,
         trunk,
         seed,
+        leaf_scale,
     };
 
     match foliage.placement {
@@ -124,6 +125,8 @@ struct NodeCtx<'a> {
     direction: Vec3,
     length: f32,
     height_ratio: f32,
+    /// Growth scale of this node's leaves (0..1); tip clusters shrink with it.
+    leaf_scale: f32,
 }
 
 fn add_terminal_leaves(
@@ -182,8 +185,9 @@ fn add_cluster_leaves(
     let height_mod = height_modifier(node.height_ratio, foliage);
     let count = ((foliage.cluster_size as f32 * height_mod) as i32).max(1);
     // Leaves fill a ball within 3/4 of a leaf of the tip, so each one
-    // overlaps the twig end instead of floating on a shell around it.
-    let cluster_radius = foliage.leaf_size * 0.75;
+    // overlaps the twig end instead of floating on a shell around it. The
+    // ball shrinks with the leaves while the node is young.
+    let cluster_radius = foliage.leaf_size * 0.75 * node.leaf_scale;
     for _ in 0..count {
         let theta = rng.range(0.0, TAU);
         let phi = rng.range(0.0, PI);
@@ -548,6 +552,35 @@ mod tests {
                 for p in &points {
                     let depth = trunk_depth(&params.trunk, params.seed, p.position);
                     assert!(depth <= 0.0, "{} {placement:?}: leaf {depth} m inside the trunk", preset.name());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn young_tip_clusters_stay_on_their_tips() {
+        // D-037: the cluster ball must shrink with its leaves while the tree
+        // is young, or a 1 cm leaf floats tens of cm off its twig.
+        for preset in [TreePreset::DragonTree, TreePreset::Oak, TreePreset::Cypress] {
+            let mut params = preset.params();
+            params.foliage.placement = FoliagePlacement::TipClusters;
+            let mature = generate_skeleton(&params);
+            for age in [4.0, 6.0, 9.0, 12.0] {
+                let skeleton = mature.aged(age, &params.growth);
+                let tips: Vec<Vec3> = (0..skeleton.nodes.len())
+                    .filter(|&i| skeleton.nodes[i].kind != NodeKind::Trunk && skeleton.is_terminal(i))
+                    .map(|i| skeleton.end(i))
+                    .collect();
+                let points = collect_leaf_points(&skeleton, &params.foliage, &params.growth, &params.trunk, params.seed);
+                let max_ratio = 0.75 / (1.0 - params.foliage.leaf_size_variation) + 1e-3;
+                for p in &points {
+                    let d = tips.iter().map(|t| t.distance(p.position)).fold(f32::MAX, f32::min);
+                    assert!(
+                        d <= p.size * max_ratio + 1e-5,
+                        "{} age {age}: leaf of size {} sits {d} m from the nearest tip",
+                        preset.name(),
+                        p.size
+                    );
                 }
             }
         }
