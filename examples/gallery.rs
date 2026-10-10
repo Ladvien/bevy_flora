@@ -274,6 +274,20 @@ fn scenarios() -> Vec<Scenario> {
         add(format!("smooth_{}", p.name()), params, inf);
     }
 
+    // Smoothing on young trees, where thin new wood is most likely to kink.
+    for p in TreePreset::ALL {
+        let mut params = preset(p);
+        params.mesh.smooth_iterations = 2;
+        add(format!("smoothyoung_{}_4", p.name()), params, 4.0);
+    }
+
+    // Per-node pipe radii on every other preset.
+    for p in TreePreset::ALL.into_iter().filter(|&p| p != TreePreset::Oak) {
+        let mut params = preset(p);
+        params.mesh.pipe_radius_enabled = true;
+        add(format!("pipe_{}", p.name()), params, inf);
+    }
+
     // Growth series at odd ages for drooping and forking presets.
     for p in [TreePreset::Willow, TreePreset::DragonTree] {
         for age in [1.0, 3.0, 5.0, 7.0, 9.0, inf] {
@@ -295,6 +309,12 @@ fn scenarios() -> Vec<Scenario> {
         ("extreme_longbranches", inf, |p| p.branches.length = 1.5),
         ("extreme_dense", inf, |p| p.branches.density = 8.0),
         ("extreme_bigleaves", inf, |p| p.foliage.leaf_size = 1.2),
+        // Old flat per-card shading and colour, for comparing against the default look.
+        ("extreme_flatleaves", inf, |p| {
+            p.foliage.normal_bend = 0.0;
+            p.foliage.color_variation = 0.0;
+        }),
+        ("extreme_leafvary", inf, |p| p.foliage.color_variation = 0.5),
         ("extreme_tiny", inf, |p| {
             p.trunk.height = 0.5;
             p.trunk.radius = 0.05;
@@ -407,7 +427,9 @@ fn analyze(params: &TreeParams, age: f32, out: &TreeMeshes) -> Stats {
     {
         flags.push("BELOW_FLOOR".to_string());
     }
-    let flipped = inside_out(&out.trunk) + inside_out(&out.foliage);
+    // Foliage normals are bent toward the crown and deliberately disagree with
+    // face winding; winding is covered by `leaf_meshes_face_outward`.
+    let flipped = inside_out(&out.trunk);
     if flipped > 0 {
         flags.push(format!("INSIDE_OUT:{flipped}"));
     }

@@ -1,6 +1,6 @@
 //! Leaf placement on the (aged) skeleton and leaf geometry.
 
-use bevy::math::{Vec2, Vec3};
+use bevy::math::{Vec2, Vec3, Vec4};
 use std::f32::consts::{PI, TAU};
 
 use crate::growth::GrowthParams;
@@ -9,6 +9,10 @@ use crate::params::{FoliageParams, FoliagePlacement, LeafOrientation, LeafStyle,
 use crate::rng::SeededRng;
 use crate::skeleton::{Node, NodeKind, Skeleton, trunk_depth};
 
+/// Separate random stream for leaf tints, so adding them does not change any
+/// existing draw (leaf positions, sizes and rotations stay as in 0.1).
+const LEAF_TINT_SALT: i32 = 0x7135_1EAF;
+
 /// One leaf: where it sits and how it is oriented.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeafPoint {
@@ -16,10 +20,12 @@ pub struct LeafPoint {
     pub position: Vec3,
     /// Primary orientation.
     pub direction: Vec3,
-    /// Leaf edge length in metres.
+    /// Leaf size in metres (base-to-tip length for leaf-shaped cards).
     pub size: f32,
     /// Rotation around `direction`, radians.
     pub rotation: f32,
+    /// Per-leaf colour draw in -1..1, scaled by [`FoliageParams::color_variation`].
+    pub tint: f32,
 }
 
 /// Leaf points for every node of `skeleton`.
@@ -108,6 +114,13 @@ pub fn leaf_points_for_node(
         }
     }
 
+    // Tints come from their own stream, drawn in leaf order, so a node's
+    // leaves keep their tints as the tree ages.
+    let mut tint_rng = SeededRng::from_parts(seed ^ LEAF_TINT_SALT, node.id);
+    for p in &mut points[first..] {
+        p.tint = tint_rng.range(-1.0, 1.0);
+    }
+
     if leaf_scale < 1.0 {
         for p in &mut points[first..] {
             p.size *= leaf_scale;
@@ -148,6 +161,7 @@ fn add_terminal_leaves(
             direction,
             size,
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
+            tint: 0.0,
         });
     }
 }
@@ -172,6 +186,7 @@ fn add_distributed_leaves(
             direction,
             size,
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
+            tint: 0.0,
         });
     }
 }
@@ -209,6 +224,7 @@ fn add_cluster_leaves(
             direction: offset.normalize_or_zero(),
             size,
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
+            tint: 0.0,
         });
     }
 }
@@ -246,34 +262,57 @@ fn leaf_direction(node: &NodeCtx, foliage: &FoliageParams, rng: &mut SeededRng) 
     Vec3::new(base_dir.x, base_dir.y - foliage.droop, base_dir.z).normalize_or_zero()
 }
 
-/// Geometry for all `points` in the given `style`.
-pub fn foliage_mesh(points: &[LeafPoint], style: LeafStyle) -> MeshData {
+/// Geometry for all `points` in `foliage.style`.
+///
+/// Each leaf gets a vertex colour (its tint scaled by
+/// [`FoliageParams::color_variation`]), and every normal is bent toward
+/// pointing out of the crown by [`FoliageParams::normal_bend`].
+pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
     let mut mesh = MeshData::default();
+    if points.is_empty() {
+        return mesh;
+    }
+    let variation = foliage.color_variation.clamp(0.0, 0.5);
     for point in points {
-        match style {
+        match foliage.style {
             LeafStyle::CrossedPlanes => crossed_planes(&mut mesh, point),
             LeafStyle::SingleQuad => single_quad(&mut mesh, point),
             LeafStyle::ClusterSphere => cluster_sphere(&mut mesh, point),
             LeafStyle::StarBurst => star_burst(&mut mesh, point),
             LeafStyle::NeedleCluster => needle_cluster(&mut mesh, point),
         }
+        let factor = 1.0 + point.tint * variation;
+        mesh.colors
+            .resize(mesh.positions.len(), Vec4::new(factor, factor, factor, 1.0));
+    }
+
+    let bend = foliage.normal_bend.clamp(0.0, 1.0);
+    if bend > 0.0 {
+        let center = points.iter().map(|p| p.position).sum::<Vec3>() / points.len() as f32;
+        for (normal, &position) in mesh.normals.iter_mut().zip(&mesh.positions) {
+            let out = (position - center).normalize_or(Vec3::Y);
+            *normal = normal.lerp(out, bend).normalize_or(out);
+        }
     }
     mesh
 }
 
-/// Two quads at 90°.
+/// Two leaf cards at 90° sharing `up`. Their bases meet at the leaf point and
+/// the tips reach one `size` along `up`, so the leaf grows out of its stem
+/// instead of being threaded on it.
 fn crossed_planes(mesh: &mut MeshData, point: &LeafPoint) {
     let half = point.size * 0.5;
     let (right, up, forward) = build_basis(point.direction, point.rotation);
-    add_double_sided_quad(mesh, point.position, right * half, up * half);
-    add_double_sided_quad(mesh, point.position, forward * half, up * half);
+    let center = point.position + up * half;
+    add_double_sided_leaf(mesh, center, right * half, up * half);
+    add_double_sided_leaf(mesh, center, forward * half, up * half);
 }
 
-/// One quad (billboard shader material).
+/// One leaf card, base at the leaf point and tip one `size` along `up`.
 fn single_quad(mesh: &mut MeshData, point: &LeafPoint) {
     let half = point.size * 0.5;
     let (right, up, _) = build_basis(point.direction, point.rotation);
-    add_double_sided_quad(mesh, point.position, right * half, up * half);
+    add_double_sided_leaf(mesh, point.position + up * half, right * half, up * half);
 }
 
 /// Octahedron.
@@ -304,7 +343,7 @@ fn star_burst(mesh: &mut MeshData, point: &LeafPoint) {
     for i in 0..3 {
         let angle = (i as f32 / 3.0) * TAU + point.rotation;
         let right = Vec3::new(angle.cos(), 0.0, angle.sin());
-        add_double_sided_quad(mesh, point.position, right * half, up * half);
+        add_double_sided_leaf(mesh, point.position, right * half, up * half);
     }
 }
 
@@ -366,6 +405,48 @@ fn add_double_sided_quad(mesh: &mut MeshData, center: Vec3, half_right: Vec3, ha
         .extend_from_slice(&[back, back + 2, back + 1, back, back + 3, back + 2]);
 }
 
+/// Pointed oval, base to tip, about half the card's area. Units are
+/// half-extents: x along `half_right`, y along `half_up`, base at y = -1, tip
+/// at y = 1. Counter-clockwise seen from the front (`half_right × half_up`).
+const LEAF_OUTLINE: [Vec2; 8] = [
+    Vec2::new(0.0, -1.0),
+    Vec2::new(0.55, -0.6),
+    Vec2::new(0.8, -0.05),
+    Vec2::new(0.6, 0.5),
+    Vec2::new(0.0, 1.0),
+    Vec2::new(-0.6, 0.5),
+    Vec2::new(-0.8, -0.05),
+    Vec2::new(-0.55, -0.6),
+];
+
+/// Leaf-shaped card spanned by `half_right`/`half_up` around `center`: a fan
+/// over [`LEAF_OUTLINE`], emitted twice with opposite windings; each side's
+/// normal is derived from its winding.
+fn add_double_sided_leaf(mesh: &mut MeshData, center: Vec3, half_right: Vec3, half_up: Vec3) {
+    let normal = half_right.cross(half_up).normalize_or_zero();
+    let n = LEAF_OUTLINE.len() as u32;
+    for (side_normal, front) in [(normal, true), (-normal, false)] {
+        let base = mesh.positions.len() as u32;
+        mesh.positions.push(center);
+        mesh.uvs.push(Vec2::splat(0.5));
+        for p in LEAF_OUTLINE {
+            mesh.positions.push(center + half_right * p.x + half_up * p.y);
+            mesh.uvs.push((p + Vec2::ONE) * 0.5);
+        }
+        mesh.normals
+            .extend(std::iter::repeat_n(side_normal, n as usize + 1));
+        for i in 0..n {
+            let a = base + 1 + i;
+            let b = base + 1 + (i + 1) % n;
+            if front {
+                mesh.indices.extend_from_slice(&[base, a, b]);
+            } else {
+                mesh.indices.extend_from_slice(&[base, b, a]);
+            }
+        }
+    }
+}
+
 /// Triangle wound so its face points away from `center`.
 fn add_triangle_outward(mesh: &mut MeshData, center: Vec3, a: Vec3, b: Vec3, c: Vec3) {
     let geometric = (b - a).cross(c - a);
@@ -387,6 +468,7 @@ fn add_triangle_outward(mesh: &mut MeshData, center: Vec3, a: Vec3, b: Vec3, c: 
 mod tests {
     use super::*;
     use crate::mesh::rings::tests::{assert_faces_outward, assert_indices_valid};
+    use crate::params::TreeParams;
     use crate::presets::TreePreset;
     use crate::skeleton::generate_skeleton;
 
@@ -396,6 +478,17 @@ mod tests {
             direction: Vec3::Y,
             size: 1.0,
             rotation: 0.0,
+            tint: 0.0,
+        }
+    }
+
+    /// Foliage settings with flat per-card normals and uniform colour.
+    fn flat(style: LeafStyle) -> FoliageParams {
+        FoliageParams {
+            style,
+            normal_bend: 0.0,
+            color_variation: 0.0,
+            ..FoliageParams::default()
         }
     }
 
@@ -414,21 +507,23 @@ mod tests {
     #[test]
     fn leaf_vertex_counts() {
         let p = point();
-        let count = |style| foliage_mesh(std::slice::from_ref(&p), style).positions.len();
-        assert_eq!(count(LeafStyle::CrossedPlanes), 16);
-        assert_eq!(count(LeafStyle::SingleQuad), 8);
+        let count = |style| foliage_mesh(std::slice::from_ref(&p), &flat(style)).positions.len();
+        assert_eq!(count(LeafStyle::CrossedPlanes), 36);
+        assert_eq!(count(LeafStyle::SingleQuad), 18);
         assert_eq!(count(LeafStyle::ClusterSphere), 24);
-        assert_eq!(count(LeafStyle::StarBurst), 24);
+        assert_eq!(count(LeafStyle::StarBurst), 54);
         assert_eq!(count(LeafStyle::NeedleCluster), 48);
     }
 
     #[test]
     fn leaf_meshes_face_outward() {
+        // Flat normals: bent normals deliberately disagree with the winding.
         let p = LeafPoint {
             position: Vec3::new(1.0, 2.0, -0.5),
             direction: Vec3::new(0.4, -0.3, 0.7).normalize(),
             size: 0.8,
             rotation: 1.1,
+            tint: 0.0,
         };
         for style in [
             LeafStyle::CrossedPlanes,
@@ -437,10 +532,98 @@ mod tests {
             LeafStyle::StarBurst,
             LeafStyle::NeedleCluster,
         ] {
-            let mesh = foliage_mesh(std::slice::from_ref(&p), style);
+            let mesh = foliage_mesh(std::slice::from_ref(&p), &flat(style));
             assert_indices_valid(&mesh, &format!("{style:?}"));
             assert_faces_outward(&mesh, &format!("{style:?}"));
         }
+    }
+
+    #[test]
+    fn leaf_cards_grow_out_of_their_attachment_point() {
+        // D-045: cards centred on the leaf point were threaded on their twig
+        // and read as green rings around thick limbs.
+        let p = LeafPoint {
+            position: Vec3::new(1.0, 2.0, -0.5),
+            direction: Vec3::new(0.4, -0.3, 0.7).normalize(),
+            size: 0.8,
+            rotation: 1.1,
+            tint: 0.0,
+        };
+        let (_, up, _) = build_basis(p.direction, p.rotation);
+        for style in [LeafStyle::CrossedPlanes, LeafStyle::SingleQuad] {
+            let mesh = foliage_mesh(std::slice::from_ref(&p), &flat(style));
+            let (min, max) = mesh
+                .positions
+                .iter()
+                .map(|v| (*v - p.position).dot(up))
+                .fold((f32::MAX, f32::MIN), |(lo, hi), a| (lo.min(a), hi.max(a)));
+            assert!(min > -1e-5, "{style:?}: card reaches {min} m behind the leaf point");
+            assert!((max - p.size).abs() < 1e-5, "{style:?}: tip {max} m out, leaf size {}", p.size);
+        }
+    }
+
+    fn oak_leaf_points(placement: FoliagePlacement, age: f32) -> (TreeParams, Vec<LeafPoint>) {
+        let mut params = TreePreset::Oak.params();
+        params.foliage.placement = placement;
+        let skeleton = generate_skeleton(&params).aged(age, &params.growth);
+        let points = collect_leaf_points(&skeleton, &params.foliage, &params.growth, &params.trunk, params.seed);
+        (params, points)
+    }
+
+    #[test]
+    fn bent_normals_point_out_of_the_crown() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        assert!(!points.is_empty());
+        let center = points.iter().map(|p| p.position).sum::<Vec3>() / points.len() as f32;
+        for normal_bend in [params.foliage.normal_bend, 1.0] {
+            let foliage = FoliageParams { normal_bend, ..params.foliage.clone() };
+            let mesh = foliage_mesh(&points, &foliage);
+            assert_indices_valid(&mesh, "oak");
+            for (position, normal) in mesh.positions.iter().zip(&mesh.normals) {
+                assert!((normal.length() - 1.0).abs() < 1e-4, "bend {normal_bend}: non-unit normal {normal:?}");
+                assert!(
+                    normal.dot(*position - center) > 0.0,
+                    "bend {normal_bend}: normal {normal:?} at {position:?} points into the crown"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leaf_colors_vary_per_leaf_within_bounds() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        assert_eq!(params.foliage.style, LeafStyle::CrossedPlanes);
+        let leaf_vertices = 36;
+
+        let varied = FoliageParams { color_variation: 0.2, ..params.foliage.clone() };
+        let mesh = foliage_mesh(&points, &varied);
+        assert_eq!(mesh.colors.len(), mesh.positions.len());
+        assert_eq!(mesh.colors.len(), points.len() * leaf_vertices);
+        let mut distinct = std::collections::BTreeSet::new();
+        for leaf in mesh.colors.chunks(leaf_vertices) {
+            assert!(leaf.iter().all(|c| *c == leaf[0]), "one leaf, several colours");
+            let c = leaf[0];
+            assert!((0.8 - 1e-5..=1.2 + 1e-5).contains(&c.x), "factor {} out of bounds", c.x);
+            assert!(c.x == c.y && c.y == c.z && c.w == 1.0, "tint must be grey and opaque: {c:?}");
+            distinct.insert(c.x.to_bits());
+        }
+        assert!(distinct.len() > 1, "all leaves share one colour");
+
+        let plain = FoliageParams { color_variation: 0.0, ..params.foliage.clone() };
+        let mesh = foliage_mesh(&points, &plain);
+        assert!(mesh.colors.iter().all(|c| *c == Vec4::ONE));
+    }
+
+    #[test]
+    fn leaf_tints_never_reroll_as_the_tree_ages() {
+        let tints = |age: f32| -> std::collections::BTreeSet<u32> {
+            let (_, points) = oak_leaf_points(FoliagePlacement::TerminalBranches, age);
+            points.iter().map(|p| p.tint.to_bits()).collect()
+        };
+        let young = tints(10.0);
+        let mature = tints(f32::INFINITY);
+        assert!(young.len() > 1, "no tints drawn at age 10");
+        assert!(young.is_subset(&mature), "a leaf's tint changed while the tree aged");
     }
 
     #[test]

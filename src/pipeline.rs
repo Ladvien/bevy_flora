@@ -47,7 +47,7 @@ pub fn build_tree(params: &TreeParams, age: f32) -> TreeMeshes {
         if points.is_empty() {
             MeshData::default()
         } else {
-            foliage_mesh(&points, params.foliage.style)
+            foliage_mesh(&points, &params.foliage)
         }
     } else {
         MeshData::default()

@@ -5,6 +5,38 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.2.0] - 2026-10-10
+
+A leaf look pass, done in the mesh with no custom shader. The API gains public fields and
+`foliage_mesh` changes signature, hence the minor bump.
+
+### Added
+
+- Leaf-shaped cards: `CrossedPlanes`, `SingleQuad` and `StarBurst` now emit a pointed oval instead
+  of a square, with `CrossedPlanes` and `SingleQuad` seating the card's base on the leaf point so
+  leaves grow out of their twigs.
+- Crown-bent normals: `FoliageParams::normal_bend` (default 0.8; 0 = the old flat cards) bends
+  every leaf normal toward pointing out of the crown, so crowns shade as a soft volume.
+- Per-leaf tint: `FoliageParams::color_variation` (default 0.15, 0-0.5) scales each leaf's colour
+  by a stable per-leaf factor, stored as a vertex colour. `LeafPoint::tint` holds the draw; it
+  comes from its own random stream, so leaf positions, sizes and rotations are unchanged and
+  nothing re-rolls as the tree ages.
+- `MeshData::colors` (linear RGBA vertex colours, empty for none). `MeshData::extend` keeps it
+  aligned with the positions and `into_bevy_mesh` adds `Mesh::ATTRIBUTE_COLOR` when it is set.
+- Gallery scenarios `extreme_flatleaves` (the old flat look), `extreme_leafvary`,
+  `smoothyoung_<preset>_4` and `pipe_<preset>`; the gallery now renders 289 scenarios.
+
+### Changed
+
+- `foliage_mesh(points, &FoliageParams)` replaces `foliage_mesh(points, style)`, because it now
+  needs the normal bend and the colour variation as well as the style.
+- `LeafPoint` has a new `tint` field, and `FoliageParams` has `normal_bend` and
+  `color_variation`; build them with `..Default::default()` or `..FoliageParams::default()`.
+- A leaf-shaped card covers about half the area of the square it replaces, so crowns are airier
+  at the same `leaf_size`. `FoliageParams::leaf_size` is now the leaf's length from base to tip.
+- The gallery's `INSIDE_OUT` flag counts only the wood, because bent foliage normals deliberately
+  disagree with face winding; foliage winding is covered by a unit test.
+
 ## [0.1.1] - 2026-10-10
 
 Documentation only; no API or behaviour changes.
@@ -45,5 +77,6 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.2.0]: https://github.com/Ladvien/bevy_flora/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Ladvien/bevy_flora/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ladvien/bevy_flora/releases/tag/v0.1.0

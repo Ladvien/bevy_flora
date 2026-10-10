@@ -141,6 +141,10 @@ pub(crate) mod tests {
         assert_eq!(mesh.indices.len() % 3, 0, "{what}: index count not a multiple of 3");
         assert_eq!(mesh.normals.len(), mesh.positions.len(), "{what}: normals");
         assert_eq!(mesh.uvs.len(), mesh.positions.len(), "{what}: uvs");
+        assert!(
+            mesh.colors.is_empty() || mesh.colors.len() == mesh.positions.len(),
+            "{what}: colors"
+        );
         let max = mesh.indices.iter().copied().max().unwrap_or(0) as usize;
         assert!(
             mesh.indices.is_empty() || max < mesh.positions.len(),

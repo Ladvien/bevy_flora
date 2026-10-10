@@ -27,14 +27,14 @@ pub enum TrunkTermination {
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LeafStyle {
-    /// Two quads at 90° (classic pixel-art leaf).
+    /// Two leaf-shaped cards at 90° (classic pixel-art leaf).
     #[default]
     CrossedPlanes,
-    /// One quad (intended for a billboard shader).
+    /// One leaf-shaped card.
     SingleQuad,
     /// Octahedron approximation of a leaf cluster.
     ClusterSphere,
-    /// Three quads at 60°.
+    /// Three leaf-shaped cards at 60°.
     StarBurst,
     /// Six thin radiating quads (pine needles).
     NeedleCluster,
@@ -318,7 +318,7 @@ pub struct FoliageParams {
     pub density: f32,
     /// Leaves per cluster for [`FoliagePlacement::TipClusters`].
     pub cluster_size: u32,
-    /// Leaf edge length in metres.
+    /// Leaf length (base to tip) in metres; leaf cards are leaf-shaped, about half the area of a square of that size.
     pub leaf_size: f32,
     /// Random size variation (0–0.5).
     pub leaf_size_variation: f32,
@@ -332,6 +332,11 @@ pub struct FoliageParams {
     pub rotation_variation: f32,
     /// Modulate density by crown height.
     pub use_crown_density: bool,
+    /// How far leaf normals bend from each card's own facing toward pointing out of the crown
+    /// (0 = flat cards, 1 = a soft round crown); baked into the mesh.
+    pub normal_bend: f32,
+    /// Per-leaf brightness variation (0–0.5): each leaf's colour is scaled by a factor in 1 ± this.
+    pub color_variation: f32,
     /// Leaf base color.
     pub color: Color,
 }
@@ -352,6 +357,8 @@ impl Default for FoliageParams {
             droop: 0.2,
             rotation_variation: 0.5,
             use_crown_density: true,
+            normal_bend: 0.8,
+            color_variation: 0.15,
             color: Color::srgb(0.133, 0.545, 0.133),
         }
     }

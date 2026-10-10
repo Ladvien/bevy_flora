@@ -30,6 +30,27 @@ and scale to full size. Each node draws leaf randomness from its own RNG stream
 (`TerminalBranches`, `TipClusters`) pick the same branches at every age and a
 leaf never disappears as the tree grows.
 
+## Leaf look (no shader)
+
+Everything that makes leaves look good is baked into the mesh, so the stock
+`StandardMaterial` is enough and nothing runs per fragment beyond normal PBR.
+
+- **Leaf-shaped cards.** `CrossedPlanes`, `SingleQuad` and `StarBurst` emit an
+  eight-point pointed oval (`LEAF_OUTLINE`, about half the area of the old square
+  card) as a triangle fan, twice with opposite winding. Cutting the silhouette into
+  the geometry keeps hidden-surface removal intact, which an alpha-masked texture
+  (`discard`) would not on tile-based GPUs. `CrossedPlanes` and `SingleQuad` seat the
+  card's base on the leaf point and reach one `size` out along the basis `up`, so a
+  leaf grows out of its twig instead of being threaded on it.
+- **Crown-bent normals.** `foliage_mesh` lerps every normal toward the direction out
+  of the crown centre (mean leaf position) by `FoliageParams::normal_bend`, so the
+  crown shades as one soft volume instead of per-card light and dark. Bent normals
+  intentionally disagree with face winding; winding is checked at `normal_bend = 0`.
+- **Per-leaf tint.** `LeafPoint::tint` is drawn from its own RNG stream
+  (`seed ^ LEAF_TINT_SALT`), so it never moves another draw or re-rolls with age,
+  and `foliage_mesh` writes it as a vertex colour (`MeshData::colors`,
+  `Mesh::ATTRIBUTE_COLOR`) scaled by `FoliageParams::color_variation`.
+
 ## Mesh conventions
 
 Front faces are counter-clockwise; the helpers in `mesh/rings.rs` own the winding
