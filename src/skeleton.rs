@@ -187,7 +187,10 @@ impl Node {
     /// Keep the wood at or above `floor`: relax the gravity bend just enough
     /// (the lowest point only drops as the bend grows), and if the straight
     /// branch still points below the floor, shorten it to end on the floor.
+    /// A branch whose base is already below the floor only has to stay above
+    /// its base, so it keeps the droop it can.
     fn keep_above(&mut self, floor: f32) {
+        let floor = floor.min(self.start.y - self.base_radius);
         if self.lowest() >= floor {
             return;
         }
@@ -833,6 +836,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn branches_below_a_raised_floor_keep_their_droop() {
+        // D-038: a branch that starts below the floor cannot satisfy it, so
+        // it must not drop below its own base; it must not lose its whole
+        // gravity bend either.
+        let mut params = TreePreset::Oak.params();
+        params.branches.floor_level = 2.0;
+        params.branches.start = 0.1;
+        let s = generate_skeleton(&params);
+        let mut below = 0;
+        for n in s.nodes.iter().skip(1).filter(|n| n.start.y < params.branches.floor_level) {
+            below += 1;
+            let floor = n.start.y - n.base_radius;
+            assert!(n.lowest() >= floor - 1e-4, "{:?} {} dips below its own base", n.kind, n.id);
+            if n.direction.y > 0.0 {
+                assert!(n.bend > 0.0, "{:?} {} lost its gravity bend", n.kind, n.id);
+            }
+        }
+        assert!(below > 0, "no branch starts below the raised floor");
     }
 
     #[test]
