@@ -69,3 +69,33 @@ impl MeshData {
         mesh
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn triangle(color: Option<Vec4>) -> MeshData {
+        MeshData {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            normals: vec![Vec3::Z; 3],
+            uvs: vec![Vec2::ZERO; 3],
+            colors: color.map_or_else(Vec::new, |c| vec![c; 3]),
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    #[test]
+    fn extend_keeps_colors_aligned_with_positions() {
+        let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        for (first, second) in [(None, Some(red)), (Some(red), None), (Some(red), Some(red)), (None, None)] {
+            let mut mesh = triangle(first);
+            mesh.extend(&triangle(second));
+            let expected = if first.is_some() || second.is_some() { 6 } else { 0 };
+            assert_eq!(mesh.colors.len(), expected, "{first:?} + {second:?}");
+            if expected > 0 {
+                assert_eq!(mesh.colors[0], first.unwrap_or(Vec4::ONE));
+                assert_eq!(mesh.colors[3], second.unwrap_or(Vec4::ONE));
+            }
+        }
+    }
+}
