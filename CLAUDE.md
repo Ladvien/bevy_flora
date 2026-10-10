@@ -24,6 +24,7 @@ cargo run --example gallery -- --out target/gallery/latest [--filter <substr>]..
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves, `build_tree`, Bevy components/systems
 - `examples/showcase.rs`, `examples/gallery.rs` (visual QA renderer), `examples/capture_growth.rs` (records `docs/growth.gif` for the README)
 - Publishing: `Cargo.toml` `include` keeps `qa/`, `slop/`, `docs/` out of the package; README media use absolute GitHub URLs
+- Releasing: follow `AGENTS.md`. Every release, patch releases included, re-records `docs/growth.gif` with `capture_growth`; the clip is not updated automatically
 - `qa/visual_findings.md`: visual QA defect log (open / fixed / proposed / iterations)
 
 ## Conventions

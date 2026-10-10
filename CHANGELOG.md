@@ -5,6 +5,21 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.2.2] - 2026-10-10
+
+Appearance and docs only; no API changes.
+
+### Changed
+
+- The poplar preset is now a leafy column. It had 14 short, nearly vertical branches hugging a 12 m
+  trunk, so it read as a bare pole with about 70 leaves and a 2.4 m bare leader above them; it now
+  has about 125 nodes and about 800 leaves in a narrow crown that starts near the ground and
+  reaches the tip. `branches.start` 0.2 -> 0.12, `density` 1.6 -> 2.5, `length` 0.3 -> 0.35,
+  `angle` 15 -> 25, `up_attraction` 0.92 -> 0.6, `sub_branch_count` 2 -> 4, `foliage.density`
+  3.5 -> 10, `trunk.leader_length` 0.2 -> 0.12 and `leader_has_branches` false -> true.
+- `docs/growth.gif`, the README clip, is re-recorded. It still showed the square leaves of 0.1.0.
+  Re-recording it is now part of every release (see `AGENTS.md`).
+
 ## [0.2.1] - 2026-10-10
 
 Appearance only; no API changes.
@@ -91,6 +106,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.2.2]: https://github.com/Ladvien/bevy_flora/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Ladvien/bevy_flora/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Ladvien/bevy_flora/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Ladvien/bevy_flora/compare/v0.1.0...v0.1.1
