@@ -12,6 +12,10 @@ use crate::skeleton::{BENT_AXIS_POINTS, Node, NodeKind, Skeleton};
 /// Wood at or below this height is the trunk's base on the ground.
 const GROUND_EPSILON: f32 = 1.0e-4;
 
+/// Smoothing leaves wood within this many radii of a branch end or of a
+/// child's seat untouched (the cap ring and the patch under the child's base).
+const SMOOTH_PIN_REACH: f32 = 1.5;
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -224,13 +228,33 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
     }
 
     if params.mesh.smooth_iterations > 0 {
-        // The trunk's bottom cap sits at y = 0; keep it on the ground.
+        // Smoothing softens creases but must not move the wood the skeleton
+        // defines: the trunk's bottom cap stays on the ground, branch-end caps
+        // keep their length, and a parent keeps its surface where a child is
+        // seated on it (the child's base is an open boundary and stays put).
+        let keep: Vec<(Vec3, f32)> = skeleton
+            .nodes
+            .iter()
+            .enumerate()
+            .skip(1)
+            .flat_map(|(i, node)| {
+                let end = (skeleton.end(i), node.tip_radius * SMOOTH_PIN_REACH);
+                let seat = node.parent.and_then(|p| {
+                    let parent = &skeleton.nodes[p as usize];
+                    (parent.kind != NodeKind::Trunk).then(|| {
+                        let radius = parent.base_radius + (parent.tip_radius - parent.base_radius) * node.attach_t;
+                        (node.anchor, (radius + node.base_radius) * SMOOTH_PIN_REACH)
+                    })
+                });
+                std::iter::once(end).chain(seat)
+            })
+            .collect();
         laplacian_smooth(
             &mut mesh.positions,
             &mesh.indices,
             params.mesh.smooth_iterations,
             params.mesh.smooth_factor,
-            |p| p.y <= GROUND_EPSILON,
+            |p| p.y <= GROUND_EPSILON || keep.iter().any(|&(c, r)| p.distance_squared(c) <= r * r),
         );
         recalculate_normals(&mesh.positions, &mesh.indices, &mut mesh.normals);
     }
@@ -458,6 +482,32 @@ mod tests {
             }
         }
         assert_indices_valid(&smooth, "smoothed oak");
+    }
+
+    #[test]
+    fn smoothing_keeps_branch_ends_and_attachments() {
+        // D-040: plain Laplacian smoothing shrank the wood: branch ends
+        // retracted (willow 0.18 m at 2 passes) and twigs were left hanging
+        // off their thinned parents.
+        for preset in [TreePreset::Willow, TreePreset::Redwood, TreePreset::Oak, TreePreset::Pine] {
+            let mut params = preset.params();
+            params.mesh.smooth_iterations = 2;
+            let skeleton = generate_skeleton(&params);
+            let mesh = skeleton_mesh(&skeleton, &params);
+            let near = |q: Vec3| mesh.positions.iter().map(|w| w.distance(q)).fold(f32::MAX, f32::min);
+            for (i, n) in skeleton.nodes.iter().enumerate().skip(1) {
+                let gap = near(skeleton.end(i)) - n.tip_radius;
+                assert!(gap < 0.02, "{} {:?} {}: end retracted {gap} m", preset.name(), n.kind, n.id);
+                let Some(p) = n.parent else { continue };
+                let parent = &skeleton.nodes[p as usize];
+                if parent.kind == NodeKind::Trunk {
+                    continue;
+                }
+                let radius = parent.base_radius + (parent.tip_radius - parent.base_radius) * n.attach_t;
+                let gap = near(n.anchor) - radius;
+                assert!(gap < 0.01, "{} {:?} {}: anchor {gap} m off its parent's wood", preset.name(), n.kind, n.id);
+            }
+        }
     }
 
     #[test]

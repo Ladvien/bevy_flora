@@ -8,9 +8,16 @@ use bevy::math::Vec3;
 /// cap rings repeat positions, and those repeats must stay together.
 const WELD_EPSILON: f32 = 1.0e-4;
 
-/// Move each interior vertex toward the barycenter of its edge neighbours,
-/// `iterations` times, blending by `factor` (0–1). Recompute normals afterwards
-/// with [`recalculate_normals`].
+/// Taubin pass-band frequency `k_PB`: each shrinking pass (`λ`) is followed by
+/// an inflating one (`μ`, with `1/λ + 1/μ = k_PB`), so noise is smoothed out
+/// without the volume loss of plain Laplacian smoothing (which retracts
+/// branch ends and thins limbs away from their twigs).
+const TAUBIN_PASS_BAND: f32 = 0.1;
+
+/// Taubin λ|μ smoothing: each of the `iterations` moves every interior vertex
+/// toward the barycenter of its edge neighbours by `factor` (0–1), then away
+/// from it by the matching μ. Recompute normals afterwards with
+/// [`recalculate_normals`].
 ///
 /// Vertices at the same position (UV seams) move as one, so seams stay closed.
 /// Vertices on an open boundary (an edge used by a single triangle, such as
@@ -31,8 +38,10 @@ pub fn laplacian_smooth(
     for (pinned, &point) in topology.pinned.iter_mut().zip(&points) {
         *pinned |= fixed(point);
     }
+    let inflate = factor / (TAUBIN_PASS_BAND * factor - 1.0);
     for _ in 0..iterations {
         smooth_pass(&mut points, &topology, factor);
+        smooth_pass(&mut points, &topology, inflate);
     }
     for (position, &group) in positions.iter_mut().zip(&group_of) {
         if !topology.pinned[group as usize] {

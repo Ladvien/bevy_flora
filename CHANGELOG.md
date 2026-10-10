@@ -24,7 +24,7 @@ The first release.
   crown envelopes, phyllotaxis, twist, floor avoidance that holds for bent wood.
 - Wood mesh: tapered, wobbling, twisted trunk with root flares; flat, pointed or leader-branch
   trunk tops; branch collars and root segments, so every junction is closed; optional pipe-model
-  radii, adaptive ring resolution and seam-preserving Laplacian smoothing.
+  radii, adaptive ring resolution and volume-preserving (Taubin) smoothing.
 - Leaves: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster),
   three placements (terminal branches, all branches, tip clusters) and four orientations, with
   translucent leaf material.

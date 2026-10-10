@@ -37,9 +37,11 @@ placement and leaf placement (`Node::point_at`) all read it, so wood, sub-branch
 and leaves agree. Sub-branches spreading toward the trunk and tip-cluster leaves
 landing inside it are mirrored away (`skeleton::trunk_depth`). Each primary's
 tube and collar get a `root_segment` reaching into the trunk (`primary_root`),
-so junctions have no open ends. Laplacian smoothing welds coincident vertices
-(UV seams) and pins open boundaries and the ground ring, so it never tears or
-lifts the wood; root segments are added after it, so junctions keep their shape.
+so junctions have no open ends. Smoothing (Taubin λ|μ, so it does not shrink the
+wood) welds coincident vertices (UV seams) and pins open boundaries, the ground
+ring, branch-end caps and the parent surface under each child's seat, so it
+never tears, lifts, retracts or detaches the wood; root segments are added after
+it, so junctions keep their shape.
 
 ## Bevy integration (plugin.rs)
 
