@@ -211,29 +211,44 @@ fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
     }
 }
 
-/// A rounded, closed end behind the ring of `radius` at `base` (three rings
-/// and a cap, about a hemisphere): the base of a branch that hugs the trunk,
-/// so it grows out of the trunk like a knot instead of ending in a flat disc.
-/// Its last ring coincides with the tube's base ring.
+/// A rounded, closed end behind the ring of `radius` at `base`: the base of a
+/// branch that hugs the trunk, so it grows out of the trunk like a knot instead
+/// of ending in a flat disc. Its last ring (`segments` sides) coincides with the
+/// tube's base ring; the four rings behind it have twice the sides, so the knot
+/// is rounder than the (often hexagonal) tube it ends. About a hemisphere.
 fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
     let mut mesh = MeshData::default();
     let basis = RingBasis::from_axis(axis);
     let segments = segments.max(3);
-    let latitudes = [70.0f32, 40.0, 0.0];
-    let (sin, cos) = latitudes[0].to_radians().sin_cos();
-    emit_cap(&mut mesh, base - axis * (radius * sin), basis, segments, 0.0, -axis, |_, _| radius * cos);
-    let mut prev = None;
-    for lat in latitudes {
-        let (sin, cos) = lat.to_radians().sin_cos();
+    let round = segments * 2;
+    let latitudes = [78.0f32, 62.0, 44.0, 24.0];
+    let ring_at = |mesh: &mut MeshData, latitude: f32, sides: u32| -> u32 {
+        let (sin, cos) = latitude.to_radians().sin_cos();
         let first = mesh.positions.len();
-        let ring = emit_ring(&mut mesh, base - axis * (radius * sin), basis, segments, 0.0, 0.0, |_, _| radius * cos);
+        let ring = emit_ring(mesh, base - axis * (radius * sin), basis, sides, 0.0, 0.0, |_, _| radius * cos);
         for normal in &mut mesh.normals[first..] {
             *normal = (*normal * cos - axis * sin).normalize_or_zero();
         }
-        if let Some(prev) = prev {
-            connect_rings(&mut mesh, prev, ring, segments);
+        ring
+    };
+    let (sin, cos) = latitudes[0].to_radians().sin_cos();
+    emit_cap(&mut mesh, base - axis * (radius * sin), basis, round, 0.0, -axis, |_, _| radius * cos);
+    let mut back = None;
+    for latitude in latitudes {
+        let ring = ring_at(&mut mesh, latitude, round);
+        if let Some(prev) = back {
+            connect_rings(&mut mesh, prev, ring, round);
         }
-        prev = Some(ring);
+        back = Some(ring);
+    }
+    // Join the last round ring to the base ring: each base edge (a0, a1) meets
+    // three round vertices (b0, b1, b2), the middle one sitting between them.
+    let base_ring = ring_at(&mut mesh, 0.0, segments);
+    let back = back.expect("at least one round ring");
+    for i in 0..segments {
+        let (a0, a1) = (base_ring + i, base_ring + i + 1);
+        let (b0, b1, b2) = (back + 2 * i, back + 2 * i + 1, back + 2 * i + 2);
+        mesh.indices.extend_from_slice(&[b0, b1, a0, b1, a1, a0, b1, b2, a1]);
     }
     mesh
 }
@@ -460,6 +475,31 @@ mod tests {
             }
         }
         assert!(steep > 10, "only {steep} steep primaries in all presets");
+    }
+
+    #[test]
+    fn the_knot_behind_a_hexagonal_branch_is_round() {
+        // D-051: the rounded base of a 6-sided branch was itself a 6-sided
+        // faceted knot. The ring just behind the base must be close to a
+        // circle: neighbouring vertices at most 31 degrees apart (a hexagon's
+        // are 60 apart, an octagon's 45).
+        let dome = root_dome(Vec3::ZERO, Vec3::Y, 6, 1.0);
+        let (sin, cos) = 24.0f32.to_radians().sin_cos();
+        let mut angles: Vec<f32> = dome
+            .positions
+            .iter()
+            .filter(|p| (p.y + sin).abs() < 1e-4 && (p.x.hypot(p.z) - cos).abs() < 1e-4)
+            .map(|p| p.z.atan2(p.x))
+            .collect();
+        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        angles.dedup_by(|a, b| (*a - *b).abs() < 1e-3); // the seam vertex is duplicated
+        let widest_gap = angles.windows(2).map(|w| w[1] - w[0]).fold(0.0f32, f32::max);
+        assert!(
+            angles.len() >= 12 && widest_gap.to_degrees() < 31.0,
+            "{} distinct vertices, widest gap {} degrees",
+            angles.len(),
+            widest_gap.to_degrees()
+        );
     }
 
     #[test]
