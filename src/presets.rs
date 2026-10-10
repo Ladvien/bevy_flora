@@ -153,6 +153,7 @@ fn oak() -> TreeParams {
             crown_influence: 0.9,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -237,6 +238,7 @@ fn pine() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -321,6 +323,7 @@ fn willow() -> TreeParams {
             crown_influence: 0.8,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -405,6 +408,7 @@ fn birch() -> TreeParams {
             crown_influence: 0.7,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -489,6 +493,7 @@ fn palm() -> TreeParams {
             crown_influence: 0.5,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -573,6 +578,7 @@ fn cypress() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -657,6 +663,8 @@ fn bonsai() -> TreeParams {
             crown_influence: 0.6,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.0015,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -741,6 +749,7 @@ fn maple() -> TreeParams {
             crown_influence: 0.85,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -825,6 +834,7 @@ fn spruce() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -909,6 +919,7 @@ fn poplar() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -993,6 +1004,7 @@ fn baobab() -> TreeParams {
             crown_influence: 0.7,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1077,6 +1089,7 @@ fn dragon_tree() -> TreeParams {
             crown_influence: 0.6,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1161,6 +1174,8 @@ fn japanese_maple() -> TreeParams {
             crown_influence: 0.8,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.0015,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1245,6 +1260,7 @@ fn dead_tree() -> TreeParams {
             crown_influence: 0.4,
             floor_avoidance: false,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1316,6 +1332,7 @@ fn redwood() -> TreeParams {
             crown_influence: 0.9,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
