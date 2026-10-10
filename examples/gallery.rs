@@ -140,7 +140,7 @@ fn scenarios() -> Vec<Scenario> {
     // Wider coverage. Every other preset while growing and with more seeds.
     let others = |skip: [TreePreset; 2]| TreePreset::ALL.into_iter().filter(move |p| !skip.contains(p));
     for p in others([TreePreset::Oak, TreePreset::Pine]) {
-        for age in [2.0, 4.0, 6.0] {
+        for age in [2.0, 4.0, 6.0, 8.0, 12.0] {
             add(format!("age_{}_{age}", p.name()), preset(p), age);
         }
     }
