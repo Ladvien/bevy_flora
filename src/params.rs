@@ -27,14 +27,14 @@ pub enum TrunkTermination {
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LeafStyle {
-    /// Two quads at 90° (classic pixel-art leaf).
+    /// Two leaf-shaped cards at 90° (classic pixel-art leaf).
     #[default]
     CrossedPlanes,
-    /// One quad (intended for a billboard shader).
+    /// One leaf-shaped card.
     SingleQuad,
     /// Octahedron approximation of a leaf cluster.
     ClusterSphere,
-    /// Three quads at 60°.
+    /// Three leaf-shaped cards at 60°.
     StarBurst,
     /// Six thin radiating quads (pine needles).
     NeedleCluster,

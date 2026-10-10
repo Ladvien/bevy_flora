@@ -14,13 +14,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.1 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.2 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.1"
+bevy_flora = "0.2"
 ```
 
 | feature | default | what it does |
@@ -83,14 +83,14 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Deterministic.** Each branch draws randomness from its own seeded stream, so the same `seed` gives the same tree on every run, and aging never re-rolls branches or leaves that already exist.
 - **Branch shape**: crown envelopes, phyllotaxis, apical dominance, Y-splits, recursive sub-branches, twist, and a gravity bend that sub-branches and leaves follow. Floor avoidance keeps even strongly drooping wood above the ground.
 - **Closed wood.** Branches meet the trunk through flared collars and root segments, forks taper into their halves, and trunk tops end in a flat cap, a cone or a leader branch. Optional pipe-model radii, radius-adaptive ring counts and volume-preserving (Taubin) smoothing that keeps seams, branch ends and twig seats in place.
-- **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. The leaf material is translucent, so back-lit leaves are not black.
+- **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. Leaf cards are leaf-shaped (cut into the geometry, so there is no alpha-mask `discard`) and grow out of their twigs, crowns shade as one soft volume through crown-bent normals (`normal_bend`), and each leaf gets its own brightness through a vertex colour (`color_variation`). All of it is baked into the mesh, so the stock `StandardMaterial` is enough and no custom shader is involved. The leaf material is translucent, so back-lit leaves are not black.
 
 ## Examples
 
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds. |
-| `gallery` | Renders 258 scenarios (every preset at several ages and seeds, forced splits and smoothing on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it. |
+| `gallery` | Renders 289 scenarios (every preset at several ages and seeds, forced splits, smoothing and pipe radii on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it. |
 | `capture_growth` | Records the clip above as numbered PNG frames. |
 
 ```sh
