@@ -1,8 +1,63 @@
 //! Laplacian smoothing and normal recomputation.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use bevy::math::Vec3;
+
+/// Multiplicative hasher for small integer keys (grid cells): the default
+/// SipHash dominated welding, which probes 27 cells per vertex.
+#[derive(Default)]
+struct CellHasher(u64);
+
+impl Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_i32(&mut self, n: i32) {
+        self.write_u64(n as u32 as u64);
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+type CellMap<V> = HashMap<[i32; 3], V, BuildHasherDefault<CellHasher>>;
+
+/// Compressed adjacency: the items of row `r` are `items[start[r]..start[r + 1]]`.
+struct Rows {
+    start: Vec<u32>,
+    items: Vec<u32>,
+}
+
+impl Rows {
+    /// Rows from `(row, item)` pairs, keeping the pairs' order within a row.
+    fn from_pairs(rows: usize, pairs: impl Iterator<Item = (u32, u32)> + Clone) -> Self {
+        let mut start = vec![0u32; rows + 1];
+        for (r, _) in pairs.clone() {
+            start[r as usize + 1] += 1;
+        }
+        for r in 0..rows {
+            start[r + 1] += start[r];
+        }
+        let mut fill = start.clone();
+        let mut items = vec![0u32; start[rows] as usize];
+        for (r, item) in pairs {
+            items[fill[r as usize] as usize] = item;
+            fill[r as usize] += 1;
+        }
+        Self { start, items }
+    }
+
+    fn row(&self, r: usize) -> &[u32] {
+        &self.items[self.start[r] as usize..self.start[r + 1] as usize]
+    }
+}
 
 /// Vertices closer than this fraction of the mesh's extent (at least 1 m) are
 /// the same surface point. UV seams and cap rings repeat positions (to within
@@ -52,15 +107,18 @@ pub fn laplacian_smooth(
     let mut topology = Topology::build(points.len(), &group_of, indices);
     let min_edge = MIN_SMOOTH_EDGE * epsilon;
     for (g, &point) in points.iter().enumerate() {
-        let fine = topology.neighbors[g]
+        let fine = topology
+            .neighbors
+            .row(g)
             .iter()
             .any(|&n| points[n as usize].distance_squared(point) < min_edge * min_edge);
         topology.pinned[g] |= fine || fixed(point);
     }
     let inflate = factor / (TAUBIN_PASS_BAND * factor - 1.0);
+    let mut scratch = vec![Vec3::ZERO; points.len()];
     for _ in 0..iterations {
-        smooth_pass(&mut points, &topology, factor);
-        smooth_pass(&mut points, &topology, inflate);
+        smooth_pass(&mut points, &mut scratch, &topology, factor);
+        smooth_pass(&mut points, &mut scratch, &topology, inflate);
     }
     let mut moved = vec![false; positions.len()];
     for ((position, &group), moved) in positions.iter_mut().zip(&group_of).zip(&mut moved) {
@@ -77,7 +135,7 @@ pub fn laplacian_smooth(
 /// group's position (that of its first vertex).
 fn weld(positions: &[Vec3], epsilon: f32) -> (Vec<u32>, Vec<Vec3>) {
     let cell_of = |p: Vec3| (p / epsilon).floor().as_ivec3().to_array();
-    let mut cells: HashMap<[i32; 3], Vec<u32>> = HashMap::new();
+    let mut cells: CellMap<Vec<u32>> = CellMap::default();
     let mut group_positions: Vec<Vec3> = Vec::new();
     let mut group_of = Vec::with_capacity(positions.len());
     for &p in positions {
@@ -101,57 +159,54 @@ fn weld(positions: &[Vec3], epsilon: f32) -> (Vec<u32>, Vec<Vec3>) {
 
 /// Edge neighbours and open-boundary flags per welded vertex group.
 struct Topology {
-    neighbors: Vec<Vec<u32>>,
+    /// Sorted neighbour groups per group.
+    neighbors: Rows,
     pinned: Vec<bool>,
 }
 
 impl Topology {
     fn build(group_count: usize, group_of: &[u32], indices: &[u32]) -> Self {
-        let mut edge_uses: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut edges: Vec<(u32, u32)> = Vec::with_capacity(indices.len());
         for &[a, b, c] in indices.as_chunks::<3>().0 {
             let (ga, gb, gc) = (group_of[a as usize], group_of[b as usize], group_of[c as usize]);
             if ga == gb || gb == gc || ga == gc {
                 continue; // collapsed triangle (zero-radius tip)
             }
             for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
-                *edge_uses.entry((u.min(v), u.max(v))).or_insert(0) += 1;
+                edges.push((u.min(v), u.max(v)));
             }
         }
-        let mut neighbors = vec![Vec::new(); group_count];
+        edges.sort_unstable();
         let mut pinned = vec![false; group_count];
-        for (&(u, v), &uses) in &edge_uses {
-            neighbors[u as usize].push(v);
-            neighbors[v as usize].push(u);
-            if uses == 1 {
+        let mut unique: Vec<(u32, u32)> = Vec::with_capacity(edges.len() / 2 + 1);
+        for run in edges.chunk_by(|a, b| a == b) {
+            let (u, v) = run[0];
+            if run.len() == 1 {
                 pinned[u as usize] = true;
                 pinned[v as usize] = true;
             }
+            unique.push((u, v));
         }
-        // HashMap order varies per process; sorted lists keep the f32 sums,
-        // and so the mesh, bit-for-bit reproducible.
-        for list in &mut neighbors {
-            list.sort_unstable();
-        }
+        // Each row must be sorted so the f32 sums, and so the mesh, are
+        // bit-for-bit reproducible: pairs ordered by (row, item).
+        let mut pairs: Vec<(u32, u32)> = unique.iter().flat_map(|&(u, v)| [(u, v), (v, u)]).collect();
+        pairs.sort_unstable();
+        let neighbors = Rows::from_pairs(group_count, pairs.iter().copied());
         Self { neighbors, pinned }
     }
 }
 
-fn smooth_pass(points: &mut [Vec3], topology: &Topology, factor: f32) {
-    let next: Vec<Vec3> = points
-        .iter()
-        .zip(&topology.neighbors)
-        .zip(&topology.pinned)
-        .map(|((&p, neighbors), &pinned)| {
-            if pinned || neighbors.is_empty() {
-                return p;
-            }
-            let sum = neighbors
-                .iter()
-                .fold(Vec3::ZERO, |acc, &n| acc + points[n as usize]);
+fn smooth_pass(points: &mut [Vec3], next: &mut [Vec3], topology: &Topology, factor: f32) {
+    for (g, (out, &p)) in next.iter_mut().zip(points.iter()).enumerate() {
+        let neighbors = topology.neighbors.row(g);
+        *out = if topology.pinned[g] || neighbors.is_empty() {
+            p
+        } else {
+            let sum = neighbors.iter().fold(Vec3::ZERO, |acc, &n| acc + points[n as usize]);
             p.lerp(sum / neighbors.len() as f32, factor)
-        })
-        .collect();
-    points.copy_from_slice(&next);
+        };
+    }
+    points.copy_from_slice(next);
 }
 
 /// Generated normals closer than this (cosine) belong to one smooth surface;
@@ -190,17 +245,14 @@ fn refresh_normals(
         sums[b] += face;
         sums[c] += face;
     }
-    let mut members: Vec<Vec<u32>> = vec![Vec::new(); group_count];
-    for (v, &g) in group_of.iter().enumerate() {
-        members[g as usize].push(v as u32);
-    }
+    let members = Rows::from_pairs(group_count, group_of.iter().enumerate().map(|(v, &g)| (g, v as u32)));
     let generated = normals.to_vec();
     let agrees = |u: usize, v: usize| generated[u].dot(generated[v]) > SHARED_NORMAL_COS;
     // A refreshed vertex takes its agreeing twins along, so they keep shading
     // alike even when only one of them touches a moved face.
     for v in 0..positions.len() {
         if stale[v] {
-            for &u in &members[group_of[v] as usize] {
+            for &u in members.row(group_of[v] as usize) {
                 if agrees(u as usize, v) {
                     stale[u as usize] = true;
                 }
@@ -208,7 +260,8 @@ fn refresh_normals(
         }
     }
     for v in (0..positions.len()).filter(|&v| stale[v]) {
-        let sum = members[group_of[v] as usize]
+        let sum = members
+            .row(group_of[v] as usize)
             .iter()
             .map(|&u| u as usize)
             .filter(|&u| agrees(u, v))
