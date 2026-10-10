@@ -5,6 +5,18 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.1.1] - 2026-10-10
+
+Documentation only; no API or behaviour changes.
+
+### Fixed
+
+- `MeshParams::smooth_iterations` described plain Laplacian smoothing; it now documents the
+  volume-preserving (Taubin) smoothing the crate does and what it keeps in place.
+- `FoliagePlacement::TerminalBranches` and `TipClusters` now state that "terminal" means terminal
+  in the full-grown tree, which is why young branches that will grow twigs stay leafless.
+- `ARCHITECTURE.md` explains how aged skeletons keep full-grown child counts.
+
 ## [0.1.0] - 2026-10-10
 
 The first release.
@@ -33,4 +45,5 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.1.1]: https://github.com/Ladvien/bevy_flora/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ladvien/bevy_flora/releases/tag/v0.1.0
