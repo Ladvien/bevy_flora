@@ -316,18 +316,60 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
                 std::iter::once(end).chain(seat)
             })
             .collect();
+        let pins = PinSpheres::new(&keep);
         laplacian_smooth(
             &mut mesh.positions,
             &mut mesh.normals,
             &mesh.indices,
             params.mesh.smooth_iterations,
             params.mesh.smooth_factor,
-            |p| p.y <= GROUND_EPSILON || keep.iter().any(|&(c, r)| p.distance_squared(c) <= r * r),
+            |p| p.y <= GROUND_EPSILON || pins.contains(p),
         );
     }
     mesh.extend(&roots);
 
     mesh
+}
+
+/// Spheres bucketed on a coarse grid, so asking whether a point lies in any of
+/// them checks only the spheres overlapping its cell (smoothing asks for every
+/// vertex, and big trees have hundreds of pins).
+struct PinSpheres<'a> {
+    spheres: &'a [(Vec3, f32)],
+    cells: std::collections::HashMap<[i32; 3], Vec<u32>>,
+}
+
+impl<'a> PinSpheres<'a> {
+    const CELL: f32 = 0.25;
+
+    fn new(spheres: &'a [(Vec3, f32)]) -> Self {
+        let mut cells: std::collections::HashMap<[i32; 3], Vec<u32>> = std::collections::HashMap::new();
+        for (i, &(center, radius)) in spheres.iter().enumerate() {
+            let lo = Self::cell(center - Vec3::splat(radius));
+            let hi = Self::cell(center + Vec3::splat(radius));
+            for x in lo[0]..=hi[0] {
+                for y in lo[1]..=hi[1] {
+                    for z in lo[2]..=hi[2] {
+                        cells.entry([x, y, z]).or_default().push(i as u32);
+                    }
+                }
+            }
+        }
+        Self { spheres, cells }
+    }
+
+    fn cell(p: Vec3) -> [i32; 3] {
+        (p / Self::CELL).floor().as_ivec3().to_array()
+    }
+
+    fn contains(&self, p: Vec3) -> bool {
+        self.cells.get(&Self::cell(p)).is_some_and(|list| {
+            list.iter().any(|&i| {
+                let (c, r) = self.spheres[i as usize];
+                p.distance_squared(c) <= r * r
+            })
+        })
+    }
 }
 
 #[cfg(test)]
