@@ -68,8 +68,10 @@ never exceed the wood they grow from (`skeleton::floored_radii`), so twigs taper
 but never shrink to hairlines. Sub-branches spreading toward the trunk and
 tip-cluster leaves landing inside it are mirrored away (`skeleton::trunk_depth`).
 Each primary's tube and collar get a `root_segment` reaching into the trunk
-(`primary_root`),
-so junctions have no open ends. Smoothing (Taubin λ|μ, so it does not shrink the
+(`primary_root`); a branch hugging the trunk (less than half of its direction
+pointing away from it) gets a closed, rounded `root_dome` instead, since a long
+extension would show as a ridge down the trunk. Either way
+junctions have no open ends. Smoothing (Taubin λ|μ, so it does not shrink the
 wood) welds coincident vertices (UV seams) and pins open boundaries, the ground
 ring, branch-end caps and the parent surface under each child's seat, so it
 never tears, lifts, retracts or detaches the wood. Wood finer than ~100 weld

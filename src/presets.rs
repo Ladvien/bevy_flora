@@ -297,7 +297,7 @@ fn willow() -> TreeParams {
         },
         branches: BranchParams {
             start: 0.5,
-            end: 0.9,
+            end: 1.0,
             density: 4.0,
             length: 0.8,
             angle: 50.0,
@@ -864,7 +864,13 @@ fn spruce() -> TreeParams {
             color: Color::srgb(0.086, 0.278, 0.212),
             ..Default::default()
         },
-        growth: GrowthParams::default(),
+        growth: GrowthParams {
+            trunk_fraction: 0.6,
+            branch_fraction: 0.6,
+            thickening_lag: 1.2,
+            leaf_threshold: 0.15,
+            ..Default::default()
+        },
         trunk_color: Color::srgb(0.380, 0.243, 0.141),
     }
 }
@@ -1405,6 +1411,42 @@ mod tests {
             .collect();
         let hanging = tips.iter().filter(|&&y| y < -0.7).count();
         assert!(hanging * 10 >= tips.len() * 7, "{hanging} of {} branch tips hang", tips.len());
+    }
+
+    #[test]
+    fn willow_crown_reaches_the_top_of_the_trunk() {
+        // D-049: the limbs stopped at 90% of the trunk, so the crown sat low
+        // under a bare top.
+        let params = TreePreset::Willow.params();
+        let s = crate::skeleton::generate_skeleton(&params);
+        let top = params.trunk.height;
+        let highest = s
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::skeleton::NodeKind::Primary)
+            .map(|n| n.start.y)
+            .fold(f32::MIN, f32::max);
+        assert!(highest >= 0.93 * top, "highest limb leaves the trunk at {highest} m of {top} m");
+    }
+
+    #[test]
+    fn young_spruce_is_a_sapling_not_a_pole_of_wires() {
+        // D-031: at age 2 the spruce was 5 m tall with bare, hair-thin primaries
+        // up to 41% of its height (length / base radius up to 144).
+        let params = TreePreset::Spruce.params();
+        let tree = crate::pipeline::build_tree(&params, 2.0);
+        let height = tree.skeleton.nodes[0].length;
+        let primaries: Vec<_> = tree
+            .skeleton
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::skeleton::NodeKind::Primary)
+            .collect();
+        assert!(primaries.len() >= 5, "only {} primaries at age 2", primaries.len());
+        for n in &primaries {
+            assert!(n.length < 0.35 * height, "primary {} is {} m on a {height} m sapling", n.id, n.length);
+            assert!(n.length < 110.0 * n.base_radius, "primary {} is {} m long and {} m thick", n.id, n.length, n.base_radius);
+        }
     }
 
     #[test]
