@@ -544,9 +544,10 @@ fn try_split(
         ..template
     };
 
+    // The stub tapers into its halves, so the fork shows no ledge.
     let stub = &mut skeleton.nodes[idx];
     stub.length *= split_t;
-    stub.tip_radius = split_radius;
+    stub.tip_radius = split_radius * 0.7;
 
     Some((child_a, child_b))
 }
@@ -823,6 +824,33 @@ mod tests {
                     n.kind,
                     n.id
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn split_stub_flows_into_its_halves() {
+        // At a Y-split the stub must end no wider than the halves start, or
+        // its end shows as a ledge around the fork.
+        for preset in TreePreset::ALL {
+            let mut params = preset.params();
+            params.split.enabled = true;
+            params.split.probability = 1.0;
+            params.split.radius_threshold = 0.0;
+            let s = generate_skeleton(&params);
+            for (i, stub) in s.nodes.iter().enumerate() {
+                for c in s.children(i).filter(|&c| s.nodes[c].kind == NodeKind::Split) {
+                    let half = &s.nodes[c];
+                    assert!(
+                        stub.tip_radius <= half.base_radius + 1e-6,
+                        "{}: stub {} ends at radius {} but half {} starts at {}",
+                        preset.name(),
+                        stub.id,
+                        stub.tip_radius,
+                        half.id,
+                        half.base_radius
+                    );
+                }
             }
         }
     }
