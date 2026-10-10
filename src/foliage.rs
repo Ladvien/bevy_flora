@@ -297,19 +297,22 @@ pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
     mesh
 }
 
-/// Two quads at 90°.
+/// Two leaf cards at 90° sharing `up`. Their bases meet at the leaf point and
+/// the tips reach one `size` along `up`, so the leaf grows out of its stem
+/// instead of being threaded on it.
 fn crossed_planes(mesh: &mut MeshData, point: &LeafPoint) {
     let half = point.size * 0.5;
     let (right, up, forward) = build_basis(point.direction, point.rotation);
-    add_double_sided_leaf(mesh, point.position, right * half, up * half);
-    add_double_sided_leaf(mesh, point.position, forward * half, up * half);
+    let center = point.position + up * half;
+    add_double_sided_leaf(mesh, center, right * half, up * half);
+    add_double_sided_leaf(mesh, center, forward * half, up * half);
 }
 
-/// One leaf card.
+/// One leaf card, base at the leaf point and tip one `size` along `up`.
 fn single_quad(mesh: &mut MeshData, point: &LeafPoint) {
     let half = point.size * 0.5;
     let (right, up, _) = build_basis(point.direction, point.rotation);
-    add_double_sided_leaf(mesh, point.position, right * half, up * half);
+    add_double_sided_leaf(mesh, point.position + up * half, right * half, up * half);
 }
 
 /// Octahedron.
@@ -532,6 +535,30 @@ mod tests {
             let mesh = foliage_mesh(std::slice::from_ref(&p), &flat(style));
             assert_indices_valid(&mesh, &format!("{style:?}"));
             assert_faces_outward(&mesh, &format!("{style:?}"));
+        }
+    }
+
+    #[test]
+    fn leaf_cards_grow_out_of_their_attachment_point() {
+        // D-045: cards centred on the leaf point were threaded on their twig
+        // and read as green rings around thick limbs.
+        let p = LeafPoint {
+            position: Vec3::new(1.0, 2.0, -0.5),
+            direction: Vec3::new(0.4, -0.3, 0.7).normalize(),
+            size: 0.8,
+            rotation: 1.1,
+            tint: 0.0,
+        };
+        let (_, up, _) = build_basis(p.direction, p.rotation);
+        for style in [LeafStyle::CrossedPlanes, LeafStyle::SingleQuad] {
+            let mesh = foliage_mesh(std::slice::from_ref(&p), &flat(style));
+            let (min, max) = mesh
+                .positions
+                .iter()
+                .map(|v| (*v - p.position).dot(up))
+                .fold((f32::MAX, f32::MIN), |(lo, hi), a| (lo.min(a), hi.max(a)));
+            assert!(min > -1e-5, "{style:?}: card reaches {min} m behind the leaf point");
+            assert!((max - p.size).abs() < 1e-5, "{style:?}: tip {max} m out, leaf size {}", p.size);
         }
     }
 
