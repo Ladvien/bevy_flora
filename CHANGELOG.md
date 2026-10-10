@@ -5,6 +5,31 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.3.2] - 2026-10-10
+
+Appearance only; no API changes.
+
+### Changed
+
+- The willow weeps in strands instead of sitting as a leafy mound: its twigs are fewer, longer and
+  thinner (`branches.sub_branch_count` 3 -> 2, `sub_branch_scale` 0.7 -> 0.9, `length` 0.8 -> 0.7),
+  and its leaves follow them (`foliage.orientation` `RandomUpward` -> `FollowBranch`, `density`
+  6 -> 10), so they hang in rows from the arching limbs. 151 nodes instead of 401, and 18,500
+  wood vertices instead of 48,000 for the mature tree.
+- The closed, rounded base of a branch that hugs the trunk is rounder: four rings and a cap with
+  twice the branch's side count, joined to the branch's own base ring, instead of three rings with
+  the branch's side count. On a hexagonal cypress or poplar branch the knot is no longer a
+  six-sided pebble. The wood has more vertices as a result (the mature cypress about 8,000
+  instead of 5,800, the poplar 10,300 instead of 8,200, the birch 2,900 instead of 2,500).
+- `docs/growth.gif`, the README clip, was re-recorded for this release; the oak it shows is not
+  touched by these changes, so the clip comes out byte-identical.
+
+### Fixed
+
+- A sub-branch's wood could end up inside the trunk after it was seated on a bent parent and
+  bent by gravity (found by the longer willow twigs). Its bend is now relaxed, or the branch is
+  shortened, until it clears the trunk.
+
 ## [0.3.1] - 2026-10-10
 
 Appearance only; no API changes.
@@ -161,6 +186,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.3.2]: https://github.com/Ladvien/bevy_flora/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Ladvien/bevy_flora/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Ladvien/bevy_flora/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Ladvien/bevy_flora/compare/v0.2.1...v0.2.2
