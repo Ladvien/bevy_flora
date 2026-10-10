@@ -226,7 +226,7 @@ impl Default for BranchParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
-            min_twig_radius: 0.003,
+            min_twig_radius: 0.005,
         }
     }
 }

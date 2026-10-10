@@ -323,6 +323,7 @@ fn willow() -> TreeParams {
             crown_influence: 0.8,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.003,
             ..Default::default()
         },
         split: SplitParams {
@@ -663,7 +664,7 @@ fn bonsai() -> TreeParams {
             crown_influence: 0.6,
             floor_avoidance: true,
             floor_level: 0.0,
-            min_twig_radius: 0.0015,
+            min_twig_radius: 0.0025,
             ..Default::default()
         },
         split: SplitParams {
@@ -1174,7 +1175,7 @@ fn japanese_maple() -> TreeParams {
             crown_influence: 0.8,
             floor_avoidance: true,
             floor_level: 0.0,
-            min_twig_radius: 0.0015,
+            min_twig_radius: 0.0025,
             ..Default::default()
         },
         split: SplitParams {
