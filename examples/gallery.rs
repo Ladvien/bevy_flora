@@ -137,6 +137,99 @@ fn scenarios() -> Vec<Scenario> {
         add(format!("place_{placement:?}"), params, inf);
     }
 
+    // Wider coverage. Every other preset while growing and with more seeds.
+    let others = |skip: [TreePreset; 2]| TreePreset::ALL.into_iter().filter(move |p| !skip.contains(p));
+    for p in others([TreePreset::Oak, TreePreset::Pine]) {
+        for age in [2.0, 4.0, 6.0] {
+            add(format!("age_{}_{age}", p.name()), preset(p), age);
+        }
+    }
+    for p in others([TreePreset::Oak, TreePreset::Maple]) {
+        for seed in 1..=3 {
+            let mut params = preset(p);
+            params.seed = seed;
+            add(format!("seed_{}_{seed}", p.name()), params, inf);
+        }
+    }
+
+    // Every leaf style x placement on a second preset.
+    for style in [
+        LeafStyle::CrossedPlanes,
+        LeafStyle::SingleQuad,
+        LeafStyle::ClusterSphere,
+        LeafStyle::StarBurst,
+        LeafStyle::NeedleCluster,
+    ] {
+        for placement in [
+            FoliagePlacement::TerminalBranches,
+            FoliagePlacement::AllBranches,
+            FoliagePlacement::TipClusters,
+        ] {
+            let mut params = preset(TreePreset::Maple);
+            params.foliage.style = style;
+            params.foliage.placement = placement;
+            add(format!("leafplace_{style:?}_{placement:?}"), params, inf);
+        }
+    }
+
+    // Extreme parameter values on the oak.
+    let extremes: &[(&str, Edit)] = &[
+        ("extreme_droop", |p| {
+            p.branches.gravity_strength = 2.0;
+            p.branches.stiffness = 0.0;
+        }),
+        ("extreme_droop_split", |p| {
+            p.branches.gravity_strength = 1.0;
+            p.branches.stiffness = 0.0;
+            p.split.enabled = true;
+            p.split.probability = 1.0;
+            p.split.radius_threshold = 0.0;
+        }),
+        ("extreme_droop_low", |p| {
+            // Floor avoidance against bent wood near the ground.
+            p.branches.start = 0.05;
+            p.branches.gravity_strength = 2.0;
+            p.branches.stiffness = 0.0;
+            p.branches.up_attraction = -1.0;
+        }),
+        ("extreme_wobble", |p| p.trunk.randomness = 1.0),
+        ("extreme_twist", |p| {
+            p.trunk.twist = 720.0;
+            p.branches.twist = 360.0;
+        }),
+        ("extreme_random", |p| p.branches.randomness = 1.0),
+        ("extreme_recursion", |p| {
+            p.branches.recursion = 3;
+            p.branches.sub_branch_count = 4;
+        }),
+        ("extreme_flat", |p| p.branches.flatness = 1.0),
+        ("extreme_horizontal", |p| {
+            p.branches.angle = 90.0;
+            p.branches.up_attraction = 0.0;
+        }),
+        ("extreme_vertical", |p| p.branches.angle = 0.0),
+        ("extreme_mesh", |p| {
+            p.mesh.pipe_radius_enabled = true;
+            p.mesh.smooth_iterations = 3;
+            p.mesh.adaptive_resolution = true;
+        }),
+        ("extreme_lowpoly", |p| {
+            p.trunk.radial_segments = 3;
+            p.trunk.height_segments = 1;
+        }),
+        ("extreme_highpoly", |p| {
+            p.trunk.radial_segments = 32;
+            p.trunk.height_segments = 32;
+        }),
+        ("extreme_noleaves", |p| p.foliage.enabled = false),
+        ("extreme_bigcollar", |p| p.mesh.collar_length = 6.0),
+    ];
+    for (name, edit) in extremes {
+        let mut params = preset(TreePreset::Oak);
+        edit(&mut params);
+        add(name.to_string(), params, inf);
+    }
+
     list
 }
 
