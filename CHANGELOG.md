@@ -17,7 +17,7 @@ The first release.
 - `build_tree(params, age)`: one deterministic call from parameters and age to CPU meshes (wood and
   leaves) plus the aged skeleton. The same seed always gives the same tree.
 - A continuous growth model. Every node has a birth age and a duration, so a tree can be shown at
-  any age from a bare seedling to maturity, and leaves never re-roll as it grows.
+  any age from a bare seedling to maturity; leaves never re-roll or disappear as it grows.
 - `FloraPlugin` with the `ProceduralTree`, `TreeAge` and `Growing` components. It rebuilds the
   meshes when parameters or age change and reports each rebuild with a `TreeGenerated` message.
 - Branch shape: gravity bend scaled by each branch's lever arm, Y-splits, recursive sub-branches,

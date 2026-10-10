@@ -79,7 +79,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 ## Features
 
 - **15 presets**: oak, pine, willow, birch, palm, cypress, bonsai, maple, spruce, poplar, baobab, dragon tree, Japanese maple, dead tree and redwood. Each is a plain `TreeParams` value you can edit.
-- **Growth over time.** Every branch has a birth age and a growth duration, derived from where it sits on the tree. A tree can be shown at any age, branches thicken after they lengthen, and leaves grow to full size without re-rolling as the tree ages.
+- **Growth over time.** Every branch has a birth age and a growth duration, derived from where it sits on the tree. A tree can be shown at any age, branches thicken after they lengthen, and leaves grow to full size without re-rolling or disappearing as the tree ages.
 - **Deterministic.** Each branch draws randomness from its own seeded stream, so the same `seed` gives the same tree on every run, and aging never re-rolls branches or leaves that already exist.
 - **Branch shape**: crown envelopes, phyllotaxis, apical dominance, Y-splits, recursive sub-branches, twist, and a gravity bend that sub-branches and leaves follow. Floor avoidance keeps even strongly drooping wood above the ground.
 - **Closed wood.** Branches meet the trunk through flared collars and root segments, forks taper into their halves, and trunk tops end in a flat cap, a cone or a leader branch. Optional pipe-model radii, radius-adaptive ring counts and volume-preserving (Taubin) smoothing that keeps seams, branch ends and twig seats in place.
@@ -90,7 +90,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds. |
-| `gallery` | Renders 163 scenarios (every preset at several ages and seeds, every leaf style × placement, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it. |
+| `gallery` | Renders 258 scenarios (every preset at several ages and seeds, forced splits and smoothing on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it. |
 | `capture_growth` | Records the clip above as numbered PNG frames. |
 
 ```sh
