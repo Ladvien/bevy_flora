@@ -623,15 +623,23 @@ fn generate_subs(
             lerp(base_t, 0.3, -b.sub_branch_position_bias)
         };
         let start = parent.start + parent.direction * parent.length * t;
+        // A drooping parent hands its children its direction where they attach
+        // (the tangent of the bent wood), so twigs hang from arching limbs
+        // instead of leaving as if the limb were straight.
+        let tangent = {
+            let mut bent = parent.clone();
+            bent.bend = (b.gravity_strength * (1.0 - b.stiffness)).max(0.0);
+            bent.bent_direction(t)
+        };
 
         let spread = rng.range(30.0, 60.0).to_radians();
         let rotation = rng.range(0.0, TAU);
 
-        let perp = perpendicular(parent.direction);
-        let perp2 = parent.direction.cross(perp);
+        let perp = perpendicular(tangent);
+        let perp2 = tangent.cross(perp);
         let offset = perp * rotation.cos() + perp2 * rotation.sin();
         let spread_direction = |side: f32| {
-            let d = (parent.direction * spread.cos() + offset * (side * spread.sin()))
+            let d = (tangent * spread.cos() + offset * (side * spread.sin()))
                 .normalize_or_zero();
             if b.flatness > 0.0 {
                 Vec3::new(d.x, d.y * (1.0 - b.flatness), d.z).normalize_or_zero()
@@ -823,6 +831,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn sub_branches_spread_around_the_bent_tangent() {
+        // D-030: children took the direction their drooping parent left the
+        // trunk with, so twigs stuck out of arching limbs instead of hanging.
+        let mut params = TreePreset::Oak.params();
+        params.branches.gravity_strength = 2.0;
+        params.branches.stiffness = 0.0;
+        params.branches.flatness = 0.0;
+        params.branches.floor_avoidance = false;
+        let s = generate_skeleton(&params);
+        let mut checked = 0;
+        for n in s.nodes.iter().filter(|n| n.kind == NodeKind::Sub) {
+            let parent = &s.nodes[n.parent.unwrap() as usize];
+            let tangent = parent.bent_direction(n.attach_t);
+            let spread = n.direction.dot(tangent).clamp(-1.0, 1.0).acos().to_degrees();
+            assert!(
+                (29.9..=60.1).contains(&spread),
+                "sub {} leaves its parent's tangent at {spread} degrees",
+                n.id
+            );
+            checked += 1;
+        }
+        assert!(checked > 20, "only {checked} sub-branches");
     }
 
     #[test]
