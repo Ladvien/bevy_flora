@@ -252,6 +252,15 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
+/// `(base, tip)` radii of a new branch under `BranchParams::min_twig_radius`:
+/// at least `floor` at the base and `floor / 2` at the tip, so twigs still
+/// taper instead of ending in flat discs, and never thicker than `parent`, the
+/// radius of the wood they grow from.
+fn floored_radii(base: f32, tip: f32, floor: f32, parent: f32) -> (f32, f32) {
+    let base = base.max(floor).min(parent);
+    (base, tip.max(0.5 * floor).min(base))
+}
+
 fn random_vec(rng: &mut SeededRng) -> Vec3 {
     Vec3::new(
         rng.range(-1.0, 1.0),
@@ -467,8 +476,12 @@ fn generate_primaries(params: &TreeParams, rng: &mut SeededRng) -> Vec<Node> {
         let up_offset = Vec3::Y * b.up_attraction;
         let direction = (flattened_dir + random_offset + up_offset).normalize_or_zero();
 
-        let base_radius = (trunk_r * b.radius_ratio).max(b.min_twig_radius);
-        let tip_radius = (base_radius * (1.0 - b.taper)).max(b.min_twig_radius);
+        let (base_radius, tip_radius) = floored_radii(
+            trunk_r * b.radius_ratio,
+            trunk_r * b.radius_ratio * (1.0 - b.taper),
+            b.min_twig_radius,
+            trunk_r,
+        );
 
         let shape_mult = b.crown_shape.length_multiplier(height_ratio);
         let final_mult = lerp(1.0, shape_mult, b.crown_influence);
@@ -565,14 +578,16 @@ fn try_split(
 
     let min_radius = params.branches.min_twig_radius;
     let branch_tip_radius = parent.tip_radius * 0.9;
+    let (split_base, split_tip) =
+        floored_radii(split_radius * 0.7, branch_tip_radius * 0.7, min_radius, split_radius);
     let template = Node {
         kind: NodeKind::Split,
         parent: Some(idx as u32),
         attach_t: 1.0,
         anchor: split_point,
         start: split_point,
-        base_radius: (split_radius * 0.7).max(min_radius),
-        tip_radius: (branch_tip_radius * 0.7).max(min_radius),
+        base_radius: split_base,
+        tip_radius: split_tip,
         depth: parent.depth,
         height_ratio: parent.height_ratio,
         ..blank_node()
@@ -591,7 +606,7 @@ fn try_split(
     // The stub tapers into its halves, so the fork shows no ledge.
     let stub = &mut skeleton.nodes[idx];
     stub.length *= split_t;
-    stub.tip_radius = (split_radius * 0.7).max(min_radius);
+    stub.tip_radius = split_base;
 
     Some((child_a, child_b))
 }
@@ -650,8 +665,13 @@ fn generate_subs(
 
         let dominance_mult = 1.0 - (b.apical_dominance * parent.height_ratio * 0.4);
         let length = parent.length * b.sub_branch_scale * dominance_mult;
-        let base_radius = (lerp(parent.base_radius, parent.tip_radius, t) * b.radius_ratio).max(b.min_twig_radius);
-        let tip_radius = (base_radius * (1.0 - b.taper)).max(b.min_twig_radius);
+        let parent_radius = lerp(parent.base_radius, parent.tip_radius, t);
+        let (base_radius, tip_radius) = floored_radii(
+            parent_radius * b.radius_ratio,
+            parent_radius * b.radius_ratio * (1.0 - b.taper),
+            b.min_twig_radius,
+            parent_radius,
+        );
 
         // A sub-branch spreading toward the trunk would grow through it (steep
         // primaries hug the trunk); spread to the other side of the parent instead.
@@ -786,14 +806,16 @@ mod tests {
     fn sub_branch_radius_follows_parent_at_attachment() {
         // `BranchParams::radius_ratio`: base radius relative to the parent
         // radius at the attachment point (as for primaries on the trunk), but
-        // never below `min_twig_radius`.
+        // never below `min_twig_radius` and never above the parent's radius.
         for preset in TreePreset::ALL {
             let params = preset.params();
             let s = generate_skeleton(&params);
             for n in s.nodes.iter().filter(|n| n.kind == NodeKind::Sub) {
                 let parent = &s.nodes[n.parent.unwrap() as usize];
                 let parent_r = lerp(parent.base_radius, parent.tip_radius, n.attach_t);
-                let expected = (parent_r * params.branches.radius_ratio).max(params.branches.min_twig_radius);
+                let expected = (parent_r * params.branches.radius_ratio)
+                    .max(params.branches.min_twig_radius)
+                    .min(parent_r);
                 assert!(
                     (n.base_radius - expected).abs() <= 1e-6,
                     "{}: sub {} base radius {} != {expected}",
@@ -808,7 +830,9 @@ mod tests {
     #[test]
     fn no_branch_is_thinner_than_the_twig_floor() {
         // D-036: second-level twigs came out at 0.4 mm (willow: 0.0 mm) and
-        // read as hairlines, some of them bare in mid-air.
+        // read as hairlines, some of them bare in mid-air. The floor applies
+        // in full at the base and by half at the tip, so twigs still taper,
+        // and a twig is never thicker than the wood it grows from.
         for preset in TreePreset::ALL {
             for floor in [0.002, 0.004] {
                 let mut params = preset.params();
@@ -818,16 +842,14 @@ mod tests {
                 params.split.radius_threshold = 0.0;
                 let s = generate_skeleton(&params);
                 // The leader is the trunk's pointed extension, not a twig.
-                for n in s.nodes.iter().skip(1).filter(|n| n.kind != NodeKind::Leader) {
-                    assert!(
-                        n.tip_radius >= floor - 1e-7 && n.base_radius >= n.tip_radius - 1e-7,
-                        "{} floor {floor}: {:?} {} radii {} -> {}",
-                        preset.name(),
-                        n.kind,
-                        n.id,
-                        n.base_radius,
-                        n.tip_radius
-                    );
+                for (i, n) in s.nodes.iter().enumerate().skip(1).filter(|(_, n)| n.kind != NodeKind::Leader) {
+                    let what = format!("{} floor {floor}: {:?} {i} radii {} -> {}", preset.name(), n.kind, n.base_radius, n.tip_radius);
+                    assert!(n.tip_radius >= 0.5 * floor - 1e-7 && n.base_radius >= n.tip_radius - 1e-7, "{what}");
+                    let parent = &s.nodes[n.parent.unwrap() as usize];
+                    if parent.kind != NodeKind::Trunk {
+                        let parent_r = lerp(parent.base_radius, parent.tip_radius, n.attach_t);
+                        assert!(n.base_radius <= parent_r + 1e-7, "{what}: parent is {parent_r} where it attaches");
+                    }
                 }
             }
         }
