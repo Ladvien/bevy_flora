@@ -13,6 +13,9 @@ const TRUNK_BASIS: RingBasis = RingBasis {
     forward: Vec3::NEG_Z,
 };
 
+/// Height of a pointed trunk's tip cone relative to the trunk's top radius.
+const POINTED_TIP_ASPECT: f32 = 4.0;
+
 /// Mesh for the (aged) trunk `node`.
 ///
 /// Ring `k` evaluates the full-height profile at `t = k / (rings - 1) *
@@ -67,16 +70,27 @@ pub fn trunk_mesh(trunk: &TrunkParams, node: &Node, seed: i32) -> MeshData {
         prev_ring = Some(ring);
     }
 
+    // A mature pointed trunk closes in a cone above its top ring.
+    if let (TrunkTermination::PointedTip, Some(top_ring)) = (trunk.termination, prev_ring)
+        && node.progress >= 1.0
+    {
+        let tip_length = trunk_radius_at(trunk, 1.0) * rp * POINTED_TIP_ASPECT;
+        let apex = center_at(1.0) + Vec3::Y * tip_length;
+        let twist = trunk.twist.to_radians();
+        let tip = emit_ring(&mut mesh, apex, TRUNK_BASIS, segments, twist, 1.0, |_, _| 0.0);
+        connect_rings(&mut mesh, top_ring, tip, segments);
+    }
+
     // Bottom cap matches ring 0 (full root bulge).
     let bottom_blend = root_blend_at(0.0);
     emit_cap(&mut mesh, Vec3::ZERO, TRUNK_BASIS, segments, 0.0, Vec3::NEG_Y, |_, angle| {
         (base_radius + bulge(angle, bottom_blend)) * rp
     });
 
-    // Top cap: flat-capped trunks always; otherwise only while still growing
-    // (a pointed tip or leader covers the top once mature).
+    // Top cap: flat-capped trunks always; the others only while still growing
+    // (once mature, the pointed tip or the leader branch closes the top).
     let top_cap = match trunk.termination {
-        TrunkTermination::FlatCap => trunk.taper >= 0.1,
+        TrunkTermination::FlatCap => true,
         TrunkTermination::PointedTip | TrunkTermination::LeaderBranch => node.progress < 1.0,
     };
     if top_cap {
@@ -143,5 +157,33 @@ mod tests {
         assert_indices_valid(&mesh, "baobab");
         let max = *mesh.indices.iter().max().unwrap() as usize;
         assert!(max < mesh.positions.len());
+    }
+
+    #[test]
+    fn flat_and_pointed_trunks_are_closed() {
+        // Without a leader on top, nothing else covers the trunk: its mesh
+        // must have no open edge (seen from above it would be a hole).
+        for termination in [TrunkTermination::FlatCap, TrunkTermination::PointedTip] {
+            for taper in [0.3, 0.05] {
+                let mut params = TreePreset::Oak.params();
+                params.trunk.termination = termination;
+                params.trunk.taper = taper;
+                let skeleton = generate_skeleton(&params);
+                let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed);
+                let key = |i: u32| (mesh.positions[i as usize] * 1.0e4).round().as_ivec3().to_array();
+                let mut uses = std::collections::HashMap::new();
+                for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
+                    for (u, v) in [(a, b), (b, c), (c, a)] {
+                        let (ku, kv) = (key(u), key(v));
+                        if ku != kv {
+                            *uses.entry((ku.min(kv), ku.max(kv))).or_insert(0) += 1;
+                        }
+                    }
+                }
+                let open = uses.values().filter(|&&n| n == 1).count();
+                assert_eq!(open, 0, "{termination:?} taper {taper}: {open} open edges");
+                assert_faces_outward(&mesh, "closed trunk");
+            }
+        }
     }
 }
