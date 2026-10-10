@@ -87,8 +87,8 @@ impl Skeleton {
     /// (duration * thickening_lag))`, radii scaled by `radius_progress`, and
     /// trunk-attached starts pulled toward the trunk axis by the trunk's
     /// `radius_progress`. Nodes on a branch sit on the aged parent's (bent)
-    /// axis at their attachment distance. Indices are remapped and
-    /// `child_count` recounted.
+    /// axis at their attachment distance. Indices are remapped; `child_count`
+    /// keeps the full-grown count, so terminal-branch leaves never move.
     /// The trunk is always kept (with `progress = 0` at `age <= 0`);
     /// `age = f32::INFINITY` returns a copy with every progress at 1.
     pub fn aged(&self, age: f32, growth: &GrowthParams) -> Skeleton {
@@ -145,14 +145,11 @@ impl Skeleton {
                 tip_radius: node.tip_radius * radius_progress,
                 progress,
                 radius_progress,
-                child_count: 0,
                 ..node.clone()
             });
         }
 
-        let mut out = Skeleton { nodes };
-        out.recount_children();
-        out
+        Skeleton { nodes }
     }
 
     /// Age after which [`Skeleton::aged`] no longer changes anything.

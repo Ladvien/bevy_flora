@@ -585,4 +585,30 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn leaves_never_disappear_as_a_tree_ages() {
+        // D-039: tip placements must not drop a branch's leaves when its
+        // first (still leafless) twigs are born; baobab went from 80 leaves
+        // at age 6 to none at age 8.
+        for preset in TreePreset::ALL {
+            for placement in [FoliagePlacement::TerminalBranches, FoliagePlacement::TipClusters] {
+                let mut params = preset.params();
+                params.foliage.placement = placement;
+                let mature = generate_skeleton(&params);
+                let mut previous = 0;
+                for step in 0..=40 {
+                    let age = step as f32 * 0.5;
+                    let skeleton = mature.aged(age, &params.growth);
+                    let count = collect_leaf_points(&skeleton, &params.foliage, &params.growth, &params.trunk, params.seed).len();
+                    assert!(
+                        count >= previous,
+                        "{} {placement:?}: {previous} leaves before age {age}, {count} at it",
+                        preset.name()
+                    );
+                    previous = count;
+                }
+            }
+        }
+    }
 }

@@ -62,7 +62,9 @@ pub struct Node {
     pub progress: f32,
     /// Radius growth fraction, 1.0 after generation; set by [`Skeleton::aged`].
     pub radius_progress: f32,
-    /// Number of direct children (maintained by [`Skeleton::recount_children`]).
+    /// Number of direct children in the full-grown tree. [`Skeleton::aged`]
+    /// keeps it, so terminal-branch decisions (leaf placement) do not change
+    /// with age; [`Skeleton::children`] lists the children present now.
     pub child_count: u32,
 }
 
@@ -74,7 +76,7 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
-    /// True when node `i` has no children.
+    /// True when node `i` has no children in the full-grown tree.
     pub fn is_terminal(&self, i: usize) -> bool {
         self.nodes[i].child_count == 0
     }
