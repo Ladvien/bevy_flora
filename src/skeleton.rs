@@ -123,9 +123,11 @@ pub const BENT_AXIS_POINTS: u32 = 6;
 impl Node {
     /// `points` samples of the wood's axis, base to tip: `(center, direction)`.
     ///
-    /// The direction at fraction `t` is `direction` with `t² · bend` taken off
-    /// its vertical component, and the centers integrate those directions in
-    /// equal steps of `length / (points − 1)`.
+    /// The direction at fraction `t` is `direction` with `t² · bend · h` taken
+    /// off its vertical component, where `h` is the direction's horizontal
+    /// length: gravity's lever arm, so a vertical branch does not bend and a
+    /// near-vertical one cannot fold back on itself. The centers integrate
+    /// those directions in equal steps of `length / (points − 1)`.
     pub fn axis(&self, points: u32) -> Vec<(Vec3, Vec3)> {
         let points = points.max(2);
         let step = self.length / (points - 1) as f32;
@@ -158,7 +160,8 @@ impl Node {
             return self.direction;
         }
         let d = self.direction;
-        Vec3::new(d.x, d.y - t * t * self.bend, d.z).normalize_or_zero()
+        let lever = Vec3::new(d.x, 0.0, d.z).length();
+        Vec3::new(d.x, d.y - t * t * self.bend * lever, d.z).normalize_or_zero()
     }
 }
 
@@ -727,6 +730,30 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn strong_gravity_never_folds_a_branch() {
+        // Gravity bends wood toward the ground; it must never turn a branch
+        // back on itself (consecutive axis directions more than 90° apart),
+        // which pinches its tube inside out.
+        let mut params = TreePreset::Oak.params();
+        params.branches.gravity_strength = 2.0;
+        params.branches.stiffness = 0.0;
+        let s = generate_skeleton(&params);
+        for n in s.nodes.iter().skip(1) {
+            let axis = n.axis(BENT_AXIS_POINTS);
+            for w in axis.windows(2) {
+                assert!(
+                    w[0].1.dot(w[1].1) > 0.0,
+                    "{:?} {} folds: {:?} -> {:?}",
+                    n.kind,
+                    n.id,
+                    w[0].1,
+                    w[1].1
+                );
             }
         }
     }
