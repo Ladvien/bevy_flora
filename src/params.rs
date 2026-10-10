@@ -44,12 +44,15 @@ pub enum LeafStyle {
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FoliagePlacement {
-    /// Only at the tips of branches without children.
+    /// Only at the tips of branches without children in the full-grown tree.
+    /// A young branch that will grow twigs stays leafless, so leaves never
+    /// appear and then vanish as the tree ages.
     #[default]
     TerminalBranches,
     /// Distributed along every branch.
     AllBranches,
-    /// Spherical clusters at terminal branch tips.
+    /// Spherical clusters at the tips of branches without children in the
+    /// full-grown tree.
     TipClusters,
 }
 
@@ -255,7 +258,9 @@ impl Default for SplitParams {
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MeshParams {
-    /// Laplacian smoothing passes on the wood mesh (0 = off).
+    /// Smoothing passes on the wood mesh (0 = off). Volume-preserving (Taubin)
+    /// smoothing that softens creases but keeps the ground ring, branch ends,
+    /// twig seats, the trunk under collars and hairline twigs in place.
     pub smooth_iterations: u32,
     /// Smoothing strength per pass (0–1).
     pub smooth_factor: f32,
