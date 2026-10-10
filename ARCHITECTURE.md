@@ -56,11 +56,19 @@ Everything that makes leaves look good is baked into the mesh, so the stock
 Front faces are counter-clockwise; the helpers in `mesh/rings.rs` own the winding
 convention. Never fix winding in an individual mesher.
 
-A branch's shape is `Node::axis` (bent by `Node::bend`); the tube mesher, child
-placement and leaf placement (`Node::point_at`) all read it, so wood, sub-branches
-and leaves agree. Sub-branches spreading toward the trunk and tip-cluster leaves
-landing inside it are mirrored away (`skeleton::trunk_depth`). Each primary's
-tube and collar get a `root_segment` reaching into the trunk (`primary_root`),
+A branch's shape is `Node::axis` (bent by `Node::bend`) sampled at
+`Node::axis_points()` points: 6 for a lightly bent branch, up to 16 when gravity
+turns its direction by more than ~4.6° between points, so a long drooping limb is
+smooth. The tube mesher, child placement and leaf placement (`Node::point_at`)
+all use the same count, so wood, sub-branches and leaves agree. Sub-branches
+spread around the parent's bent tangent where they attach (a drooping limb hands
+its twigs the direction it has there, so they hang). Generated radii are floored
+by `BranchParams::min_twig_radius` at the base and half of it at the tip, and
+never exceed the wood they grow from (`skeleton::floored_radii`), so twigs taper
+but never shrink to hairlines. Sub-branches spreading toward the trunk and
+tip-cluster leaves landing inside it are mirrored away (`skeleton::trunk_depth`).
+Each primary's tube and collar get a `root_segment` reaching into the trunk
+(`primary_root`),
 so junctions have no open ends. Smoothing (Taubin λ|μ, so it does not shrink the
 wood) welds coincident vertices (UV seams) and pins open boundaries, the ground
 ring, branch-end caps and the parent surface under each child's seat, so it

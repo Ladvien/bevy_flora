@@ -5,6 +5,41 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.3.0] - 2026-10-10
+
+Thicker twigs, smoother drooping branches and a weeping willow. `BranchParams` gains a field, hence
+the minor bump.
+
+### Added
+
+- `BranchParams::min_twig_radius` (metres, default 0.005; `0` turns it off). No branch is thinner
+  than this at its base, or thinner than half of it at its tip, so twigs taper but no longer shrink
+  to the 0.4 mm hairlines (0.0 mm on the willow) the radius ratios used to give them, and a twig is
+  never thicker than the wood it grows from. The willow uses 3 mm and the bonsai and Japanese maple
+  2.5 mm. Gallery close-ups show twigs as sticks instead of wires; at full-tree distance they are
+  still thin lines.
+- `Node::axis_points()` and `skeleton::MAX_AXIS_POINTS`: the number of mesh rings a branch's wood
+  gets.
+
+### Changed
+
+- Drooping branches are meshed on more rings: `BENT_AXIS_POINTS` (6) is now the minimum, and a
+  branch that gravity turns more than about 4.6 degrees between two rings gets more, up to 16, so
+  long arching limbs are smooth instead of faceted. Wood, children, leaves and the floor test all
+  use the same count. The willow's wood grows from about 10k to 38k vertices; presets with mild
+  droop barely change.
+- Sub-branches leave a drooping parent along its bent tangent at the attachment point, not along
+  the direction the parent left the trunk with, so twigs hang from arching limbs. This shifts
+  sub-branch directions slightly on every preset with `gravity_strength > 0`.
+- The willow preset weeps: `branches.start` 0.4 -> 0.5, `density` 2 -> 4, `length` 0.7 -> 0.8,
+  `up_attraction` -0.75 -> -0.5, `gravity_strength` 0.5 -> 2.5 and `stiffness` 0.2 -> 0.1. It has 8
+  primaries instead of 5, branch tips hang nearly straight down, and the crown is a wide skirt that
+  reaches the ground.
+- `BranchParams` literals need the new field: end them with `..Default::default()`. Serialized
+  params from 0.2.x (the `serde` feature) lack `min_twig_radius` and no longer deserialize as they
+  are.
+- `docs/growth.gif`, the README clip, is re-recorded for this release.
+
 ## [0.2.2] - 2026-10-10
 
 Appearance and docs only; no API changes.
@@ -106,6 +141,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.3.0]: https://github.com/Ladvien/bevy_flora/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Ladvien/bevy_flora/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Ladvien/bevy_flora/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Ladvien/bevy_flora/compare/v0.1.1...v0.2.0

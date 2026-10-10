@@ -129,8 +129,15 @@ impl Skeleton {
     }
 }
 
-/// Axis points of a bent branch; the branch mesher puts one ring on each.
+/// Fewest axis points (mesh rings) of a bent or twisted branch.
 pub const BENT_AXIS_POINTS: u32 = 6;
+
+/// Most axis points a bent branch gets, however far it droops.
+pub const MAX_AXIS_POINTS: u32 = 16;
+
+/// Largest change of direction, in radians, between two neighbouring axis
+/// points of a bent branch; keeps a drooping curve from showing facets.
+const MAX_AXIS_TURN: f32 = 0.08;
 
 impl Node {
     /// `points` samples of the wood's axis, base to tip: `(center, direction)`.
@@ -155,13 +162,37 @@ impl Node {
             .collect()
     }
 
+    /// How many axis points (mesh rings) this branch needs: `BENT_AXIS_POINTS`,
+    /// or more when gravity turns its direction by more than `MAX_AXIS_TURN`
+    /// between two points, up to `MAX_AXIS_POINTS`. Wood, children, leaves and
+    /// the floor test all sample the axis with this count, so they agree.
+    pub fn axis_points(&self) -> u32 {
+        if self.bend <= 0.0 {
+            return BENT_AXIS_POINTS;
+        }
+        // The direction turns fastest at the tip (d/dt of t² · bend · lever), so
+        // the last segment decides. Start from the linear estimate, then check.
+        let lever = Vec3::new(self.direction.x, 0.0, self.direction.z).length();
+        let estimate = (2.0 * self.bend * lever / MAX_AXIS_TURN).ceil() as u32 + 1;
+        let mut points = estimate.clamp(BENT_AXIS_POINTS, MAX_AXIS_POINTS);
+        let tip = self.bent_direction(1.0);
+        while points < MAX_AXIS_POINTS {
+            let before = self.bent_direction(1.0 - 1.0 / (points - 1) as f32);
+            if tip.dot(before).clamp(-1.0, 1.0).acos() <= MAX_AXIS_TURN {
+                break;
+            }
+            points += 1;
+        }
+        points
+    }
+
     /// Point at fraction `f` (clamped to 0–1) of the way along the wood's axis.
     pub fn point_at(&self, f: f32) -> Vec3 {
         let f = f.clamp(0.0, 1.0);
         if self.bend <= 0.0 {
             return self.start + self.direction * (self.length * f);
         }
-        let axis = self.axis(BENT_AXIS_POINTS);
+        let axis = self.axis(self.axis_points());
         let x = f * (axis.len() - 1) as f32;
         let k = (x as usize).min(axis.len() - 2);
         axis[k].0.lerp(axis[k + 1].0, x - k as f32)
@@ -178,7 +209,7 @@ impl Node {
 
     /// Lowest point of the wood's surface (axis height minus the radius there).
     fn lowest(&self) -> f32 {
-        let axis = self.axis(BENT_AXIS_POINTS);
+        let axis = self.axis(self.axis_points());
         let last = (axis.len() - 1) as f32;
         axis.iter()
             .enumerate()
@@ -219,6 +250,15 @@ impl Node {
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+/// `(base, tip)` radii of a new branch under `BranchParams::min_twig_radius`:
+/// at least `floor` at the base and `floor / 2` at the tip, so twigs still
+/// taper instead of ending in flat discs, and never thicker than `parent`, the
+/// radius of the wood they grow from.
+fn floored_radii(base: f32, tip: f32, floor: f32, parent: f32) -> (f32, f32) {
+    let base = base.max(floor).min(parent);
+    (base, tip.max(0.5 * floor).min(base))
 }
 
 fn random_vec(rng: &mut SeededRng) -> Vec3 {
@@ -436,8 +476,12 @@ fn generate_primaries(params: &TreeParams, rng: &mut SeededRng) -> Vec<Node> {
         let up_offset = Vec3::Y * b.up_attraction;
         let direction = (flattened_dir + random_offset + up_offset).normalize_or_zero();
 
-        let base_radius = trunk_r * b.radius_ratio;
-        let tip_radius = base_radius * (1.0 - b.taper);
+        let (base_radius, tip_radius) = floored_radii(
+            trunk_r * b.radius_ratio,
+            trunk_r * b.radius_ratio * (1.0 - b.taper),
+            b.min_twig_radius,
+            trunk_r,
+        );
 
         let shape_mult = b.crown_shape.length_multiplier(height_ratio);
         let final_mult = lerp(1.0, shape_mult, b.crown_influence);
@@ -532,15 +576,18 @@ fn try_split(
     let dir2 = (parent.direction * half_angle.cos() - rotated_perp * half_angle.sin())
         .normalize_or_zero();
 
+    let min_radius = params.branches.min_twig_radius;
     let branch_tip_radius = parent.tip_radius * 0.9;
+    let (split_base, split_tip) =
+        floored_radii(split_radius * 0.7, branch_tip_radius * 0.7, min_radius, split_radius);
     let template = Node {
         kind: NodeKind::Split,
         parent: Some(idx as u32),
         attach_t: 1.0,
         anchor: split_point,
         start: split_point,
-        base_radius: split_radius * 0.7,
-        tip_radius: branch_tip_radius * 0.7,
+        base_radius: split_base,
+        tip_radius: split_tip,
         depth: parent.depth,
         height_ratio: parent.height_ratio,
         ..blank_node()
@@ -559,7 +606,7 @@ fn try_split(
     // The stub tapers into its halves, so the fork shows no ledge.
     let stub = &mut skeleton.nodes[idx];
     stub.length *= split_t;
-    stub.tip_radius = split_radius * 0.7;
+    stub.tip_radius = split_base;
 
     Some((child_a, child_b))
 }
@@ -591,15 +638,23 @@ fn generate_subs(
             lerp(base_t, 0.3, -b.sub_branch_position_bias)
         };
         let start = parent.start + parent.direction * parent.length * t;
+        // A drooping parent hands its children its direction where they attach
+        // (the tangent of the bent wood), so twigs hang from arching limbs
+        // instead of leaving as if the limb were straight.
+        let tangent = {
+            let mut bent = parent.clone();
+            bent.bend = (b.gravity_strength * (1.0 - b.stiffness)).max(0.0);
+            bent.bent_direction(t)
+        };
 
         let spread = rng.range(30.0, 60.0).to_radians();
         let rotation = rng.range(0.0, TAU);
 
-        let perp = perpendicular(parent.direction);
-        let perp2 = parent.direction.cross(perp);
+        let perp = perpendicular(tangent);
+        let perp2 = tangent.cross(perp);
         let offset = perp * rotation.cos() + perp2 * rotation.sin();
         let spread_direction = |side: f32| {
-            let d = (parent.direction * spread.cos() + offset * (side * spread.sin()))
+            let d = (tangent * spread.cos() + offset * (side * spread.sin()))
                 .normalize_or_zero();
             if b.flatness > 0.0 {
                 Vec3::new(d.x, d.y * (1.0 - b.flatness), d.z).normalize_or_zero()
@@ -610,8 +665,13 @@ fn generate_subs(
 
         let dominance_mult = 1.0 - (b.apical_dominance * parent.height_ratio * 0.4);
         let length = parent.length * b.sub_branch_scale * dominance_mult;
-        let base_radius = lerp(parent.base_radius, parent.tip_radius, t) * b.radius_ratio;
-        let tip_radius = base_radius * (1.0 - b.taper);
+        let parent_radius = lerp(parent.base_radius, parent.tip_radius, t);
+        let (base_radius, tip_radius) = floored_radii(
+            parent_radius * b.radius_ratio,
+            parent_radius * b.radius_ratio * (1.0 - b.taper),
+            b.min_twig_radius,
+            parent_radius,
+        );
 
         // A sub-branch spreading toward the trunk would grow through it (steep
         // primaries hug the trunk); spread to the other side of the parent instead.
@@ -745,14 +805,17 @@ mod tests {
     #[test]
     fn sub_branch_radius_follows_parent_at_attachment() {
         // `BranchParams::radius_ratio`: base radius relative to the parent
-        // radius at the attachment point (as for primaries on the trunk).
+        // radius at the attachment point (as for primaries on the trunk), but
+        // never below `min_twig_radius` and never above the parent's radius.
         for preset in TreePreset::ALL {
             let params = preset.params();
             let s = generate_skeleton(&params);
             for n in s.nodes.iter().filter(|n| n.kind == NodeKind::Sub) {
                 let parent = &s.nodes[n.parent.unwrap() as usize];
                 let parent_r = lerp(parent.base_radius, parent.tip_radius, n.attach_t);
-                let expected = parent_r * params.branches.radius_ratio;
+                let expected = (parent_r * params.branches.radius_ratio)
+                    .max(params.branches.min_twig_radius)
+                    .min(parent_r);
                 assert!(
                     (n.base_radius - expected).abs() <= 1e-6,
                     "{}: sub {} base radius {} != {expected}",
@@ -762,6 +825,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn no_branch_is_thinner_than_the_twig_floor() {
+        // D-036: second-level twigs came out at 0.4 mm (willow: 0.0 mm) and
+        // read as hairlines, some of them bare in mid-air. The floor applies
+        // in full at the base and by half at the tip, so twigs still taper,
+        // and a twig is never thicker than the wood it grows from.
+        for preset in TreePreset::ALL {
+            for floor in [0.002, 0.004] {
+                let mut params = preset.params();
+                params.branches.min_twig_radius = floor;
+                params.split.enabled = true;
+                params.split.probability = 1.0;
+                params.split.radius_threshold = 0.0;
+                let s = generate_skeleton(&params);
+                // The leader is the trunk's pointed extension, not a twig.
+                for (i, n) in s.nodes.iter().enumerate().skip(1).filter(|(_, n)| n.kind != NodeKind::Leader) {
+                    let what = format!("{} floor {floor}: {:?} {i} radii {} -> {}", preset.name(), n.kind, n.base_radius, n.tip_radius);
+                    assert!(n.tip_radius >= 0.5 * floor - 1e-7 && n.base_radius >= n.tip_radius - 1e-7, "{what}");
+                    let parent = &s.nodes[n.parent.unwrap() as usize];
+                    if parent.kind != NodeKind::Trunk {
+                        let parent_r = lerp(parent.base_radius, parent.tip_radius, n.attach_t);
+                        assert!(n.base_radius <= parent_r + 1e-7, "{what}: parent is {parent_r} where it attaches");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sub_branches_spread_around_the_bent_tangent() {
+        // D-030: children took the direction their drooping parent left the
+        // trunk with, so twigs stuck out of arching limbs instead of hanging.
+        let mut params = TreePreset::Oak.params();
+        params.branches.gravity_strength = 2.0;
+        params.branches.stiffness = 0.0;
+        params.branches.flatness = 0.0;
+        params.branches.floor_avoidance = false;
+        let s = generate_skeleton(&params);
+        let mut checked = 0;
+        for n in s.nodes.iter().filter(|n| n.kind == NodeKind::Sub) {
+            let parent = &s.nodes[n.parent.unwrap() as usize];
+            let tangent = parent.bent_direction(n.attach_t);
+            let spread = n.direction.dot(tangent).clamp(-1.0, 1.0).acos().to_degrees();
+            assert!(
+                (29.9..=60.1).contains(&spread),
+                "sub {} leaves its parent's tangent at {spread} degrees",
+                n.id
+            );
+            checked += 1;
+        }
+        assert!(checked > 20, "only {checked} sub-branches");
     }
 
     #[test]
@@ -797,7 +913,7 @@ mod tests {
         params.branches.stiffness = 0.0;
         let s = generate_skeleton(&params);
         for n in s.nodes.iter().skip(1) {
-            let axis = n.axis(BENT_AXIS_POINTS);
+            let axis = n.axis(n.axis_points());
             for w in axis.windows(2) {
                 assert!(
                     w[0].1.dot(w[1].1) > 0.0,
@@ -808,6 +924,31 @@ mod tests {
                     w[1].1
                 );
             }
+        }
+    }
+
+    #[test]
+    fn drooping_branches_get_enough_rings_to_look_smooth() {
+        // D-034: every bent branch was meshed on 6 rings, so a long willow limb
+        // turned up to 9° at each ring and showed facets along its curve.
+        for (gravity, stiffness) in [(0.5, 0.2), (1.0, 0.2), (2.0, 0.0)] {
+            let mut params = TreePreset::Willow.params();
+            params.branches.gravity_strength = gravity;
+            params.branches.stiffness = stiffness;
+            let s = generate_skeleton(&params);
+            let mut extra = false;
+            for n in s.nodes.iter().skip(1) {
+                let axis = n.axis(n.axis_points());
+                extra |= axis.len() > BENT_AXIS_POINTS as usize;
+                if axis.len() == MAX_AXIS_POINTS as usize {
+                    continue; // capped: the most rings a branch gets
+                }
+                for w in axis.windows(2) {
+                    let turn = w[0].1.dot(w[1].1).clamp(-1.0, 1.0).acos();
+                    assert!(turn < 0.1, "gravity {gravity}: {:?} {} turns {turn} rad per ring", n.kind, n.id);
+                }
+            }
+            assert!(extra, "gravity {gravity}: no branch got more than {BENT_AXIS_POINTS} rings");
         }
     }
 

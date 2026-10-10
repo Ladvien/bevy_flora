@@ -153,6 +153,7 @@ fn oak() -> TreeParams {
             crown_influence: 0.9,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -237,6 +238,7 @@ fn pine() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -294,16 +296,16 @@ fn willow() -> TreeParams {
             twist: 10.0,
         },
         branches: BranchParams {
-            start: 0.4,
+            start: 0.5,
             end: 0.9,
-            density: 2.0,
-            length: 0.7,
+            density: 4.0,
+            length: 0.8,
             angle: 50.0,
             radius_ratio: 0.2,
             taper: 0.85,
             phyllotaxis_angle: 137.5,
             randomness: 0.3,
-            up_attraction: -0.75,
+            up_attraction: -0.5,
             recursion: 3,
             sub_branch_count: 3,
             sub_branch_scale: 0.7,
@@ -314,13 +316,14 @@ fn willow() -> TreeParams {
             angle_curve: -0.4,
             crown_angle_variation: -0.3,
             twist: 15.0,
-            gravity_strength: 0.5,
-            stiffness: 0.2,
+            gravity_strength: 2.5,
+            stiffness: 0.1,
             break_chance: 0.0,
             crown_shape: CrownShape::Hemispherical,
             crown_influence: 0.8,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.003,
         },
         split: SplitParams {
             enabled: false,
@@ -405,6 +408,7 @@ fn birch() -> TreeParams {
             crown_influence: 0.7,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -489,6 +493,7 @@ fn palm() -> TreeParams {
             crown_influence: 0.5,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -573,6 +578,7 @@ fn cypress() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -657,6 +663,7 @@ fn bonsai() -> TreeParams {
             crown_influence: 0.6,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.0025,
         },
         split: SplitParams {
             enabled: true,
@@ -741,6 +748,7 @@ fn maple() -> TreeParams {
             crown_influence: 0.85,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -825,6 +833,7 @@ fn spruce() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -909,6 +918,7 @@ fn poplar() -> TreeParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -993,6 +1003,7 @@ fn baobab() -> TreeParams {
             crown_influence: 0.7,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1077,6 +1088,7 @@ fn dragon_tree() -> TreeParams {
             crown_influence: 0.6,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1161,6 +1173,7 @@ fn japanese_maple() -> TreeParams {
             crown_influence: 0.8,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.0025,
         },
         split: SplitParams {
             enabled: true,
@@ -1245,6 +1258,7 @@ fn dead_tree() -> TreeParams {
             crown_influence: 0.4,
             floor_avoidance: false,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: true,
@@ -1316,6 +1330,7 @@ fn redwood() -> TreeParams {
             crown_influence: 0.9,
             floor_avoidance: true,
             floor_level: 0.0,
+            ..Default::default()
         },
         split: SplitParams {
             enabled: false,
@@ -1374,6 +1389,22 @@ mod tests {
         let willow = TreePreset::Willow.params();
         assert_eq!(willow.branches.crown_shape, CrownShape::Hemispherical);
         assert!(willow.branches.up_attraction < -0.3);
+    }
+
+    #[test]
+    fn willow_branches_hang_at_their_tips() {
+        // D-030: the willow spread sideways and barely weeped; only 46 of its
+        // 200 branches ended within 45° of straight down.
+        let s = crate::skeleton::generate_skeleton(&TreePreset::Willow.params());
+        let tips: Vec<f32> = s
+            .nodes
+            .iter()
+            .skip(1)
+            .filter(|n| n.kind != crate::skeleton::NodeKind::Leader)
+            .map(|n| n.axis(n.axis_points()).last().unwrap().1.y)
+            .collect();
+        let hanging = tips.iter().filter(|&&y| y < -0.7).count();
+        assert!(hanging * 10 >= tips.len() * 7, "{hanging} of {} branch tips hang", tips.len());
     }
 
     #[test]

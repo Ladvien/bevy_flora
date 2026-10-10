@@ -190,6 +190,12 @@ pub struct BranchParams {
     pub floor_avoidance: bool,
     /// World-space y of the floor, in metres, used when `floor_avoidance` is on.
     pub floor_level: f32,
+    /// Thinnest a branch's base may be, in metres; its tip is floored at half of
+    /// this, so twigs still taper. Generated radii are raised to these floors
+    /// (never above the radius of the wood a branch grows from), so twigs on a
+    /// large tree read as twigs instead of hairlines; `0` leaves every radius
+    /// as the ratios and tapers give it.
+    pub min_twig_radius: f32,
 }
 
 impl Default for BranchParams {
@@ -222,6 +228,7 @@ impl Default for BranchParams {
             crown_influence: 1.0,
             floor_avoidance: true,
             floor_level: 0.0,
+            min_twig_radius: 0.005,
         }
     }
 }
