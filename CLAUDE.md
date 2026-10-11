@@ -22,7 +22,9 @@ cargo run --example gallery -- --out target/gallery/latest [--filter <substr>]..
 - `src/skeleton.rs`, `growth.rs`: node tree and age model
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves, `build_tree`, Bevy components/systems
-- `examples/showcase.rs`, `examples/gallery.rs` (visual QA renderer), `examples/capture_growth.rs` (records `docs/growth.gif` for the README)
+- `src/shading/` (`FloraWind`, `FloraMaterial`, leaf look and wind in `common.wesl`/`vertex.wesl`/`prepass.wesl`/`fragment.wesl`)
+- `src/lod.rs` (levels of detail from the skeleton), `src/pool.rs` (`TreePool`, `PooledTree`), `src/impostor/` (baked far-field quads, `impostor.wesl`): forest scale
+- `examples/showcase.rs`, `examples/gallery.rs` (visual QA renderer), `examples/capture_growth.rs` (records `docs/growth.gif` for the README), `examples/forest.rs` (forest benchmark: `--offscreen` for real frame times, never a windowed run; `--sun`, `--wind`, `--wind-dir`, `--gust`)
 - Publishing: `Cargo.toml` `include` keeps `qa/`, `slop/`, `docs/` out of the package; README media use absolute GitHub URLs
 - Releasing: follow `AGENTS.md`. Every release, patch releases included, re-records `docs/growth.gif` with `capture_growth`; the clip is not updated automatically
 - `qa/visual_findings.md`: visual QA defect log (open / fixed / proposed / iterations)
@@ -30,5 +32,5 @@ cargo run --example gallery -- --out target/gallery/latest [--filter <substr>]..
 ## Conventions
 
 - Prefer `TreeParams` fields over magic numbers.
-- Core modules depend only on `bevy::math` and `bevy::color`; only `mesh/mod.rs` and `plugin.rs` touch render/ECS types.
+- Core modules depend only on `bevy::math` and `bevy::color`; only `mesh/mod.rs`, `plugin.rs`, `gpu/`, `pool.rs` and `impostor/` touch render/ECS types (`lod.rs` is pure CPU).
 - Docs: https://docs.rs/bevy/0.20.0, https://bevy.org/news/bevy-0-20/

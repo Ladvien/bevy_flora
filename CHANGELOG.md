@@ -5,6 +5,105 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.5.0] - 2026-10-11
+
+Forest scale, leaf shading and wind. The meshes are unchanged (the `stats.tsv`
+geometry columns of all 319 gallery scenarios are identical to 0.4.1), but every tree the plugin
+draws now uses a flora material, so leaves and wood look different (259 of the 319 gallery images
+differ) and move in the wind. `TreeParams` and `FoliageParams` gain fields (`wind`,
+`hue_variation`, `occlusion`, `shading`), so a struct literal without `..Default::default()` stops
+compiling.
+
+### Added
+
+- **Leaf shading**: `FloraMaterial` (`ExtendedMaterial<StandardMaterial, FloraExtension>`) is what
+  `ProceduralTree`, `GpuGrowth`, `TreePool` and the impostors are drawn with, where the renderer's
+  plugins are there. Leaves get an upper side that is darker and glossier than the paler, matte
+  lower side (`LeafShading::roughness`, `underside`), a midrib and side veins on leaf-shaped cards
+  (`veins`; never on needle or sphere clusters), a hue of their own (`FoliageParams::hue_variation`),
+  darker interiors of the crown (`FoliageParams::occlusion`) and light that comes through a leaf lit
+  from behind (`translucency`, `transmission_tint`: Unreal's two-sided foliage model), so a crown
+  glows yellow-green toward the sun and stays dark where other leaves shade it. The inputs are baked
+  into the leaf mesh (`MeshData::uv1`: upper-side flag and crown visibility; `MeshData::sway`:
+  `ATTRIBUTE_LEAF_SWAY`, the flutter vector). Trees drawn with a plain `StandardMaterial` ignore
+  them.
+- **Wind**: the `FloraWind` resource bends every tree as a whole, more toward its top, and flutters
+  each leaf, in the vertex stage of the main pass and of the shadow maps, so shadows follow the
+  motion and the CPU does nothing per frame. Every knob is a field: `direction`, `strength`, `speed`,
+  `flutter`, `bend`, `gust_strength`, `gust_frequency`, `flutter_frequency`, `turbulence` and `gust`.
+  `GustFront` (`FloraWind::launch_gust`) sends a band of stronger wind across the world along a
+  direction at a speed. Each species answers in its own way, `TreeParams::wind: WindResponse` (`sway`,
+  `flutter`, `sway_frequency`, `flutter_frequency`, all 1 by default; the 15 presets set their own, so
+  a willow moves more than an oak and a bonsai hardly at all). Changing `FloraWind` rewrites every
+  flora material once. Wind writes no motion vectors, and branches do not sway separately.
+- **`TreePool` and `PooledTree`**, for forests. `build_pool(params, variants, age, &LodSettings,
+  &mut Assets<Mesh>)` builds a few seed variants of a tree once (on all cores), each at three levels
+  of detail with its meshes; the plugin makes the two materials the variants share (`PoolMaterials`)
+  and `PooledTree { pool, variant }` places one. The plugin gives it a child per level and a
+  `VisibilityRange` band (30 m, 80 m and 200 m by default, each switch a 2 m dithered cross-fade),
+  and Bevy draws the entities that share a mesh and a material in one instanced call. Pooled trees
+  are static; trees that grow stay `ProceduralTree` (with `GpuGrowth`).
+- **`build_lods` and `LodSettings`**, levels of detail built from the skeleton, not by simplifying a
+  mesh: level 0 is exactly `build_tree`; levels 1 and 2 drop branches thinner than a radius (and what
+  grows from them) except the ones that reach furthest in each direction, mesh the rest with fewer
+  sides and rings, no collars and a flat disc where a steep branch meets the trunk, and keep every
+  3rd / 8th leaf (plus the leaves that reach furthest where the others fall short), scaled up by the
+  square root of that as far as the room to level 0's bounding box allows, to cover about as much.
+  A coarse level reaches no more than a centimetre beyond level 0's bounding box and is within 10%
+  of its size on every axis, for every preset, and level 2 has at most 15% of level 0's triangles (or 500, for the palm, the
+  bonsai and the dead tree, which are that small to begin with). `LodDistances` sets where the levels
+  switch.
+- **Impostors**: beyond the last level a pooled tree is one quad that turns about the trunk and shows
+  the nearest of eight baked views (`ImpostorMaterial`, `ImpostorAtlas`). Two pictures are baked in
+  the running app, once per variant, from the level 1 meshes into a 2048x512 image (eight 256x256
+  tiles for the colour, eight for the surface: the normal in the tree's own frame, how much of the
+  sky each leaf sees, how much light it lets through; 10° above the horizon), read back, given
+  mipmaps (averaged in linear light, weighted by coverage) and stored with the pool. They are not lit
+  when baked: the scene's own lights, ambient light, shadow maps (where the cascades reach) and fog
+  shade them every frame, so impostors follow the time of day, glow with the sun behind them, and
+  sway with the wind. They cast no shadows. Without a renderer, or with the plugin added before the
+  renderer's, a pool has none and level 2 is drawn at every distance, with one warning. The bake
+  runs four variants at a time: eight at once is 128 cameras in a frame, which loses the Metal device.
+- `examples/forest.rs`, the forest benchmark (`--mode naive|pool`, `--offscreen`, `--no-impostors`,
+  `--lod`, `--shadows`, `--sun`, `--wind`, `--wind-dir`, `--gust`, `--screenshot`).
+
+### Measured
+
+`forest --offscreen`, 1920x1080, a shadow-casting sun, an oak forest on an 8 m grid seen across it
+from 30 m up, Apple M5, release build:
+
+| trees | one `ProceduralTree` each | pool, levels of detail only | pool, with impostors |
+|---|---|---|---|
+| 1 000 | 114 ms | 7.5 ms | 6.2 ms |
+| 5 000 | 1 280 ms | 19.0 ms | 7.0 ms |
+| 20 000 | not run | 40.7 ms | 9.0 ms |
+| 100 000 | not run | 118 ms | 15.3 ms (p95 16.2) |
+
+The columns are the median of three runs, except the first column's 5 000 trees (one run) and
+20 000 and 100 000 separate meshes, which would take an estimated 15 and 75 GB of GPU memory and
+were not run. 100 000 trees run at 65 fps with the impostors, 8.5 fps without. Timings on this
+machine drift by 40% and more between runs of the same binary (100 000 trees with impostors read
+11.5 to 17 ms in one session), so read them as that wide; the budget was 16.6 ms, and the same
+forest took 9.9 ms before the leaf shader and the wind. The shadow-map pass is about a third of the
+pooled forest's time (5 000 trees: 6.3 ms, 4.1 ms with the sun's shadow maps off).
+
+### Notes
+
+- The `forest` timings need `--offscreen`: a windowed app is paced by the compositor, and Bevy's
+  default `WinitSettings` update an unfocused window only 60 times a second, which made every
+  windowed run read "60 fps".
+- Known cost: a forest of one `ProceduralTree` each is about four times slower with the flora
+  material than with a plain `StandardMaterial` (the plugin added before the renderer's, so no
+  flora material: 1 000 trees took 45-56 ms against 172-181 ms with it, interleaved in one session).
+  A pool shares two materials among all its trees and does not pay that. The suspected cause, not
+  verified: `ExtendedMaterial` is bindless only when both halves are, and `FloraExtension` is not,
+  so every tree's materials need bind groups of their own. Not fixed.
+- Internal: `mesh::branch::skeleton_mesh_coarse` (the coarse wood mesher) and an optional ring cap
+  in `append_tube`; the level 0 meshers are unchanged.
+- The impostor bake's cameras write with `BlendState::REPLACE`: Bevy's default for a `None` blend
+  state alpha-blends every camera after the first of a target, which dropped the wood (alpha 0)
+  from the surface picture and left every impostor trunk black.
+
 ## [0.4.1] - 2026-10-10
 
 Bug fix for 0.4.0; no API changes, and the meshes are bit-identical (all 319 gallery images
@@ -314,6 +413,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.5.0]: https://github.com/Ladvien/bevy_flora/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Ladvien/bevy_flora/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Ladvien/bevy_flora/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/Ladvien/bevy_flora/compare/v0.3.4...v0.3.5
