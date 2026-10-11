@@ -90,7 +90,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/ci
-          xvfb-run -a cargo run --release --example gallery -- --out target/ci/cpu \
+          xvfb-run -a cargo run --release --example gallery -- --warmup-secs 20 --out target/ci/cpu \
             --filter grow_oak_4 --filter grow_oak_6 --filter age_spruce_6 --filter smoothyoung_spruce_4 \
             --filter age_willow_6 --filter smoothyoung_oak_4 --filter pipeyoung_pine_5 \
             2>&1 | tee target/ci/cpu.log
@@ -100,11 +100,18 @@ jobs:
       - name: Render with GpuGrowth
         shell: bash
         run: |
-          xvfb-run -a cargo run --release --example gallery -- --gpu --out target/ci/gpu \
+          xvfb-run -a cargo run --release --example gallery -- --gpu --warmup-secs 20 --out target/ci/gpu \
             --filter grow_oak_4 --filter grow_oak_6 --filter age_spruce_6 --filter smoothyoung_spruce_4 \
             --filter age_willow_6 --filter smoothyoung_oak_4 --filter pipeyoung_pine_5 \
             2>&1 | tee target/ci/gpu.log
           if grep -E "ERROR|panicked" target/ci/gpu.log; then exit 1; fi
+
+      # A capture that came back empty (the software renderer was still compiling
+      # shaders) would compare as "the same" with another empty one.
+      - name: Check that no capture came back empty
+        shell: bash
+        run: |
+          if grep -E "BLANK_CAPTURE|CAPTURE_TIMEOUT" target/ci/cpu/stats.tsv target/ci/gpu/stats.tsv; then exit 1; fi
 
       - name: Compare the two renders
         run: cargo run --release --example compare_gallery -- target/ci/cpu target/ci/gpu
