@@ -36,7 +36,8 @@ use crate::params::TreeParams;
 use crate::pipeline::build_aged;
 use crate::pool::spawn_pooled_trees;
 use crate::shading::{
-    FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWind, flora_material, sync_flora, sync_wind,
+    FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWind, FloraWindBuffer, detect_flora_support, flora_decided,
+    flora_material, sync_flora, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
 
@@ -165,10 +166,11 @@ impl bevy::app::Plugin for FloraPlugin {
                 bevy::app::Update,
                 (
                     detect_gpu_growth_support,
+                    detect_flora_support,
                     sync_wind.run_if(resource_changed::<FloraWind>),
                     grow_trees,
                     sync_growth_mode,
-                    rebuild_trees,
+                    rebuild_trees.run_if(flora_decided),
                     rebuild_gpu_trees,
                 )
                     .chain(),
@@ -179,7 +181,7 @@ impl bevy::app::Plugin for FloraPlugin {
                     (start_impostor_bakes, drive_impostor_bakes)
                         .chain()
                         .run_if(resource_exists::<ImpostorSupport>),
-                    spawn_pooled_trees,
+                    spawn_pooled_trees.run_if(flora_decided),
                 )
                     .chain(),
             );
@@ -237,7 +239,7 @@ pub fn rebuild_trees(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut flora: ResMut<Assets<FloraMaterial>>,
     flora_support: Option<Res<FloraMaterialSupport>>,
-    wind: Res<FloraWind>,
+    wind: Option<Res<FloraWindBuffer>>,
     support: Res<GpuGrowthSupport>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
@@ -245,6 +247,7 @@ pub fn rebuild_trees(
         Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>,
     >,
 ) {
+    let wind = wind.as_deref().filter(|_| flora_support.is_some());
     for (entity, tree, age, mut render, gpu) in &mut trees {
         // A tree that grows on the GPU is `rebuild_gpu_trees`'s.
         if gpu && support.0 {
@@ -269,11 +272,11 @@ pub fn rebuild_trees(
         let trunk_progress = out.skeleton.nodes[0].progress;
         match (render, existing) {
             (None, _) => {
-                let paint = if flora_support.is_some() {
-                    let uniform = FloraUniform::new(params, &wind);
+                let paint = if let Some(wind) = wind {
+                    let uniform = FloraUniform::new(params);
                     Paint::Flora {
-                        trunk: flora.add(flora_material(params.trunk_color, uniform.wood(), false)),
-                        foliage: flora.add(flora_material(params.foliage.color, uniform, true)),
+                        trunk: flora.add(flora_material(params.trunk_color, uniform.wood(), false, wind)),
+                        foliage: flora.add(flora_material(params.foliage.color, uniform, true, wind)),
                     }
                 } else {
                     Paint::Standard {
@@ -318,7 +321,7 @@ pub fn rebuild_trees(
                         set_color(&mut materials, foliage, params.foliage.color);
                     }
                     Paint::Flora { trunk, foliage } => {
-                        let uniform = FloraUniform::new(params, &wind);
+                        let uniform = FloraUniform::new(params);
                         sync_flora(&mut flora, trunk, params.trunk_color, uniform.wood());
                         sync_flora(&mut flora, foliage, params.foliage.color, uniform);
                     }
@@ -423,9 +426,11 @@ pub(crate) fn replace_mesh(
 mod tests {
     use super::*;
     use crate::presets::TreePreset;
+    use crate::shading::{GustFront, wind_vectors};
     use bevy::app::App;
     use bevy::asset::{AssetApp, AssetPlugin};
-    use crate::shading::GustFront;
+    use bevy::math::Vec4;
+    use bevy::render::storage::ShaderBuffer;
 
     fn app() -> App {
         let mut app = App::new();
@@ -637,33 +642,65 @@ mod tests {
         assert_eq!(assets.get(&foliage).unwrap().extension.flora.leaf.x, 0.2);
     }
 
+    /// The contents of the shared wind buffer.
+    fn wind_buffer(app: &App) -> Vec<[f32; 4]> {
+        let handle = &app.world().resource::<FloraWindBuffer>().0;
+        let buffers = app.world().resource::<Assets<ShaderBuffer>>();
+        buffers.get(handle).unwrap().cast_slice::<[f32; 4]>().unwrap().to_vec()
+    }
+
+    /// Run one update and count the `Modified` events of shader buffers it produced.
+    fn modified_buffers(app: &mut App) -> usize {
+        let mut cursor = app
+            .world()
+            .resource::<Messages<bevy::asset::AssetEvent<ShaderBuffer>>>()
+            .get_cursor_current();
+        app.update();
+        let messages = app.world().resource::<Messages<bevy::asset::AssetEvent<ShaderBuffer>>>();
+        cursor.read(messages).filter(|e| matches!(e, bevy::asset::AssetEvent::Modified { .. })).count()
+    }
+
     #[test]
-    fn changing_the_wind_rewrites_each_material_once() {
+    fn changing_the_wind_modifies_no_material() {
         let mut app = app();
         app.insert_resource(FloraMaterialSupport);
-        let tree = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(f32::INFINITY))).id();
+        app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(f32::INFINITY)));
         app.update();
         assert!(update_and_modified(&mut app).is_empty());
+        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default()).map(Vec4::to_array));
 
         app.world_mut().resource_mut::<FloraWind>().strength = 0.9;
-        let mut changed = update_and_modified(&mut app);
-        changed.sort();
-        let (trunk, foliage) = flora_pair(&app, tree);
-        let mut both = vec![trunk.id(), foliage.id()];
-        both.sort();
-        assert_eq!(changed, both, "each material is rewritten once");
-        let assets = app.world().resource::<Assets<FloraMaterial>>();
-        assert_eq!(assets.get(&foliage).unwrap().extension.flora.wind.z, 0.9);
+        assert!(update_and_modified(&mut app).is_empty(), "a new strength modified a material");
+        let wind = *app.world().resource::<FloraWind>();
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(Vec4::to_array));
+        assert_eq!(wind_buffer(&app)[0][2], 0.9);
 
-        assert!(update_and_modified(&mut app).is_empty(), "an unchanged wind rewrites nothing");
-
-        // A gust front is wind too: launching one rewrites each material once.
+        // A gust front is wind too.
         app.world_mut().resource_mut::<FloraWind>().launch_gust(GustFront::default(), &Time::default());
-        let mut launched = update_and_modified(&mut app);
-        launched.sort();
-        assert_eq!(launched, both, "a launched gust rewrites each material once");
+        assert!(update_and_modified(&mut app).is_empty(), "a launched gust modified a material");
+        let wind = *app.world().resource::<FloraWind>();
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(Vec4::to_array));
+        assert!(wind_buffer(&app)[4][2] > 0.0);
+
+        // Touching the resource without changing the wind writes nothing.
+        app.world_mut().resource_mut::<FloraWind>().set_changed();
+        assert_eq!(modified_buffers(&mut app), 0, "an unchanged wind wrote the buffer");
+        app.world_mut().resource_mut::<FloraWind>().strength = 0.2;
+        assert_eq!(modified_buffers(&mut app), 1, "a changed wind writes the buffer once");
+    }
+
+    #[test]
+    fn a_material_made_after_a_wind_change_sees_the_current_wind() {
+        let mut app = app();
+        app.insert_resource(FloraMaterialSupport);
+        app.world_mut().resource_mut::<FloraWind>().strength = 0.77;
+        app.update();
+        let tree = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(f32::INFINITY))).id();
+        app.update();
+        let (_, foliage) = flora_pair(&app, tree);
+        // The material holds the shared buffer, not a copy of the wind.
         let assets = app.world().resource::<Assets<FloraMaterial>>();
-        assert!(assets.get(&foliage).unwrap().extension.flora.front_shape.z > 0.0);
-        assert!(update_and_modified(&mut app).is_empty());
+        assert_eq!(assets.get(&foliage).unwrap().extension.wind, app.world().resource::<FloraWindBuffer>().0);
+        assert_eq!(wind_buffer(&app)[0][2], 0.77);
     }
 }

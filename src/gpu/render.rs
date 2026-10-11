@@ -14,7 +14,7 @@ use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
 use crate::plugin::{
     Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, replace_mesh,
 };
-use crate::shading::{FloraUniform, FloraWind, flora_base};
+use crate::shading::{FloraUniform, FloraWindBuffer, flora_base};
 use crate::skeleton::generate_skeleton;
 
 /// What a tree that grows on the GPU draws with.
@@ -128,7 +128,7 @@ pub(crate) fn rebuild_gpu_trees(
     mut materials: ResMut<Assets<GrowthMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     support: Res<GpuGrowthSupport>,
-    wind: Res<FloraWind>,
+    wind: Res<FloraWindBuffer>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
@@ -170,7 +170,7 @@ pub(crate) fn rebuild_gpu_trees(
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
                 }
-                let uniform = FloraUniform::new(params, &wind);
+                let uniform = FloraUniform::new(params);
                 sync_growth(&mut materials, &paint.trunk, params.trunk_color, uniform.wood());
                 sync_growth(&mut materials, &paint.foliage, params.foliage.color, uniform);
                 match (&mut render.foliage, leaves) {
@@ -205,14 +205,14 @@ pub(crate) fn rebuild_gpu_trees(
                 let nodes = buffers.add(state_buffer(&state));
                 let (wood, leaves) = data.into_meshes();
 
-                let uniform = FloraUniform::new(params, &wind);
+                let uniform = FloraUniform::new(params);
                 let trunk_material = materials.add(GrowthMaterial {
                     base: flora_base(params.trunk_color),
-                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform.wood(), leaf: false },
+                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform.wood(), wind: wind.0.clone(), leaf: false },
                 });
                 let foliage_material = materials.add(GrowthMaterial {
                     base: flora_base(params.foliage.color),
-                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform, leaf: true },
+                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform, wind: wind.0.clone(), leaf: true },
                 });
                 let trunk_mesh = meshes.add(wood);
                 let trunk = commands

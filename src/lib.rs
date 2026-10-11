@@ -128,7 +128,7 @@ pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, T
 pub use pool::{PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
-pub use shading::{FloraExtension, FloraKey, FloraMaterial, FloraUniform, FloraWind, GustFront};
+pub use shading::{FloraExtension, FloraKey, FloraMaterial, FloraUniform, FloraWind, FloraWindBuffer, GustFront};
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 // Compile the README's Rust examples as doctests.

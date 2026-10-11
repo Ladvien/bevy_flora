@@ -66,9 +66,7 @@ use crate::mesh::MeshData;
 use crate::params::TreeParams;
 use crate::pipeline::TreeMeshes;
 use crate::plugin::{leaf_material, material};
-use crate::shading::{
-    FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWind, flora_material,
-};
+use crate::shading::{FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWindBuffer, flora_material};
 
 /// Trees whose children are created in one frame, at most: a hundred thousand
 /// trees get their entities over a few dozen frames instead of one long one.
@@ -297,11 +295,10 @@ fn band(start: f32, end: f32) -> VisibilityRange {
 }
 
 /// Make the materials of every pool that has none yet: [`FloraMaterial`] where the renderer
-/// registered it, plain materials where it did not.
+/// registered it (`wind` is the shared wind buffer then), plain materials where it did not.
 fn make_pool_materials(
     pools: &mut Assets<TreePool>,
-    flora_support: bool,
-    wind: &FloraWind,
+    wind: Option<&FloraWindBuffer>,
     flora: &mut Assets<FloraMaterial>,
     standard: &mut Assets<StandardMaterial>,
 ) {
@@ -313,11 +310,11 @@ fn make_pool_materials(
     for id in unpainted {
         let Some(mut pool) = pools.get_mut(id) else { continue };
         let (wood, leaves) = (pool.params.trunk_color, pool.params.foliage.color);
-        pool.materials = Some(if flora_support {
-            let uniform = FloraUniform::new(&pool.params, wind);
+        pool.materials = Some(if let Some(wind) = wind {
+            let uniform = FloraUniform::new(&pool.params);
             PoolMaterials::Flora {
-                wood: flora.add(flora_material(wood, uniform.wood(), false)),
-                leaves: flora.add(flora_material(leaves, uniform, true)),
+                wood: flora.add(flora_material(wood, uniform.wood(), false, wind)),
+                leaves: flora.add(flora_material(leaves, uniform, true, wind)),
             }
         } else {
             PoolMaterials::Standard {
@@ -338,13 +335,14 @@ pub(crate) fn spawn_pooled_trees(
     bakes: Res<ImpostorBakes>,
     support: Option<Res<ImpostorSupport>>,
     flora_support: Option<Res<FloraMaterialSupport>>,
-    wind: Res<FloraWind>,
+    wind: Option<Res<FloraWindBuffer>>,
     mut flora: ResMut<Assets<FloraMaterial>>,
     mut standard: ResMut<Assets<StandardMaterial>>,
     trees: Query<(Entity, &PooledTree), Without<PooledTreeSpawned>>,
     mut warned: Local<bool>,
 ) {
-    make_pool_materials(&mut pools, flora_support.is_some(), &wind, &mut flora, &mut standard);
+    let wind = wind.as_deref().filter(|_| flora_support.is_some());
+    make_pool_materials(&mut pools, wind, &mut flora, &mut standard);
     // A tree whose pool is not ready yet is skipped, not counted: it must not
     // keep trees of a ready pool from getting their children.
     let mut spawned = 0;

@@ -42,7 +42,7 @@ use super::{
     linearize_surface, surface_image,
 };
 use crate::pool::{PoolVariant, TreePool};
-use crate::shading::{FloraUniform, FloraWind};
+use crate::shading::{FloraUniform, FloraWindBuffer};
 
 /// The render layer the colour pictures are drawn on; nothing else should use it.
 const BAKE_LAYER: usize = 31;
@@ -321,7 +321,7 @@ fn finish_bake(
     mut materials: ResMut<Assets<ImpostorMaterial>>,
     mut pools: ResMut<Assets<TreePool>>,
     mut baked: ResMut<ImpostorsBaked>,
-    wind: Res<FloraWind>,
+    wind: Res<FloraWindBuffer>,
 ) {
     let Ok(shot) = shots.get(captured.entity) else {
         return;
@@ -376,7 +376,7 @@ fn finish_bake(
     if let (true, Some(pixels)) = (enough, pixels)
         && let Some(mut pool) = pools.get_mut(job.pool)
     {
-        let flora = FloraUniform::new(&pool.params, &wind);
+        let flora = FloraUniform::new(&pool.params);
         let albedo = images.add(atlas_image(&pixels[..row], width, TILE_PIXELS));
         let surface = images.add(surface_image(
             &linearize_surface(&pixels[row..]),
@@ -393,6 +393,7 @@ fn finish_bake(
                 surface.clone(),
                 IMPOSTOR_VIEWS,
                 flora,
+                &wind,
             )),
             quad: meshes.add(job.frame.quad()),
             albedo,

@@ -17,16 +17,6 @@ import bevy_pbr::render::{
 };
 
 struct FloraUniform {
-    // direction x, direction z, strength, speed
-    wind: vec4<f32>,
-    // bend, flutter, gust strength, turbulence
-    motion: vec4<f32>,
-    // gust frequency, flutter frequency, 0, 0
-    rate: vec4<f32>,
-    // gust front: origin x, origin z, direction x, direction z
-    front: vec4<f32>,
-    // gust front: speed, width, strength, start time
-    front_shape: vec4<f32>,
     // 1 / trunk height, 0, 0, 0
     tree: vec4<f32>,
     // the species' sway, flutter, sway frequency, flutter frequency
@@ -38,6 +28,14 @@ struct FloraUniform {
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> flora: FloraUniform;
+
+// The weather, the same for every tree (`FloraWindBuffer`, `wind_vectors` in shading/mod.rs):
+//   0: wind direction x, direction z, strength, speed
+//   1: bend, flutter, gust strength, turbulence
+//   2: gust frequency, flutter frequency, 0, 0
+//   3: gust front origin x, origin z, direction x, direction z
+//   4: gust front speed, width, strength, start time
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
 
 fn smooth_curve(x: vec4<f32>) -> vec4<f32> {
     return x * x * (3.0 - 2.0 * x);
@@ -64,40 +62,49 @@ fn tree_phase(origin: vec3<f32>) -> f32 {
 // How strong a gust front is at `origin`: a bump of the front's strength, `width` metres deep,
 // that travels along the front's direction. 0 where there is no front.
 fn gust_front(origin: vec3<f32>, time: f32) -> f32 {
-    if flora.front_shape.z <= 0.0 {
+    let front = flora_wind[3];
+    let front_shape = flora_wind[4];
+    if front_shape.z <= 0.0 {
         return 0.0;
     }
-    let along = dot(origin.xz - flora.front.xy, flora.front.zw) - flora.front_shape.x * (time - flora.front_shape.w);
-    let u = along / flora.front_shape.y;
-    return flora.front_shape.z * exp(-u * u);
+    let along = dot(origin.xz - front.xy, front.zw) - front_shape.x * (time - front_shape.w);
+    let u = along / front_shape.y;
+    return front_shape.z * exp(-u * u);
 }
 
 // The leaf's movement in the tree's local space. `sway`: the leaf's direction scaled by how far
 // the vertex is from where the leaf is attached (xyz) and the leaf's phase (w).
 fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32) -> vec3<f32> {
-    let t = time * flora.wind.w * 2.0 * flora.rate.y * flora.response.w + sway.w + tree_phase(origin);
+    let wind = flora_wind[0];
+    let motion = flora_wind[1];
+    let rate = flora_wind[2];
+    let t = time * wind.w * 2.0 * rate.y * flora.response.w + sway.w + tree_phase(origin);
     let w = smooth_triangle_wave(vec4<f32>(t * 1.975, t * 0.793, 0.0, 0.0));
-    let strength = flora.wind.z + gust_front(origin, time);
-    return sway.xyz * (FLUTTER * flora.motion.y * flora.response.y * strength * (w.x + w.y - 1.0));
+    let strength = wind.z + gust_front(origin, time);
+    return sway.xyz * (FLUTTER * motion.y * flora.response.y * strength * (w.x + w.y - 1.0));
 }
 
 // `world` bent downwind with the tree. `local_y`: the vertex's height in the tree's own units,
 // `scale_y`: the tree's scale along y.
 fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, time: f32) -> vec3<f32> {
+    let wind = flora_wind[0];
+    let motion = flora_wind[1];
+    let rate = flora_wind[2];
+    let front = flora_wind[3];
     let bump = gust_front(origin, time);
-    if flora.wind.z <= 0.0 && bump <= 0.0 {
+    if wind.z <= 0.0 && bump <= 0.0 {
         return world;
     }
-    let t = time * flora.wind.w * flora.rate.x * flora.response.z;
+    let t = time * wind.w * rate.x * flora.response.z;
     let phase = tree_phase(origin);
     let g = smooth_triangle_wave(vec4<f32>(t * 0.193 + phase, t * 0.375 + 1.7 * phase, t * 0.27 + 2.3 * phase, 0.0));
     // 0.6 to 1.0 of the wind at the default gust strength of 0.4.
-    let gust = 1.0 - flora.motion.z + flora.motion.z * 0.5 * (g.x + g.y);
-    let down = flora.wind.xy * (flora.wind.z * gust);
-    let across = vec2<f32>(-flora.wind.y, flora.wind.x) * (flora.wind.z * flora.motion.w * (2.0 * g.z - 1.0));
-    let push = down + across + flora.front.zw * bump;
+    let gust = 1.0 - motion.z + motion.z * 0.5 * (g.x + g.y);
+    let down = wind.xy * (wind.z * gust);
+    let across = vec2<f32>(-wind.y, wind.x) * (wind.z * motion.w * (2.0 * g.z - 1.0));
+    let push = down + across + front.zw * bump;
     let h = max(local_y, 0.0) * flora.tree.x;
-    let reach = MAIN_BEND * flora.motion.x * flora.response.x * (scale_y / max(flora.tree.x, 1.0e-4)) * h * h;
+    let reach = MAIN_BEND * motion.x * flora.response.x * (scale_y / max(flora.tree.x, 1.0e-4)) * h * h;
     let rel = world - origin;
     let moved = rel + vec3<f32>(push.x, 0.0, push.y) * reach;
     // Bend, do not stretch.
