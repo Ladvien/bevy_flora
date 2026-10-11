@@ -446,7 +446,6 @@ mod tests {
     use crate::shading::{GustFront, wind_vectors};
     use bevy::app::App;
     use bevy::asset::{AssetApp, AssetPlugin};
-    use bevy::math::Vec4;
     use bevy::render::storage::ShaderBuffer;
 
     fn app() -> App {
@@ -760,19 +759,19 @@ mod tests {
         }
         app.update();
         assert!(update_and_modified(&mut app).is_empty());
-        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default()).map(Vec4::to_array));
+        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default()).map(|v| v.to_array()));
 
         app.world_mut().resource_mut::<FloraWind>().strength = 0.9;
         assert!(update_and_modified(&mut app).is_empty(), "a new strength modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(Vec4::to_array));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[0][2], 0.9);
 
         // A gust front is wind too.
         app.world_mut().resource_mut::<FloraWind>().launch_gust(GustFront::default(), &Time::default());
         assert!(update_and_modified(&mut app).is_empty(), "a launched gust modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(Vec4::to_array));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(|v| v.to_array()));
         assert!(wind_buffer(&app)[4][2] > 0.0);
 
         // Touching the resource without changing the wind writes nothing.

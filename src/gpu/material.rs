@@ -27,9 +27,12 @@ pub struct GrowthExtension {
     // Binding slots below 100 belong to the base material.
     #[storage(100, read_only)]
     pub nodes: Handle<ShaderBuffer>,
-    /// The wind and the leaves' look; see [`FloraUniform`].
+    /// The look of the leaves and the species' response to the wind; see [`FloraUniform`].
     #[uniform(101)]
     pub flora: FloraUniform,
+    /// The weather, shared by every flora material: [`FloraWindBuffer`](crate::FloraWindBuffer).
+    #[storage(102, read_only)]
+    pub wind: Handle<ShaderBuffer>,
     /// Leaves get the leaf surface, the light through the leaf and the flutter; wood only bends.
     /// See [`FloraExtension::leaf`](crate::FloraExtension::leaf).
     pub leaf: bool,

@@ -69,7 +69,7 @@ impl MeshData {
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
         .with_inserted_indices(Indices::U32(self.indices));
         if !self.colors.is_empty() {
-            let colors: Vec<[f32; 4]> = self.colors.iter().map(Vec4::to_array).collect();
+            let colors: Vec<[f32; 4]> = self.colors.iter().map(|v| v.to_array()).collect();
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         }
         if !self.uv1.is_empty() {
@@ -77,7 +77,7 @@ impl MeshData {
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
         }
         if !self.sway.is_empty() {
-            let sway: Vec<[f32; 4]> = self.sway.iter().map(Vec4::to_array).collect();
+            let sway: Vec<[f32; 4]> = self.sway.iter().map(|v| v.to_array()).collect();
             mesh.insert_attribute(ATTRIBUTE_LEAF_SWAY, sway);
         }
         mesh

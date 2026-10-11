@@ -19,7 +19,7 @@
 //! [`GpuGrowth`](crate::GpuGrowth), [`TreePool`](crate::TreePool) and its impostors).
 
 use bevy::app::App;
-use bevy::asset::{Asset, AssetApp, AssetServer, Assets, embedded_asset};
+use bevy::asset::{Asset, AssetApp, AssetServer, Assets, Handle, embedded_asset};
 use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
@@ -31,6 +31,7 @@ use bevy::pbr::{
     MaterialPlugin, PbrPlugin, StandardMaterial,
 };
 use bevy::reflect::Reflect;
+use bevy::render::RenderApp;
 use bevy::render::render_resource::{
     AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
@@ -326,13 +327,14 @@ pub struct FloraMaterialSupport;
 /// motion, rates and the [`GustFront`], packed from [`FloraWind`]), shared by every flora material
 /// (binding 102), so changing [`FloraWind`]
 /// writes this buffer in place and touches no material. Hand it to the `wind` field of a
-/// [`FloraExtension`], [`GrowthExtension`] or [`ImpostorMaterial`] you build yourself.
+/// [`FloraExtension`], [`GrowthExtension`](crate::GrowthExtension) or
+/// [`ImpostorMaterial`](crate::ImpostorMaterial) you build yourself.
 #[derive(Resource, Clone, Debug)]
 pub struct FloraWindBuffer(pub Handle<ShaderBuffer>);
 
 impl FloraWindBuffer {
     fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind) -> Self {
-        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind).map(Vec4::to_array).to_vec())))
+        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind).map(|v| v.to_array()).to_vec())))
     }
 }
 
@@ -372,7 +374,7 @@ pub(crate) fn sync_wind(
     buffer: Res<FloraWindBuffer>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let packed = wind_vectors(&wind).map(Vec4::to_array);
+    let packed = wind_vectors(&wind).map(|v| v.to_array());
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
     if buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>()) == Some(&packed[..]) {
         return;
