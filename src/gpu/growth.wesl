@@ -23,10 +23,12 @@ fn vertex(
     let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
 
     let origin = world_from_local[3].xyz;
-    var local = grown_position(growth_attrs);
+    // Where this tree's state starts in the shared buffer.
+    let base = mesh_functions::get_tag(vertex_no_morph.instance_index);
+    var local = grown_position(growth_attrs, base);
     // A leaf flutters in proportion to how grown it is.
 @if(FLORA_LEAF)
-    local = local + flutter_offset(sway, origin, globals.time) * leaf_growth_scale(growth_attrs);
+    local = local + flutter_offset(sway, origin, globals.time) * leaf_growth_scale(growth_attrs, base);
 
 @if(VERTEX_NORMALS)
     out.world_normal = mesh_functions::mesh_normal_local_to_world(

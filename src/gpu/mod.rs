@@ -3,9 +3,10 @@
 //! A tree with [`GpuGrowth`] is built once, at maturity, and uploaded once.
 //! Every vertex carries which node it belongs to and where it sits relative to
 //! that node's axis; each frame the CPU ages the skeleton ([`Skeleton::aged`])
-//! and writes one small record per node into a storage buffer, and the vertex
-//! shader (`growth.wesl`) moves every vertex to where the CPU path would have
-//! put it. Nothing else is uploaded.
+//! and writes one small record per node into the tree's slice of a storage buffer
+//! it shares with other trees (`store.rs`), and the vertex shader (`growth.wesl`)
+//! moves every vertex to where the CPU path would have put it. Nothing else is
+//! uploaded, and a tree that stops growing stops uploading.
 //!
 //! [`Skeleton::aged`]: crate::Skeleton::aged
 
@@ -15,7 +16,7 @@ use bevy::ecs::prelude::*;
 use bevy::mesh::{MeshVertexAttribute, VertexFormat};
 use bevy::pbr::{MaterialPlugin, PbrPlugin};
 use bevy::reflect::Reflect;
-use bevy::render::RenderApp;
+use bevy::render::{ExtractSchedule, Render, RenderApp, RenderSystems};
 use bevy::render::storage::ShaderBuffer;
 
 mod frame;
@@ -23,6 +24,7 @@ mod material;
 mod mesh;
 pub(crate) mod render;
 mod state;
+mod store;
 
 #[cfg(test)]
 mod app_tests;
@@ -116,11 +118,20 @@ pub(crate) struct GrowthMaterialAdded;
 /// asset plugin), this registers nothing that needs them; [`finish`] covers the
 /// asset types, and `GpuGrowthSupport` stays `false`, so trees grow on the CPU.
 pub(crate) fn build(app: &mut App) {
-    app.init_resource::<GpuGrowthSupport>().register_type::<GpuGrowth>();
+    app.init_resource::<GpuGrowthSupport>()
+        .init_resource::<store::GrowthStore>()
+        .init_resource::<render::GrowthMaterials>()
+        .register_type::<GpuGrowth>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         material::add_shaders(app);
         app.add_plugins(MaterialPlugin::<GrowthMaterial>::default())
             .insert_resource(GrowthMaterialAdded);
+        // Extraction hands the state the main world queued to the render world, which copies
+        // it into the chunks' buffers.
+        app.sub_app_mut(RenderApp)
+            .init_resource::<store::GrowthUploads>()
+            .add_systems(ExtractSchedule, store::extract_growth_state)
+            .add_systems(Render, store::upload_growth_state.in_set(RenderSystems::PrepareResources));
     } else {
         add_asset_types(app);
     }

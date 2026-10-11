@@ -1,7 +1,8 @@
 // Where a growing vertex goes. The Rust mirror is `gpu/frame.rs`; the buffer
 // layout is written by `GrowthState::encode` in `gpu/state.rs`.
 //
-// The buffer is an array of vec4: a header [node count, ring count, trunk flags,
+// The buffer is an array of vec4 shared by many trees. A tree's state starts at `base`
+// (its mesh's `MeshTag`) and is: a header [node count, ring count, trunk flags,
 // cone lift], then 5 vec4 per node, then 2 vec4 per trunk ring.
 
 struct GrowthAttrs {
@@ -45,9 +46,9 @@ fn rotate_y(v: vec3<f32>, twist: f32) -> vec3<f32> {
     return vec3<f32>(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
 }
 
-fn trunk_position(g: GrowthAttrs, kind: u32, node_count: u32, trunk_flags: u32, cone_lift: f32) -> vec3<f32> {
+fn trunk_position(g: GrowthAttrs, kind: u32, base: u32, node_count: u32, trunk_flags: u32, cone_lift: f32) -> vec3<f32> {
     let ring = u32(g.axis.w + 0.5);
-    let at = 1u + node_count * NODE_VEC4S + ring * RING_VEC4S;
+    let at = base + 1u + node_count * NODE_VEC4S + ring * RING_VEC4S;
     let ring_a = growth[at];
     let ring_b = growth[at + 1u];
     let center = ring_a.xyz;
@@ -66,15 +67,15 @@ fn trunk_position(g: GrowthAttrs, kind: u32, node_count: u32, trunk_flags: u32, 
 }
 
 // The vertex's position in the tree's local space at the current growth state.
-fn grown_position(g: GrowthAttrs) -> vec3<f32> {
+fn grown_position(g: GrowthAttrs, base: u32) -> vec3<f32> {
     let kind = g.id.y & 255u;
-    let header = growth[0];
+    let header = growth[base];
     let node_count = u32(header.x);
     if kind >= KIND_TRUNK {
-        return trunk_position(g, kind, node_count, u32(header.z), header.w);
+        return trunk_position(g, kind, base, node_count, u32(header.z), header.w);
     }
 
-    let at = 1u + g.id.x * NODE_VEC4S;
+    let at = base + 1u + g.id.x * NODE_VEC4S;
     let a = growth[at];       // start, length
     let b = growth[at + 1u];  // base radius, tip radius, leaf scale, leaf count
     let c = growth[at + 2u];  // collar start, radius
@@ -131,10 +132,10 @@ fn grown_position(g: GrowthAttrs) -> vec3<f32> {
 
 // How grown the vertex's leaf is: the share of its mature size that `grown_position` scales
 // a leaf by; 0 for a vertex that is not a leaf's. A leaf's flutter scales by it too.
-fn leaf_growth_scale(g: GrowthAttrs) -> f32 {
+fn leaf_growth_scale(g: GrowthAttrs, base: u32) -> f32 {
     if (g.id.y & 255u) != KIND_LEAF {
         return 0.0;
     }
-    let b = growth[1u + g.id.x * NODE_VEC4S + 1u];
+    let b = growth[base + 1u + g.id.x * NODE_VEC4S + 1u];
     return select(0.0, b.z, b.z > 0.0 && (b.w < 0.0 || f32(g.id.y >> 8u) < b.w));
 }

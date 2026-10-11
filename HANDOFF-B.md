@@ -1,0 +1,31 @@
+# HANDOFF slice B: SharedGrowth (`perf/b-share-growth`)
+
+State: code written, **last edit (extraction hand-off, see below) was never compiled or tested**. Everything before it compiled, passed `cargo test --release --all-features` (154 lib + 10 doc tests) and built the examples.
+
+## Design and why
+- Per-node state of all `GpuGrowth` trees lives in a few shared 2 MiB chunks (`ShaderBuffer`, `RenderAssetUsages::RENDER_WORLD`, `with_size`, no CPU copy). `src/gpu/store.rs`: `FreeList` (first fit, sorted, merged), `GrowthStore` (resource, `Arc<Mutex<Inner>>`: chunks + `pending` map keyed (buffer id, base vec4)), `GrowthSlice` (RAII: Drop frees the run and removes its queued write; held in `GrowthPaint.slice`). A tree bigger than a chunk gets its own chunk.
+- Bevy 0.20 `ShaderBuffer` upload (read in `bevy_render-0.20.0/src/storage.rs`): a modified asset is re-extracted (cloned whole when `asset_usage` is MAIN|RENDER, the default) and `prepare_asset` does `queue.write_buffer(&buffer, 0, whole data)` when size/usage/label are unchanged: the WHOLE buffer is re-uploaded per modification (once per frame however many `get_mut`s). So sharing a CPU-backed buffer would upload a whole chunk whenever one tree grows. Hence the chunk is never modified as an asset; per-slice writes go through our own queue (`GrowthSlice::write` -> `pending`) and the render world does `queue.write_buffer` at the slice offset. Upload per tree per frame = its own state, same as before; mature trees write nothing (`GrowthPaint::written_age` vs `mature_at`).
+- Slice base goes to the shader via `MeshTag` on the two child mesh entities (`mesh_functions::get_tag(instance_index)`), added to every `growth[...]` index (`growth_common.wesl`: `grown_position(g, base)`, `leaf_growth_scale(g, base)`, `trunk_position`); math unchanged. Meshes stay independent of allocation; a state that changes size (params change) allocates a new slice and re-inserts `MeshTag`.
+- Materials: `GrowthMaterials` resource (`render.rs`), weak `AssetId` cache keyed by (chunk buffer id, leaf flag, colour linear bits, `FloraUniform` `tree`/`response`/`leaf`/`tint` bits; NOT the global wind fields). `Assets::get_strong_handle` revives, dead entries pruned on each new material. A tree whose look changes gets another shared material (`MeshMaterial3d` re-inserted); shared materials are never mutated in place (`sync_growth` deleted).
+- Handing state to the render world: first version shared the `Arc` with the render world and a render system drained it. That made `--mode gpu-live` screenshots nondeterministic (pipelined rendering: render frame N could take main frame N+1's writes). Fixed (UNCOMPILED) by extraction: `extract_growth_state` (`ExtractSchedule`, `Extract<Res<GrowthStore>>`, drains `pending` into render resource `GrowthUploads`) then `upload_growth_state` (`Render`, `RenderSystems::PrepareResources`, retains writes whose chunk has no GpuShaderBuffer yet). Registered in `gpu::build` (`mod.rs`).
+
+## Done
+store.rs + tests (allocator, overflow, drop-frees, replace); render.rs rewritten (`GrowthPaint { trunk, foliage, slice, state, written_age }`, `GrowthMaterials`, `rebuild_gpu_trees`); shaders; `material.rs` docs; `mod.rs` registration; `app_tests.rs` (sharing, different look, recolour leaves others alone, despawn frees and reuses, leaving GPU path frees, resize moves slice, mature not rewritten); ARCHITECTURE.md gpu section. Public API: no pub item changed except semantics/docs of `GrowthExtension::nodes` (now a shared chunk buffer; slice found via `MeshTag`). `GrowthMaterial` users outside the plugin must set `MeshTag` themselves.
+- Identity (before the extraction change, binaries in /tmp/ft-b-new): `gallery --gpu` 24 PNGs (all 15 `mature_*` + grow_oak_{0.5,2,4,6}, grow_pine_{2,6}, grow_willow_{3,7}, grow_dragon_tree_5) byte-identical to base (`/tmp/baseline/gallery-gpu-b/{a,b}`, script `/tmp/ft-b-gallery.sh <gallery> <outdir>`; the base itself is run-to-run deterministic, but only if the same filter lists run in the same order). `forest --mode gpu` 64 trees byte-identical to `/tmp/baseline/base_gpu.png`. `--mode gpu-live`: 1 of 2 runs identical to baseline, 1 differed (the race above).
+
+## NOT done
+1. Compile + test the extraction change (`cargo test --release --all-features`).
+2. Re-run `forest --mode gpu-live` (64 trees, `--spacing 10 --wind 0.6 --deterministic --warmup-secs 6`) several times: must be md5-identical to `base_gpulive.png` (2475af88...) every time; also gpu again.
+3. Re-run gallery identity (24 PNGs) after the change.
+4. Smoke: `forest --mode gpu --trees 500 --offscreen --frames 120 --warmup-secs 5` and `--mode gpu-live`, grep `ERROR|panicked|Device is lost`; compare `cpu N ms/frame` interleaved with `/tmp/baseline/forest_base` (2-3 runs each). Not measured yet.
+5. `cargo clippy --release --all-targets --all-features -- -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`, `cargo build --release --examples`.
+6. Check unused imports after the change (`Handle`, `HashMap` in store.rs are still used; `Res`/`Local` are).
+
+## Risks
+- Writes waiting in `GrowthUploads` for a chunk buffer that never prepares grow unbounded (should only last a frame).
+- Chunks are never freed (high-water mark); documented on `GrowthStore`.
+- Merge overlap: render.rs `GrowthExtension` construction (slice C adds a `wind` buffer field at binding 102 in `/Users/ladvien/pixy_tree` main checkout: `GrowthExtension { nodes, flora, wind, leaf }`; `FloraUniform::new(params)` lost its wind arg and `rebuild_gpu_trees` takes `Res<FloraWindBuffer>`) -> in `GrowthMaterials::get` add the `wind` handle param and drop the wind from the `Look` key (already absent); `FloraUniform` fields used in the key: `tree`, `response`, `leaf`, `tint`.
+- Mistake to avoid: relative paths in edit tools resolved to `/Users/ladvien/pixy_tree` (main). I edited 4 files there by accident and reverted them with `git apply -R`; verified main's `git diff` now only shows others' work. Use absolute worktree paths.
+
+## Commands
+`cd /Users/ladvien/pixy_tree_wt/b-share-growth; export CARGO_TARGET_DIR=/tmp/ft-b` then `cargo test --release --all-features`, `cargo build --release --examples`, forest/gallery from `$CARGO_TARGET_DIR/release/examples/`. First build in a fresh target dir took 30 min on the shared machine; incremental 1-2 min.

@@ -17,13 +17,17 @@ use crate::shading::{FloraKey, FloraUniform, specialize_flora};
 /// with [`GpuGrowth`](crate::GpuGrowth) use it.
 pub type GrowthMaterial = ExtendedMaterial<StandardMaterial, GrowthExtension>;
 
-/// The part of [`GrowthMaterial`] that moves vertices: it binds the tree's
-/// per-node state, which the vertex shader reads (and writes nothing back), and the
+/// The part of [`GrowthMaterial`] that moves vertices: it binds the buffer holding the
+/// per-node state of trees (which the vertex shader reads and writes nothing back) and the
 /// uniform of the flora shaders.
+///
+/// Trees with equal looks share one material. A tree's state is a slice of the shared buffer,
+/// which its meshes find through their `MeshTag`.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 #[bind_group_data(FloraKey)]
 pub struct GrowthExtension {
-    /// Per-node growth state, rewritten by the plugin every frame the tree's age changes.
+    /// A buffer of per-node growth state with a slice for each tree that uses it. The plugin
+    /// writes a tree's slice (not the asset) whenever its age changes.
     // Binding slots below 100 belong to the base material.
     #[storage(100, read_only)]
     pub nodes: Handle<ShaderBuffer>,
