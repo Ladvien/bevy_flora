@@ -27,42 +27,51 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 /// behind `base` along `axis`.
 pub fn root_segment(root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
     let mut mesh = MeshData::default();
+    append_root_segment(&mut mesh, root, base, axis, segments, radius);
+    mesh
+}
+
+/// [`root_segment`], appended to `mesh`.
+fn append_root_segment(mesh: &mut MeshData, root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f32) {
     let basis = RingBasis::from_axis(axis);
     if (base - root).dot(basis.axis()) > 1e-4 {
         let segments = segments.max(3);
-        let a = emit_ring(&mut mesh, root, basis, segments, 0.0, 0.0, |_, _| radius);
-        let b = emit_ring(&mut mesh, base, basis, segments, 0.0, 0.0, |_, _| radius);
-        connect_rings(&mut mesh, a, b, segments);
+        let a = emit_ring(mesh, root, basis, segments, 0.0, 0.0, |_, _| radius);
+        let b = emit_ring(mesh, base, basis, segments, 0.0, 0.0, |_, _| radius);
+        connect_rings(mesh, a, b, segments);
     }
-    mesh
 }
 
 /// Tapered tube along `node`'s (possibly bent) axis with optional twist,
 /// capped at the tip.
 pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32) -> MeshData {
     let mut mesh = MeshData::default();
+    append_tube(&mut mesh, node, radial_segments, twist_deg);
+    mesh
+}
+
+/// [`tube_mesh`], appended to `mesh`.
+fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg: f32) {
     let segments = radial_segments.max(3);
     let rings = if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 };
     let axis = node.axis(rings);
-    let (centers, dirs): (Vec<Vec3>, Vec<Vec3>) = axis.into_iter().unzip();
 
     let mut prev_ring = None;
-    for k in 0..rings {
+    for (k, &(center, dir)) in axis.iter().enumerate() {
         let t = k as f32 / (rings - 1) as f32;
         let radius = lerp(node.base_radius, node.tip_radius, t);
         let twist = (t * twist_deg).to_radians();
-        let basis = RingBasis::from_axis(dirs[k as usize]);
-        let ring = emit_ring(&mut mesh, centers[k as usize], basis, segments, twist, t, |_, _| radius);
+        let basis = RingBasis::from_axis(dir);
+        let ring = emit_ring(mesh, center, basis, segments, twist, t, |_, _| radius);
         if let Some(prev) = prev_ring {
-            connect_rings(&mut mesh, prev, ring, segments);
+            connect_rings(mesh, prev, ring, segments);
         }
         prev_ring = Some(ring);
     }
 
-    let end_dir = dirs[rings as usize - 1];
-    let end_pos = centers[rings as usize - 1];
+    let (end_pos, end_dir) = axis[rings as usize - 1];
     emit_cap(
-        &mut mesh,
+        mesh,
         end_pos,
         RingBasis::from_axis(end_dir),
         segments,
@@ -70,8 +79,6 @@ pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32) -> MeshData 
         end_dir,
         |_, _| node.tip_radius,
     );
-
-    mesh
 }
 
 /// Start of a primary's collar (its wide end) for `collar_mesh` arguments.
@@ -87,6 +94,12 @@ const COLLAR_FLARE: f32 = 1.3;
 /// own radius there, so it never stands proud of a tapering branch.
 pub fn collar_mesh(node: &Node, collar_length: f32, radial_segments: u32) -> MeshData {
     let mut mesh = MeshData::default();
+    append_collar(&mut mesh, node, collar_length, radial_segments);
+    mesh
+}
+
+/// [`collar_mesh`], appended to `mesh`.
+fn append_collar(mesh: &mut MeshData, node: &Node, collar_length: f32, radial_segments: u32) {
     let segments = radial_segments.max(3);
     let rings = 3u32;
     let (start, direction) = (node.start, node.direction);
@@ -104,14 +117,12 @@ pub fn collar_mesh(node: &Node, collar_length: f32, radial_segments: u32) -> Mes
         let center = collar_start.lerp(collar_end, t);
         let smooth_t = t * t * (3.0 - 2.0 * t);
         let radius = lerp(start_radius, end_radius, smooth_t);
-        let ring = emit_ring(&mut mesh, center, basis, segments, 0.0, t, |_, _| radius);
+        let ring = emit_ring(mesh, center, basis, segments, 0.0, t, |_, _| radius);
         if let Some(prev) = prev_ring {
-            connect_rings(&mut mesh, prev, ring, segments);
+            connect_rings(mesh, prev, ring, segments);
         }
         prev_ring = Some(ring);
     }
-
-    mesh
 }
 
 /// Parent radius from child radii under the pipe model
@@ -206,23 +217,23 @@ fn primary_root(node: &Node) -> Option<Vec3> {
 }
 
 /// The wood behind a primary's base ring at `at` (radius `radius`, around the
-/// branch axis): an extension into the trunk, or for a steep branch a rounded
-/// end, so the base ring coincides with the tube's or collar's and nothing
-/// shows a flat cut.
-fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
+/// branch axis), appended to `mesh`: an extension into the trunk, or for a
+/// steep branch a rounded end, so the base ring coincides with the tube's or
+/// collar's and nothing shows a flat cut.
+fn append_primary_base(mesh: &mut MeshData, node: &Node, at: Vec3, radius: f32, segments: u32) {
     match primary_root(node) {
-        Some(root) => root_segment(root, at, node.direction, segments, radius),
-        None => root_dome(at, node.direction, segments, radius),
+        Some(root) => append_root_segment(mesh, root, at, node.direction, segments, radius),
+        None => append_root_dome(mesh, at, node.direction, segments, radius),
     }
 }
 
-/// A rounded, closed end behind the ring of `radius` at `base`: the base of a
-/// branch that hugs the trunk, so it grows out of the trunk like a knot instead
-/// of ending in a flat disc. Its last ring (`segments` sides) coincides with the
-/// tube's base ring; the four rings behind it have twice the sides, so the knot
-/// is rounder than the (often hexagonal) tube it ends. About a hemisphere.
-fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
-    let mut mesh = MeshData::default();
+/// A rounded, closed end behind the ring of `radius` at `base`, appended to
+/// `mesh`: the base of a branch that hugs the trunk, so it grows out of the
+/// trunk like a knot instead of ending in a flat disc. Its last ring
+/// (`segments` sides) coincides with the tube's base ring; the four rings
+/// behind it have twice the sides, so the knot is rounder than the (often
+/// hexagonal) tube it ends. About a hemisphere.
+fn append_root_dome(mesh: &mut MeshData, base: Vec3, axis: Vec3, segments: u32, radius: f32) {
     let basis = RingBasis::from_axis(axis);
     let segments = segments.max(3);
     let round = segments * 2;
@@ -237,25 +248,24 @@ fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
         ring
     };
     let (sin, cos) = latitudes[0].to_radians().sin_cos();
-    emit_cap(&mut mesh, base - axis * (radius * sin), basis, round, 0.0, -axis, |_, _| radius * cos);
+    emit_cap(mesh, base - axis * (radius * sin), basis, round, 0.0, -axis, |_, _| radius * cos);
     let mut back = None;
     for latitude in latitudes {
-        let ring = ring_at(&mut mesh, latitude, round);
+        let ring = ring_at(mesh, latitude, round);
         if let Some(prev) = back {
-            connect_rings(&mut mesh, prev, ring, round);
+            connect_rings(mesh, prev, ring, round);
         }
         back = Some(ring);
     }
     // Join the last round ring to the base ring: each base edge (a0, a1) meets
     // three round vertices (b0, b1, b2), the middle one sitting between them.
-    let base_ring = ring_at(&mut mesh, 0.0, segments);
+    let base_ring = ring_at(mesh, 0.0, segments);
     let back = back.expect("at least one round ring");
     for i in 0..segments {
         let (a0, a1) = (base_ring + i, base_ring + i + 1);
         let (b0, b1, b2) = (back + 2 * i, back + 2 * i + 1, back + 2 * i + 2);
         mesh.indices.extend_from_slice(&[b0, b1, a0, b1, a1, a0, b1, b2, a1]);
     }
-    mesh
 }
 
 /// Wood mesh for the whole (aged) skeleton: trunk, collars and branch tubes,
@@ -274,21 +284,22 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
         }
         let segments = radial_segments_for(node, params);
         if node.kind == NodeKind::Primary {
-            roots.extend(&primary_base(node, node.start, node.base_radius, segments));
+            append_primary_base(&mut roots, node, node.start, node.base_radius, segments);
             if params.mesh.collar_enabled {
                 let collar_length = node.base_radius * params.mesh.collar_length;
                 // Same sides as the tube it wraps.
                 let collar_segments = segments;
-                mesh.extend(&collar_mesh(node, collar_length, collar_segments));
-                roots.extend(&primary_base(
+                append_collar(&mut mesh, node, collar_length, collar_segments);
+                append_primary_base(
+                    &mut roots,
                     node,
                     collar_start(node.start, node.direction, collar_length),
                     node.base_radius * COLLAR_FLARE,
                     collar_segments,
-                ));
+                );
             }
         }
-        mesh.extend(&tube_mesh(node, segments, b.twist));
+        append_tube(&mut mesh, node, segments, b.twist);
     }
 
     if params.mesh.smooth_iterations > 0 {
@@ -378,6 +389,18 @@ mod tests {
     use crate::mesh::rings::tests::{assert_faces_outward, assert_indices_valid};
     use crate::presets::TreePreset;
     use crate::skeleton::generate_skeleton;
+
+    fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
+        let mut mesh = MeshData::default();
+        append_primary_base(&mut mesh, node, at, radius, segments);
+        mesh
+    }
+
+    fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
+        let mut mesh = MeshData::default();
+        append_root_dome(&mut mesh, base, axis, segments, radius);
+        mesh
+    }
 
     #[test]
     fn wood_mesh_faces_outward_for_all_presets() {
