@@ -58,3 +58,58 @@ jobs:
 
       - name: Package
         run: cargo package --locked
+
+  # The build job never opens a graphics device, so nothing in it compiles the
+  # growth vertex shaders. This job renders for real on a software Vulkan driver
+  # (lavapipe) inside a virtual X display: the same scenarios once with the CPU
+  # rebuild and once with `GpuGrowth`, which must come out close.
+  gpu-smoke:
+    name: GPU growth on software Vulkan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bevy build dependencies and a software Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+            mesa-vulkan-drivers libvulkan1 xvfb libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon-x11-0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gpu-smoke
+
+      - name: Build the examples
+        run: cargo build --release --example gallery --example compare_gallery
+
+      - name: Render with the CPU rebuild
+        shell: bash
+        run: |
+          mkdir -p target/ci
+          xvfb-run -a cargo run --release --example gallery -- --out target/ci/cpu \
+            --filter grow_oak_4 --filter grow_oak_6 --filter grow_spruce_6 --filter age_willow_6 --filter smoothyoung_oak_4 \
+            2>&1 | tee target/ci/cpu.log
+
+      # `gallery --gpu` exits with an error when the device cannot grow trees on
+      # the GPU, so a quiet fall back to the CPU path cannot pass this step.
+      - name: Render with GpuGrowth
+        shell: bash
+        run: |
+          xvfb-run -a cargo run --release --example gallery -- --gpu --out target/ci/gpu \
+            --filter grow_oak_4 --filter grow_oak_6 --filter grow_spruce_6 --filter age_willow_6 --filter smoothyoung_oak_4 \
+            2>&1 | tee target/ci/gpu.log
+          if grep -E "ERROR|panicked" target/ci/gpu.log; then exit 1; fi
+
+      - name: Compare the two renders
+        run: cargo run --release --example compare_gallery -- target/ci/cpu target/ci/gpu
+
+      - name: Keep the renders when the job fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-smoke-renders
+          path: target/ci

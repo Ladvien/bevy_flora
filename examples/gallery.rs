@@ -33,8 +33,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
-    CrownShape, FloraPlugin, FoliagePlacement, GpuGrowth, LeafOrientation, LeafStyle, MeshData, NodeKind,
-    ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
+    CrownShape, FloraPlugin, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation, LeafStyle, MeshData,
+    NodeKind, ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
 
 const WINDOW: UVec2 = UVec2::new(1280, 960);
@@ -724,12 +724,20 @@ fn drive(
     mut overlay: Single<&mut Text, With<Overlay>>,
     screenshots: Query<Entity, With<Screenshot>>,
     mut exit: MessageWriter<AppExit>,
+    support: Res<GpuGrowthSupport>,
 ) {
     let gallery = &mut *gallery;
     match gallery.phase {
         Phase::Warmup => {
             gallery.frames += 1;
             if gallery.frames >= WARMUP_FRAMES {
+                // Without GPU growth the trees would quietly grow on the CPU and
+                // the "GPU" renders would prove nothing.
+                if gallery.gpu && !support.0 {
+                    eprintln!("gallery --gpu: this device cannot grow trees on the GPU (GpuGrowthSupport is false)");
+                    exit.write(AppExit::error());
+                    return;
+                }
                 gallery.phase = Phase::Apply;
             }
         }
