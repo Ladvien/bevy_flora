@@ -101,6 +101,11 @@ pub struct GpuGrowth;
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GpuGrowthSupport(pub bool);
 
+/// Set when [`GrowthMaterial`] was registered with the renderer, which only
+/// happens if the plugin was added after the renderer's plugins.
+#[derive(Resource)]
+pub(crate) struct GrowthMaterialAdded;
+
 /// Register what GPU growth needs: the support flag, the material and its
 /// shaders when there is a renderer, and the asset types the systems use when
 /// there is none.
@@ -108,7 +113,8 @@ pub(crate) fn build(app: &mut App) {
     app.init_resource::<GpuGrowthSupport>().register_type::<GpuGrowth>();
     if app.get_sub_app(RenderApp).is_some() {
         material::add_shaders(app);
-        app.add_plugins(MaterialPlugin::<GrowthMaterial>::default());
+        app.add_plugins(MaterialPlugin::<GrowthMaterial>::default())
+            .insert_resource(GrowthMaterialAdded);
     } else {
         app.init_asset::<GrowthMaterial>();
         if !app.world().contains_resource::<Assets<ShaderBuffer>>() {

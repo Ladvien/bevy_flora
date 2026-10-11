@@ -10,7 +10,7 @@ use bevy::render::storage::ShaderBuffer;
 use super::material::{GrowthExtension, GrowthMaterial};
 use super::mesh::build_growth_data;
 use super::state::GrowthState;
-use super::{GpuGrowth, GpuGrowthSupport};
+use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
 use crate::plugin::{
     Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, leaf_material,
     material, replace_mesh,
@@ -27,10 +27,13 @@ pub(crate) struct GrowthPaint {
     pub state: GrowthState,
 }
 
-/// Decide once the renderer exists whether the device can hold the per-node
-/// state (a storage buffer readable in the vertex stage).
+/// Decide once the renderer exists whether trees can grow on this device: it
+/// must hold the per-node state (a storage buffer readable in the vertex stage)
+/// and the plugin must have been added after the renderer's, which is what
+/// registers [`GrowthMaterial`] with it.
 pub(crate) fn detect_gpu_growth_support(
     device: Option<Res<RenderDevice>>,
+    material: Option<Res<GrowthMaterialAdded>>,
     mut support: ResMut<GpuGrowthSupport>,
     mut checked: Local<bool>,
 ) {
@@ -39,12 +42,17 @@ pub(crate) fn detect_gpu_growth_support(
     }
     let Some(device) = device else { return };
     *checked = true;
-    let supported = !bevy::render::storage_buffers_are_unsupported(&device.limits());
-    if !supported {
+    let storage = !bevy::render::storage_buffers_are_unsupported(&device.limits());
+    if !storage {
         bevy::log::warn!(
             "this device has no storage buffers in the vertex stage (WebGL2?); trees with `GpuGrowth` grow on the CPU instead"
         );
+    } else if material.is_none() {
+        bevy::log::warn!(
+            "`FloraPlugin` was added before the renderer's plugins, so `GpuGrowth` is off; add it after `DefaultPlugins`"
+        );
     }
+    let supported = storage && material.is_some();
     if support.0 != supported {
         support.0 = supported;
     }
