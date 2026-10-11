@@ -14,7 +14,8 @@ use bevy::mesh::{Indices, Mesh, MeshVertexAttribute, PrimitiveTopology, VertexFo
 pub const ATTRIBUTE_LEAF_SWAY: MeshVertexAttribute =
     MeshVertexAttribute::new("LeafSway", 0x666C_6F72_6110, VertexFormat::Float32x4);
 
-/// Triangle-list geometry with positions, normals and one UV set.
+/// Triangle-list geometry: positions, normals, UVs and optionally vertex colours, a second UV
+/// set (leaf shading) and a per-vertex leaf sway.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MeshData {
     /// Vertex positions, in metres.
