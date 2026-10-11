@@ -344,8 +344,16 @@ pub struct FoliageParams {
     pub normal_bend: f32,
     /// Per-leaf brightness variation (0–0.5): each leaf's colour is scaled by a factor in 1 ± this.
     pub color_variation: f32,
+    /// Per-leaf hue shift (0–0.5): each leaf leans toward yellow-green or blue-green by up to
+    /// this fraction.
+    pub hue_variation: f32,
+    /// How much darker leaves deep inside the crown are under ambient light (0–1); baked into
+    /// the mesh.
+    pub occlusion: f32,
     /// Leaf base color.
     pub color: Color,
+    /// How leaves take light: gloss, veins, the light that comes through them.
+    pub shading: LeafShading,
 }
 
 impl Default for FoliageParams {
@@ -366,8 +374,66 @@ impl Default for FoliageParams {
             use_crown_density: true,
             normal_bend: 0.8,
             color_variation: 0.3,
+            hue_variation: 0.3,
+            occlusion: 0.6,
             color: Color::srgb(0.133, 0.545, 0.133),
+            shading: LeafShading::default(),
         }
+    }
+}
+
+/// How leaves take light, shared by every leaf of a tree.
+///
+/// Read by the shaders of [`FloraMaterial`](crate::FloraMaterial); trees drawn with a plain
+/// `StandardMaterial` ignore it.
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LeafShading {
+    /// Strength of the light coming through a leaf lit from behind (0 = none).
+    pub translucency: f32,
+    /// Multiplies the leaf colour for the light coming through it.
+    pub transmission_tint: Color,
+    /// Perceptual roughness of the upper side; the lower side is 0.3 rougher, capped at 1.
+    pub roughness: f32,
+    /// How visible the midrib and side veins are (0–1); leaf-shaped cards only.
+    pub veins: f32,
+    /// How much paler the lower side is than the upper (0–1).
+    pub underside: f32,
+}
+
+impl Default for LeafShading {
+    fn default() -> Self {
+        Self {
+            translucency: 1.0,
+            transmission_tint: Color::srgb(1.0, 0.95, 0.55),
+            roughness: 0.55,
+            veins: 0.5,
+            underside: 0.25,
+        }
+    }
+}
+
+/// How a species moves in the wind. Multiplies what [`FloraWind`](crate::FloraWind) asks for, so a
+/// willow sways more than an oak in the same weather.
+///
+/// Read by the shaders of [`FloraMaterial`](crate::FloraMaterial); trees drawn with a plain
+/// `StandardMaterial` do not move.
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct WindResponse {
+    /// How far the whole tree bends (0 = rigid).
+    pub sway: f32,
+    /// How much its leaves flutter (0 = not at all).
+    pub flutter: f32,
+    /// How fast it sways and its gusts come and go.
+    pub sway_frequency: f32,
+    /// How fast its leaves flutter.
+    pub flutter_frequency: f32,
+}
+
+impl Default for WindResponse {
+    fn default() -> Self {
+        Self { sway: 1.0, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 }
     }
 }
 
@@ -389,6 +455,8 @@ pub struct TreeParams {
     pub foliage: FoliageParams,
     /// Growth timing.
     pub growth: GrowthParams,
+    /// How the tree moves in the wind.
+    pub wind: WindResponse,
     /// Trunk and branch color.
     pub trunk_color: Color,
 }
@@ -403,6 +471,7 @@ impl Default for TreeParams {
             mesh: MeshParams::default(),
             foliage: FoliageParams::default(),
             growth: GrowthParams::default(),
+            wind: WindResponse::default(),
             trunk_color: Color::srgb(0.545, 0.271, 0.075),
         }
     }

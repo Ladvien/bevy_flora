@@ -128,3 +128,13 @@ fn grown_position(g: GrowthAttrs) -> vec3<f32> {
     // with no size already sits on its anchor).
     return select(start, anchor + scale * g.offset.xyz, on);
 }
+
+// How grown the vertex's leaf is: the share of its mature size that `grown_position` scales
+// a leaf by; 0 for a vertex that is not a leaf's. A leaf's flutter scales by it too.
+fn leaf_growth_scale(g: GrowthAttrs) -> f32 {
+    if (g.id.y & 255u) != KIND_LEAF {
+        return 0.0;
+    }
+    let b = growth[1u + g.id.x * NODE_VEC4S + 1u];
+    return select(0.0, b.z, b.z > 0.0 && (b.w < 0.0 || f32(g.id.y >> 8u) < b.w));
+}

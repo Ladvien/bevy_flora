@@ -1,21 +1,39 @@
 // Prepass vertex stage of a growing tree (depth, normal, motion-vector prepasses
-// and shadow maps): Bevy's own, with the position taken from the growth state.
-// Growth does not feed motion vectors: the previous position is the current one.
+// and shadow maps): Bevy's own, with the position taken from the growth state and the
+// same flutter and bend as `growth.wesl`.
+// Growth and wind do not feed motion vectors: the previous position is the current one.
 import bevy_pbr::{
     prepass::io::{Vertex, VertexOutput, decompress_vertex},
     render::{mesh_functions, view_transformations::position_world_to_clip},
 };
-import package::gpu::growth_common::{GrowthAttrs, grown_position};
+import bevy_render::globals::Globals;
+import package::gpu::growth_common::{GrowthAttrs, grown_position, leaf_growth_scale};
+import package::shading::common::{flutter_offset, wind_bend};
+
+// The prepass's view bind group (view, globals, previous view); `bevy_pbr` has no WESL
+// declaration of it.
+@group(0) @binding(1) var<uniform> globals: Globals;
 
 @vertex
-fn vertex(vertex_no_morph: Vertex, growth_attrs: GrowthAttrs) -> VertexOutput {
+fn vertex(
+    vertex_no_morph: Vertex,
+    growth_attrs: GrowthAttrs,
+@if(FLORA_LEAF)
+    @location(11) sway: vec4<f32>,
+) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
 
-    out.world_position = mesh_functions::mesh_position_local_to_world(
-        world_from_local,
-        vec4<f32>(grown_position(growth_attrs), 1.0)
+    let origin = world_from_local[3].xyz;
+    var local = grown_position(growth_attrs);
+@if(FLORA_LEAF)
+    local = local + flutter_offset(sway, origin, globals.time) * leaf_growth_scale(growth_attrs);
+
+    let world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local, 1.0));
+    out.world_position = vec4<f32>(
+        wind_bend(world.xyz, local.y, origin, length(world_from_local[1].xyz), globals.time),
+        1.0
     );
     out.position = position_world_to_clip(out.world_position.xyz);
 @if(UNCLIPPED_DEPTH_ORTHO_EMULATION) {
@@ -25,6 +43,9 @@ fn vertex(vertex_no_morph: Vertex, growth_attrs: GrowthAttrs) -> VertexOutput {
 
 @if(VERTEX_UVS_A)
     out.uv = vertex.uv;
+
+@if(VERTEX_UVS_B)
+    out.uv_b = vertex.uv_b;
 
 @if(NORMAL_PREPASS_OR_DEFERRED_PREPASS && VERTEX_NORMALS)
     out.world_normal = mesh_functions::mesh_normal_local_to_world(

@@ -84,7 +84,7 @@ jobs:
           key: gpu-smoke
 
       - name: Build the examples
-        run: cargo build --release --example gallery --example compare_gallery
+        run: cargo build --release --example gallery --example compare_gallery --example forest
 
       - name: Render with the CPU rebuild
         shell: bash

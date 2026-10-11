@@ -14,13 +14,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.4 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.5 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.4"
+bevy_flora = "0.5"
 ```
 
 | feature | default | what it does |
@@ -93,6 +93,74 @@ Main-world cost per frame with every tree growing (a headless `App`, release bui
 
 Shadows follow the growth (the prepass shares the vertex shader), and the grown frames match the CPU path: over all 319 gallery scenarios the mean difference between the two renders is 0.08 of 255 (105 PNGs are byte-identical, the worst is a willow at 2.2). What differs, and why, is listed on `GpuGrowth` in the docs: smoothing is computed once on the mature mesh and deformed, side counts stay at the mature count, `AllBranches` leaves keep their mature positions, and the `Mesh` assets (picking, physics, culling) are the mature tree. It needs storage buffers in the vertex stage, so not WebGL2; there the trees grow on the CPU.
 
+### Drawing a forest: `TreePool`
+
+`ProceduralTree` gives every tree its own meshes, which a GPU can draw a few thousand of. For a forest build a `TreePool` once, a few seed variants of one tree, and place `PooledTree`s from it. Entities that share a mesh and a material are drawn in one instanced call, and the distance to the camera picks what is drawn: the full tree up close, two coarser levels of detail (30 m and 80 m by default, cross-fading) and, beyond 200 m, one camera-facing quad per tree that shows a view of the variant baked in the running app.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::{FloraPlugin, LodSettings, PooledTree, TreePool, TreePreset, build_pool};
+
+fn forest(
+    mut commands: Commands,
+    mut pools: ResMut<Assets<TreePool>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let pool = build_pool(
+        &TreePreset::Oak.params(),
+        8, // variants: seeds 1, 2, ... 8
+        f32::INFINITY,
+        &LodSettings::default(),
+        &mut meshes,
+    );
+    let pool = pools.add(pool);
+    for i in 0..100_000u32 {
+        commands.spawn((
+            PooledTree { pool: pool.clone(), variant: i },
+            Transform::from_xyz((i % 316) as f32 * 8.0, 0.0, (i / 316) as f32 * 8.0),
+        ));
+    }
+}
+```
+
+Measured with `cargo run --release --example forest -- --offscreen` (1920x1080, one shadow-casting sun, an oak forest on an 8 m grid seen across it from 30 m up, Apple M5, release build; the median of three runs, except 5 000 separate trees, which was one run, and the largest forests are not run with a mesh per tree, which would take an estimated 15 and 75 GB of GPU memory; timings on the machine drift by 40% and more between runs, so read them as that wide):
+
+| trees | one `ProceduralTree` each | pool, levels of detail only | pool, with impostors |
+|---|---|---|---|
+| 1 000 | 114 ms | 7.5 ms | 6.2 ms |
+| 5 000 | 1 280 ms | 19.0 ms | 7.0 ms |
+| 20 000 | not run | 40.7 ms | 9.0 ms |
+| 100 000 | not run | 118 ms | 15.3 ms (p95 16.2) |
+
+The pool's trees are static: they have the age the pool was built at, and growing trees stay `ProceduralTree` (with `GpuGrowth`), which suits the few that are close. Impostors are baked once per variant by a few frames of offscreen rendering, so a tree appears when that is done, and they need `FloraPlugin` added after `DefaultPlugins` (before it, or with no renderer, the coarsest level is drawn at every distance and one warning says so). They are baked unlit, as a colour and a surface picture, and shaded by the scene's own lights every frame: they follow the time of day, glow with the sun behind them and sway with the wind. They cast no shadows, and they show one of eight views, at one elevation. Level 2 and the impostors replace thin twigs and most leaves, so a forest seen from above or close up should keep its near trees at level 0.
+
+### Leaf shading and wind
+
+Trees drawn by the plugin move in the wind, with no cost to the CPU per frame. `FloraWind` is a global resource: how hard (`strength`), which way (`direction`), how fast (`speed`), how far trees bend (`bend`), how much leaves flutter (`flutter`, `flutter_frequency`), how much the wind comes in gusts (`gust_strength`, `gust_frequency`) and sways across itself (`turbulence`). `TreeParams::wind` is how a species answers it, and the presets set their own: a willow moves more than an oak, a bonsai hardly at all. A `GustFront` is a band of stronger wind that sweeps across the world:
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::{FloraWind, GustFront, TreePreset, WindResponse};
+
+fn weather(mut wind: ResMut<FloraWind>, time: Res<Time>) {
+    wind.strength = 0.6; // 0 is calm, 1 a strong wind
+    wind.direction = Vec2::new(1.0, 0.0); // blowing toward +x
+    // A band of wind, 30 m deep, crossing the world along +x at 20 m/s from x = -50.
+    wind.launch_gust(
+        GustFront { origin: Vec2::new(-50.0, 0.0), speed: 20.0, ..default() },
+        &time,
+    );
+}
+
+fn stiff_willow() -> bevy_flora::TreeParams {
+    let mut params = TreePreset::Willow.params();
+    params.wind = WindResponse { sway: 0.4, ..default() };
+    params
+}
+```
+
+Changing `FloraWind` rewrites every flora material once (two per tree, two per pool, one per impostor variant), so set it when the weather changes, not every frame; the gusts and the flutter animate by themselves. Wind writes no motion vectors, and branches do not sway on their own: the whole tree bends and the leaves flutter.
+
 ### Without the plugin
 
 `build_tree` is a pure function from parameters and age to CPU meshes and the aged skeleton, so you can bake trees offline, feed your own renderer, or build colliders from the skeleton:
@@ -114,7 +182,9 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Deterministic.** Each branch draws randomness from its own seeded stream, so the same `seed` gives the same tree on every run, and aging never re-rolls branches or leaves that already exist.
 - **Branch shape**: crown envelopes, phyllotaxis, apical dominance, Y-splits, recursive sub-branches, twist, and a gravity bend that sub-branches and leaves follow. Floor avoidance keeps even strongly drooping wood above the ground.
 - **Closed wood.** Branches meet the trunk through flared collars and root segments, forks taper into their halves, and trunk tops end in a flat cap, a cone or a leader branch. Optional pipe-model radii, radius-adaptive ring counts and volume-preserving (Taubin) smoothing that keeps seams, branch ends and twig seats in place.
-- **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. Leaf cards are leaf-shaped (cut into the geometry, so there is no alpha-mask `discard`) and grow out of their twigs, crowns shade as one soft volume through crown-bent normals (`normal_bend`), and each leaf gets its own brightness through a vertex colour (`color_variation`). All of it is baked into the mesh, so the stock `StandardMaterial` is enough and no custom shader is needed (the opt-in `GpuGrowth` path adds a vertex shader, below). The leaf material is translucent, so back-lit leaves are not black.
+- **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. Leaf cards are leaf-shaped (cut into the geometry, so there is no alpha-mask `discard`) and grow out of their twigs, crowns shade as one soft volume through crown-bent normals (`normal_bend`), and each leaf gets its own brightness (`color_variation`), hue (`hue_variation`) and share of the sky (`occlusion`), all baked into the mesh. The plugin draws trees with `FloraMaterial`, a `StandardMaterial` with a leaf shader: a darker, glossier upper side, a paler matte lower side, veins, and light through a leaf lit from behind (`LeafShading`). The meshes also draw with a plain `StandardMaterial`, without those.
+- **Wind.** `FloraWind` bends every tree and flutters its leaves in the vertex shader, shadows and impostors included, with a travelling `GustFront`, and each species answers in its own way (`TreeParams::wind`).
+- **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 15 ms a frame, leaf shading and wind included (see above); a forest of one `ProceduralTree` each is several times slower with the flora material than with a plain `StandardMaterial`.
 
 ## Examples
 
@@ -124,6 +194,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 | `gallery` | Renders 319 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
 | `capture_growth` | Records the clip above as numbered PNG frames (`--gpu` grows the tree in the vertex shader). |
+| `forest` | The forest-scale benchmark: up to 100 000 trees on a grid under a shadow-casting sun, drawn either naively (`--mode naive`, a `ProceduralTree` each) or from a `TreePool` (`--mode pool`, the default), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window; `--no-impostors`, `--lod` and `--shadows` change the setup, `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>` and `--gust <speed>` move the light and the weather. |
 
 ```sh
 cargo run --release --example showcase
