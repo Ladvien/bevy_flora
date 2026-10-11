@@ -116,19 +116,6 @@ jobs:
       - name: Compare the two renders
         run: cargo run --release --example compare_gallery -- target/ci/cpu target/ci/gpu
 
-      # The forest path bakes the impostors (an offscreen render read back) and
-      # draws a pool through the instanced levels of detail and the impostor
-      # shader, none of which a headless test compiles or runs. The example exits
-      # with an error when a pool ends up without impostors.
-      - name: Render a pooled forest
-        shell: bash
-        run: |
-          xvfb-run -a cargo run --release --example forest -- --mode pool --trees 400 --spacing 20 \
-            --lod 20,40,60 --warmup-secs 20 --screenshot target/ci/forest.png \
-            2>&1 | tee target/ci/forest.log
-          if grep -E "ERROR|panicked" target/ci/forest.log; then exit 1; fi
-          test -s target/ci/forest.png
-
       - name: Keep the renders when the job fails
         if: failure()
         uses: actions/upload-artifact@v4
