@@ -5,6 +5,58 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.4.0] - 2026-10-10
+
+A new opt-in growth path. Without the new component a tree is exactly as in 0.3.5 (all 319
+gallery images byte-identical to 0.3.5, `growth.gif` unchanged).
+
+### Added
+
+- **`GpuGrowth`**, a component that grows a tree in the vertex shader. The mature tree is built
+  and uploaded once; each frame the plugin ages the skeleton and writes a few kilobytes of
+  per-node state into a storage buffer, and nothing else is uploaded. Main-world cost per frame
+  with every tree growing (headless `App`, release build, Apple M-series, median of three runs):
+
+  | 200 growing trees | CPU rebuild | `GpuGrowth` |
+  |---|---|---|
+  | oak | 17.6 ms | 0.81 ms |
+  | willow | 25.4 ms | 0.90 ms |
+  | oak, 2 smoothing passes | 69.8 ms | 0.70 ms |
+
+  That is 0.004 ms of CPU per tree per frame against 0.09-0.35 ms. The wood and the leaves use
+  `GrowthMaterial` (`StandardMaterial` extended by `GrowthExtension`), the prepass shares the
+  vertex shader so shadows follow the growth, and trees can gain or lose `GpuGrowth` at any time.
+- `GpuGrowthSupport`, a resource the plugin sets from the device once the renderer is ready:
+  `true` where the vertex stage can read a storage buffer, `false` on WebGL2. While it is `false`
+  (and before the renderer exists) trees with `GpuGrowth` grow on the CPU. Insert it yourself only
+  in a headless test.
+- `gallery --gpu`, `capture_growth --gpu` and the `showcase` key `U` render the GPU path; the new
+  `compare_gallery` example diffs two render directories (mean difference and share of close pixels
+  per PNG, non-zero exit past the limits).
+
+### What differs from the CPU path
+
+Documented on `GpuGrowth`. Over all 319 gallery scenarios the two paths' renders differ by 0.08 of
+255 on average (105 PNGs byte-identical; the worst is a willow at 2.2, the worst share of close
+pixels 93.0%); the 192 frames of the README clip, grown by age-only updates, differ by 0.07 on
+average (worst frame 0.75). The wood (trunk, collars, tubes, bases) matches the CPU mesh to within
+0.2 mm at every age when smoothing and adaptive resolution are off (checked vertex by vertex
+against the CPU meshers at hundreds of ages on every preset). Smoothing is computed once on the mature mesh and
+deformed; side counts stay at the mature count; `AllBranches` leaves keep their mature positions
+along a branch and appear in order; tip-cluster leaves keep the mature mirroring; a growing pointed
+trunk ends in a flat cap; the `Mesh` assets (picking, physics, culling) are the mature tree;
+growth does not feed motion vectors.
+
+### Changed
+
+- `rebuild_trees` skips trees that grow on the GPU and takes the `GpuGrowthSupport` resource;
+  `TreeRender` also exists for GPU trees (its mesh handles are the mature meshes). `FloraPlugin`
+  adds a `MaterialPlugin` for `GrowthMaterial` when a renderer exists, so add it after
+  `DefaultPlugins`.
+- The `bevy` dependency enables `bevy_log` (for one warning when a device lacks storage buffers).
+- `docs/growth.gif`, the README clip, was re-recorded for this release; it comes out
+  byte-identical.
+
 ## [0.3.5] - 2026-10-10
 
 Performance only; no API changes, and the meshes are bit-identical (all 319 gallery images
@@ -244,6 +296,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.4.0]: https://github.com/Ladvien/bevy_flora/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/Ladvien/bevy_flora/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/Ladvien/bevy_flora/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/Ladvien/bevy_flora/compare/v0.3.2...v0.3.3

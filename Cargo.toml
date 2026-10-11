@@ -1,6 +1,6 @@
 [package]
 name = "bevy_flora"
-version = "0.3.5"
+version = "0.4.0"
 edition = "2024"
 # Bevy 0.20's own crates declare 1.97.1, and this crate cannot compile without
 # them, so claiming less would be a floor nothing can stand on.
@@ -33,7 +33,7 @@ include = [
 all-features = true
 
 [dependencies]
-bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset", "bevy_color", "bevy_mesh", "bevy_pbr"] }
+bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset", "bevy_color", "bevy_log", "bevy_mesh", "bevy_pbr"] }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]

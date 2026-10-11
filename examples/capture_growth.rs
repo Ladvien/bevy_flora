@@ -2,13 +2,15 @@
 //! while the camera orbits it, rendered offscreen to numbered PNG frames.
 //!
 //! ```text
-//! cargo run --release --example capture_growth -- [--out <dir>] [--preset <name>]
+//! cargo run --release --example capture_growth -- [--out <dir>] [--preset <name>] [--gpu]
 //! ffmpeg -framerate 24 -i <dir>/frame_%04d.png \
 //!   -vf "fps=24,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" docs/growth.gif
 //! ```
 //!
 //! The age is set explicitly per frame (no wall clock), so two runs write the
-//! same frames. `--out` defaults to `target/capture/growth`, `--preset` to `oak`.
+//! same frames. `--out` defaults to `target/capture/growth`, `--preset` to `oak`;
+//! `--gpu` grows the tree in the vertex shader instead of rebuilding its meshes
+//! (compare the two runs' frames with the `compare_gallery` example).
 
 use std::f32::consts::TAU;
 use std::fs;
@@ -19,7 +21,7 @@ use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use bevy_flora::{FloraPlugin, ProceduralTree, TreeAge, TreePreset, build_tree};
+use bevy_flora::{FloraPlugin, GpuGrowth, ProceduralTree, TreeAge, TreePreset, build_tree};
 
 const SIZE: UVec2 = UVec2::new(800, 600);
 /// Frames over which the tree grows from age 0 to maturity.
@@ -35,6 +37,8 @@ const ORBIT_TURNS: f32 = 0.35;
 
 #[derive(Resource)]
 struct Capture {
+    /// Grow the tree in the vertex shader (`GpuGrowth`).
+    gpu: bool,
     out: PathBuf,
     target: Handle<Image>,
     mature_at: f32,
@@ -50,17 +54,19 @@ struct Capture {
 struct OrbitCam;
 
 fn usage() -> ! {
-    eprintln!("usage: capture_growth [--out <dir>] [--preset <name>]");
+    eprintln!("usage: capture_growth [--out <dir>] [--preset <name>] [--gpu]");
     std::process::exit(2);
 }
 
 fn main() {
     let mut out = PathBuf::from("target/capture/growth");
     let mut preset = TreePreset::Oak;
+    let mut gpu = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--out" => out = args.next().unwrap_or_else(|| usage()).into(),
+            "--gpu" => gpu = true,
             "--preset" => {
                 let name = args.next().unwrap_or_else(|| usage());
                 preset = TreePreset::ALL
@@ -110,6 +116,7 @@ fn main() {
             frame: 0,
             wait: WARMUP_FRAMES,
             in_flight: false,
+            gpu,
         })
         .insert_resource(SelectedPreset(params))
         .add_systems(Startup, setup)
@@ -150,7 +157,10 @@ fn setup(
             ..default()
         })),
     ));
-    commands.spawn((ProceduralTree(preset.0.clone()), TreeAge(0.0)));
+    let tree = commands.spawn((ProceduralTree(preset.0.clone()), TreeAge(0.0))).id();
+    if capture.gpu {
+        commands.entity(tree).insert(GpuGrowth);
+    }
     commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),

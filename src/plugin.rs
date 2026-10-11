@@ -6,11 +6,16 @@
 //! two child entities (wood and leaves) in sync. Adding [`Growing`] advances
 //! `TreeAge` every frame until the tree is mature.
 //!
-//! Performance: a growing tree rebuilds both meshes every frame; `Growing` is
-//! meant for a few hero trees, not a forest. The full-grown skeleton is kept
-//! between frames and regenerated only when [`ProceduralTree`] changes, and
-//! the materials are only touched when a colour changes, so the renderer does
-//! not re-prepare them every frame.
+//! Performance: a growing tree rebuilds both meshes every frame (0.1-0.4 ms of
+//! CPU per tree); `Growing` is meant for a few hero trees, not a forest. The
+//! full-grown skeleton is kept between frames and regenerated only when
+//! [`ProceduralTree`] changes, and the materials are only touched when a colour
+//! changes, so the renderer does not re-prepare them every frame.
+//!
+//! For a forest, add [`GpuGrowth`] to the trees: the mature meshes are built and
+//! uploaded once, and each frame only a few kilobytes of per-node state are
+//! written (a few microseconds of CPU per tree); the vertex shader does the
+//! growing. See its docs for what differs from the CPU path.
 
 use bevy::asset::{Assets, Handle};
 use bevy::ecs::prelude::*;
@@ -22,6 +27,8 @@ use bevy::camera::visibility::Visibility;
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 
+use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_trees, sync_growth_mode};
+use crate::gpu::{GpuGrowth, GpuGrowthSupport};
 use crate::mesh::MeshData;
 use crate::params::TreeParams;
 use crate::pipeline::build_aged;
@@ -73,17 +80,27 @@ pub struct TreeGenerated {
 /// Render state owned by the plugin for one tree entity.
 #[derive(Component)]
 pub struct TreeRender {
-    trunk: Entity,
+    pub(crate) trunk: Entity,
     /// `None` until the trunk first has geometry.
-    trunk_mesh: Option<Handle<Mesh>>,
-    trunk_material: Handle<StandardMaterial>,
-    foliage: Option<(Entity, Handle<Mesh>)>,
-    foliage_material: Handle<StandardMaterial>,
+    pub(crate) trunk_mesh: Option<Handle<Mesh>>,
+    pub(crate) paint: Paint,
+    pub(crate) foliage: Option<(Entity, Handle<Mesh>)>,
     /// Full-grown skeleton generated from the current parameters; aging it
     /// is all a growing tree needs per frame.
-    full: Skeleton,
+    pub(crate) full: Skeleton,
     /// Age after which rebuilding changes nothing.
     pub mature_at: f32,
+}
+
+/// How a tree's wood and leaves are drawn.
+pub(crate) enum Paint {
+    /// Meshes rebuilt on the CPU, drawn with plain materials.
+    Standard {
+        trunk: Handle<StandardMaterial>,
+        foliage: Handle<StandardMaterial>,
+    },
+    /// The mature meshes, grown in the vertex shader.
+    Growth(GrowthPaint),
 }
 
 impl TreeRender {
@@ -115,7 +132,18 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
-            .add_systems(bevy::app::Update, (grow_trees, rebuild_trees).chain());
+            .add_systems(
+                bevy::app::Update,
+                (
+                    detect_gpu_growth_support,
+                    grow_trees,
+                    sync_growth_mode,
+                    rebuild_trees,
+                    rebuild_gpu_trees,
+                )
+                    .chain(),
+            );
+        crate::gpu::build(app);
     }
 }
 
@@ -123,7 +151,7 @@ impl bevy::app::Plugin for FloraPlugin {
 /// turned away from the sun are lit from behind instead of near-black.
 const LEAF_TRANSLUCENCY: f32 = 0.5;
 
-fn material(base_color: bevy::color::Color) -> StandardMaterial {
+pub(crate) fn material(base_color: bevy::color::Color) -> StandardMaterial {
     StandardMaterial {
         base_color,
         perceptual_roughness: 1.0,
@@ -132,7 +160,7 @@ fn material(base_color: bevy::color::Color) -> StandardMaterial {
     }
 }
 
-fn leaf_material(base_color: bevy::color::Color) -> StandardMaterial {
+pub(crate) fn leaf_material(base_color: bevy::color::Color) -> StandardMaterial {
     StandardMaterial {
         diffuse_transmission: LEAF_TRANSLUCENCY,
         ..material(base_color)
@@ -156,14 +184,28 @@ pub fn rebuild_trees(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    support: Res<GpuGrowthSupport>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
-        (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>),
-        Or<(Changed<ProceduralTree>, Changed<TreeAge>)>,
+        (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
+        Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>,
     >,
 ) {
-    for (entity, tree, age, mut render) in &mut trees {
+    for (entity, tree, age, mut render, gpu) in &mut trees {
+        // A tree that grows on the GPU is `rebuild_gpu_trees`'s.
+        if gpu && support.0 {
+            continue;
+        }
         let params = &tree.0;
+        let standard = match render.as_deref() {
+            Some(render) => match &render.paint {
+                Paint::Standard { trunk, foliage } => Some((trunk.clone(), foliage.clone())),
+                // Left over from before the tree stopped growing on the GPU;
+                // `sync_growth_mode` removes it.
+                Paint::Growth(_) => continue,
+            },
+            None => None,
+        };
         // Only the age changed: age the skeleton generated last time.
         let full = match render.as_mut() {
             Some(render) if !tree.is_changed() => std::mem::take(&mut render.full),
@@ -171,8 +213,8 @@ pub fn rebuild_trees(
         };
         let out = build_aged(&full, params, age.0);
         let trunk_progress = out.skeleton.nodes[0].progress;
-        match render {
-            None => {
+        match (render, standard) {
+            (None, _) => {
                 let trunk_material = materials.add(material(params.trunk_color));
                 let foliage_material = materials.add(leaf_material(params.foliage.color));
                 let trunk = commands
@@ -200,14 +242,16 @@ pub fn rebuild_trees(
                 commands.entity(entity).insert(TreeRender {
                     trunk,
                     trunk_mesh,
-                    trunk_material,
+                    paint: Paint::Standard {
+                        trunk: trunk_material,
+                        foliage: foliage_material,
+                    },
                     foliage,
-                    foliage_material,
                     full,
                     mature_at: out.mature_at,
                 });
             }
-            Some(mut render) => {
+            (Some(mut render), Some((trunk_material, foliage_material))) => {
                 render.full = full;
                 render.mature_at = out.mature_at;
                 let trunk_entity = render.trunk;
@@ -218,8 +262,8 @@ pub fn rebuild_trees(
                     &mut render.trunk_mesh,
                     out.trunk,
                 );
-                set_color(&mut materials, &render.trunk_material, params.trunk_color);
-                set_color(&mut materials, &render.foliage_material, params.foliage.color);
+                set_color(&mut materials, &trunk_material, params.trunk_color);
+                set_color(&mut materials, &foliage_material, params.foliage.color);
 
                 match (&mut render.foliage, out.foliage.is_empty()) {
                     (Some((child, handle)), false) => {
@@ -231,7 +275,7 @@ pub fn rebuild_trees(
                         let child = commands
                             .spawn((
                                 Mesh3d(handle.clone()),
-                                MeshMaterial3d(render.foliage_material.clone()),
+                                MeshMaterial3d(foliage_material.clone()),
                                 TreeFoliageMesh,
                                 ChildOf(entity),
                             ))
@@ -245,6 +289,8 @@ pub fn rebuild_trees(
                     (None, true) => {}
                 }
             }
+            // A tree painted for the GPU was skipped above.
+            (Some(_), None) => {}
         }
 
         generated.write(TreeGenerated {
@@ -293,7 +339,7 @@ fn sync_trunk(
 
 /// Overwrite the asset behind `handle` in place; if it was removed externally,
 /// allocate a new one and re-point `child`'s `Mesh3d` at it.
-fn replace_mesh(
+pub(crate) fn replace_mesh(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     child: Entity,
@@ -472,6 +518,7 @@ mod tests {
         assert_eq!(modified(&app), 1);
         let world = app.world();
         let render = world.get::<TreeRender>(tree).unwrap();
-        assert_eq!(world.resource::<Assets<StandardMaterial>>().get(&render.trunk_material).unwrap().base_color, red);
+        let Paint::Standard { trunk, .. } = &render.paint else { panic!("a plain tree has plain materials") };
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().get(trunk).unwrap().base_color, red);
     }
 }
