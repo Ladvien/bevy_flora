@@ -40,6 +40,7 @@
 
 pub mod crown;
 pub mod foliage;
+mod gpu;
 pub mod growth;
 pub mod mesh;
 pub mod params;
@@ -51,6 +52,7 @@ pub mod skeleton;
 
 pub use crown::CrownShape;
 pub use foliage::LeafPoint;
+pub use gpu::GpuGrowth;
 pub use growth::GrowthParams;
 pub use mesh::MeshData;
 pub use params::{

@@ -33,7 +33,7 @@ pub fn root_segment(root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f
 
 /// Whether [`append_root_segment`] emits anything: `root` must lie behind
 /// `base` along `axis`.
-fn root_segment_emitted(root: Vec3, base: Vec3, axis: Vec3) -> bool {
+pub(crate) fn root_segment_emitted(root: Vec3, base: Vec3, axis: Vec3) -> bool {
     (base - root).dot(RingBasis::from_axis(axis).axis()) > 1e-4
 }
 
@@ -56,10 +56,16 @@ pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32) -> MeshData 
     mesh
 }
 
+/// Rings (axis points) of `node`'s tube: two for straight untwisted wood,
+/// the node's [`Node::axis_points`] when it bends or twists. Independent of age.
+pub(crate) fn tube_rings(node: &Node, twist_deg: f32) -> u32 {
+    if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 }
+}
+
 /// [`tube_mesh`], appended to `mesh`.
 fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg: f32) {
     let segments = radial_segments.max(3);
-    let rings = if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 };
+    let rings = tube_rings(node, twist_deg);
     let axis = node.axis(rings);
 
     let mut prev_ring = None;
@@ -88,7 +94,7 @@ fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg
 }
 
 /// Start of a primary's collar (its wide end) for `collar_mesh` arguments.
-fn collar_start(start: Vec3, direction: Vec3, collar_length: f32) -> Vec3 {
+pub(crate) fn collar_start(start: Vec3, direction: Vec3, collar_length: f32) -> Vec3 {
     start - direction * collar_length * 0.1
 }
 
@@ -230,7 +236,7 @@ fn leaves_steeply(node: &Node) -> bool {
 /// from the trunk. A steeper branch (see [`leaves_steeply`]) would need a long
 /// extension that shows as a ridge down the trunk; `primary_base` closes it
 /// with a rounded end instead, and this returns `None`.
-fn primary_root(node: &Node) -> Option<Vec3> {
+pub(crate) fn primary_root(node: &Node) -> Option<Vec3> {
     if leaves_steeply(node) {
         return None;
     }
