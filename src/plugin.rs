@@ -32,7 +32,6 @@ use bevy::transform::components::Transform;
 use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_trees, sync_growth_mode};
 use crate::gpu::{GpuGrowth, GpuGrowthSupport};
 use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bakes};
-use crate::mesh::MeshData;
 use crate::params::TreeParams;
 use crate::pipeline::build_aged;
 use crate::pool::spawn_pooled_trees;
@@ -271,17 +270,27 @@ pub fn rebuild_trees(
         jobs.push(RebuildJob { entity, params: tree.0.clone(), age: age.0, kept });
     }
 
-    // Phase 2 builds on all cores; phase 3 applies each result here, in order.
+    // Phase 2 builds on all cores, meshes included; phase 3 applies each result here, in order.
     let build = |job: RebuildJob| {
         let full = job.kept.unwrap_or_else(|| generate_skeleton(&job.params));
         let out = build_aged(&full, &job.params, job.age);
-        (job.entity, full, out)
+        RebuiltTree {
+            entity: job.entity,
+            full,
+            trunk: (!out.trunk.is_empty()).then(|| out.trunk.into_bevy_mesh()),
+            foliage: (!out.foliage.is_empty()).then(|| out.foliage.into_bevy_mesh()),
+            mature_at: out.mature_at,
+            trunk_progress: out.skeleton.nodes[0].progress,
+        }
     };
-    build_in_batches(jobs, build, |(entity, full, out)| {
+    // Ageing a kept skeleton costs about 20 us a tree, less than waking the pool for a few
+    // hundred of them (the growing-tree case); generating a skeleton is worth spreading.
+    let parallel = jobs.len() > 1000 || jobs.iter().filter(|job| job.kept.is_none()).count() >= 2;
+    build_in_batches(jobs, parallel, build, |out| {
+        let (entity, full, trunk_progress) = (out.entity, out.full, out.trunk_progress);
         let Ok((_, tree, _, render, _)) = trees.get_mut(entity) else { return };
         let params = &tree.0;
         let existing = render.as_deref().and_then(|render| render.paint.cloned_cpu());
-        let trunk_progress = out.skeleton.nodes[0].progress;
         match (render, existing) {
             (None, _) => {
                 let paint = if let Some(wind) = wind {
@@ -301,8 +310,8 @@ pub fn rebuild_trees(
                 let trunk = trunk_child.id();
                 let mut trunk_mesh = None;
                 sync_trunk(&mut commands, &mut meshes, trunk, &mut trunk_mesh, out.trunk);
-                let foliage = (!out.foliage.is_empty()).then(|| {
-                    let handle = meshes.add(out.foliage.into_bevy_mesh());
+                let foliage = out.foliage.map(|mesh| {
+                    let handle = meshes.add(mesh);
                     let mut child = commands.spawn((Mesh3d(handle.clone()), TreeFoliageMesh, ChildOf(entity)));
                     paint_child(&mut child, &paint, true);
                     (child.id(), handle)
@@ -356,22 +365,22 @@ pub fn rebuild_trees(
                     Paint::Growth(_) => unreachable!("trees grown on the GPU were skipped above"),
                 }
 
-                match (&mut render.foliage, out.foliage.is_empty()) {
-                    (Some((child, handle)), false) => {
+                match (&mut render.foliage, out.foliage) {
+                    (Some((child, handle)), Some(mesh)) => {
                         let child = *child;
-                        replace_mesh(&mut commands, &mut meshes, child, handle, out.foliage.into_bevy_mesh());
+                        replace_mesh(&mut commands, &mut meshes, child, handle, mesh);
                     }
-                    (None, false) => {
-                        let handle = meshes.add(out.foliage.into_bevy_mesh());
+                    (None, Some(mesh)) => {
+                        let handle = meshes.add(mesh);
                         let mut child = commands.spawn((Mesh3d(handle.clone()), TreeFoliageMesh, ChildOf(entity)));
                         paint_child(&mut child, &render.paint, true);
                         render.foliage = Some((child.id(), handle));
                     }
-                    (Some((child, _)), true) => {
+                    (Some((child, _)), None) => {
                         commands.entity(*child).despawn();
                         render.foliage = None;
                     }
-                    (None, true) => {}
+                    (None, None) => {}
                 }
             }
             // A tree painted for the GPU was skipped above.
@@ -386,17 +395,19 @@ pub fn rebuild_trees(
     });
 }
 
-/// Run `build` on every job, on the compute task pool, and hand each result to
-/// `apply` in the order of `jobs`. Jobs are built a few per thread at a time, so
-/// a large input never holds all its results at once; fewer than two jobs run
-/// inline, without a scope. `build` must be a pure function of its job: the
-/// results do not depend on the number of threads.
+/// Run `build` on every job and hand each result to `apply` in the order of
+/// `jobs`. With `parallel` the jobs are built on the compute task pool, a few per
+/// thread at a time, so a large input never holds all its results at once;
+/// without it (or with fewer than two jobs) they run inline, without a scope.
+/// `build` must be a pure function of its job: the results do not depend on the
+/// number of threads.
 pub(crate) fn build_in_batches<J: Send, R: Send + 'static>(
     jobs: Vec<J>,
+    parallel: bool,
     build: impl Fn(J) -> R + Sync,
     mut apply: impl FnMut(R),
 ) {
-    if jobs.len() < 2 {
+    if !parallel || jobs.len() < 2 {
         jobs.into_iter().for_each(|job| apply(build(job)));
         return;
     }
@@ -447,21 +458,32 @@ fn sync_trunk(
     meshes: &mut Assets<Mesh>,
     child: Entity,
     handle: &mut Option<Handle<Mesh>>,
-    data: MeshData,
+    mesh: Option<Mesh>,
 ) {
-    if data.is_empty() {
+    let Some(mesh) = mesh else {
         commands.entity(child).insert(Visibility::Hidden);
         return;
-    }
+    };
     commands.entity(child).insert(Visibility::Inherited);
     match handle {
-        Some(handle) => replace_mesh(commands, meshes, child, handle, data.into_bevy_mesh()),
+        Some(handle) => replace_mesh(commands, meshes, child, handle, mesh),
         None => {
-            let new = meshes.add(data.into_bevy_mesh());
+            let new = meshes.add(mesh);
             commands.entity(child).insert(Mesh3d(new.clone()));
             *handle = Some(new);
         }
     }
+}
+
+/// What a worker makes of one [`RebuildJob`]: the skeleton and the Bevy meshes
+/// (`None` for an empty one).
+struct RebuiltTree {
+    entity: Entity,
+    full: Skeleton,
+    trunk: Option<Mesh>,
+    foliage: Option<Mesh>,
+    mature_at: f32,
+    trunk_progress: f32,
 }
 
 /// One tree for `rebuild_trees` to build: its parameters, its age and, when only the age
@@ -651,16 +673,22 @@ mod tests {
                 let world = app.world();
                 let render = world.get::<TreeRender>(*tree).unwrap();
                 let meshes = world.resource::<Assets<Mesh>>();
-                let positions = |handle: &Handle<Mesh>| -> Vec<[f32; 3]> {
-                    meshes.get(handle).unwrap().attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec()
+                // Every attribute and the indices, not just the positions.
+                let same = |handle: &Handle<Mesh>, data: crate::mesh::MeshData| {
+                    let got = meshes.get(handle).unwrap();
+                    let want = data.into_bevy_mesh();
+                    assert_eq!(got.attributes().count(), want.attributes().count());
+                    for (attribute, values) in want.attributes() {
+                        assert_eq!(got.attribute(attribute.id), Some(values), "{}", attribute.name);
+                    }
+                    assert_eq!(got.indices(), want.indices());
                 };
-                let wanted = |data: &MeshData| -> Vec<[f32; 3]> { data.positions.iter().map(|p| p.to_array()).collect() };
                 match &render.trunk_mesh {
-                    Some(handle) => assert_eq!(positions(handle), wanted(&want.trunk)),
+                    Some(handle) => same(handle, want.trunk),
                     None => assert!(want.trunk.is_empty()),
                 }
                 match &render.foliage {
-                    Some((_, handle)) => assert_eq!(positions(handle), wanted(&want.foliage)),
+                    Some((_, handle)) => same(handle, want.foliage),
                     None => assert!(want.foliage.is_empty()),
                 }
                 assert_eq!(render.mature_at, want.mature_at);

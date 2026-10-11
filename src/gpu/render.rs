@@ -174,10 +174,12 @@ pub(crate) fn rebuild_gpu_trees(
 
     let build = |job: GrowthJob| {
         let full = generate_skeleton(&job.params);
-        let data = build_growth_data(&full, &job.params);
-        (job.entity, job.age, full, data)
+        let mut data = build_growth_data(&full, &job.params);
+        let state = std::mem::take(&mut data.state);
+        let (wood, leaves) = data.into_meshes();
+        (job.entity, job.age, full, state, wood, leaves)
     };
-    build_in_batches(jobs, build, |(entity, age, full, data)| {
+    build_in_batches(jobs, true, build, |(entity, age, full, state, wood, leaves)| {
         let Ok((_, tree, _, mut render, _)) = trees.get_mut(entity) else { return };
         let params = &tree.0;
         let progress;
@@ -189,7 +191,6 @@ pub(crate) fn rebuild_gpu_trees(
                 progress = paint.state.trunk_progress;
                 render.mature_at = full.mature_at(&params.growth);
                 render.full = full;
-                let (wood, leaves) = data.into_meshes();
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
                 }
@@ -220,11 +221,10 @@ pub(crate) fn rebuild_gpu_trees(
                 }
             }
             None => {
-                let mut state = data.state.clone();
+                let mut state = state;
                 state.update(&full, params, age);
                 progress = state.trunk_progress;
                 let nodes = buffers.add(state_buffer(&state));
-                let (wood, leaves) = data.into_meshes();
 
                 let uniform = FloraUniform::new(params);
                 let trunk_material = materials.add(GrowthMaterial {
