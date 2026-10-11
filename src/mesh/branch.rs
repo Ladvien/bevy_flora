@@ -52,7 +52,7 @@ fn append_root_segment(mesh: &mut MeshData, root: Vec3, base: Vec3, axis: Vec3, 
 /// capped at the tip.
 pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32) -> MeshData {
     let mut mesh = MeshData::default();
-    append_tube(&mut mesh, node, radial_segments, twist_deg);
+    append_tube(&mut mesh, node, radial_segments, twist_deg, u32::MAX);
     mesh
 }
 
@@ -62,15 +62,21 @@ pub(crate) fn tube_rings(node: &Node, twist_deg: f32) -> u32 {
     if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 }
 }
 
-/// [`tube_mesh`], appended to `mesh`.
-fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg: f32) {
+/// [`tube_mesh`], appended to `mesh`. A tube with more than `max_rings` rings
+/// keeps `max_rings` of them, spread along the axis and including both ends, so
+/// every ring still lies on the full-resolution axis.
+fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg: f32, max_rings: u32) {
     let segments = radial_segments.max(3);
-    let rings = tube_rings(node, twist_deg);
-    let axis = node.axis(rings);
+    let full = tube_rings(node, twist_deg);
+    let rings = full.min(max_rings.max(2));
+    let axis = node.axis(full);
 
     let mut prev_ring = None;
-    for (k, &(center, dir)) in axis.iter().enumerate() {
-        let t = k as f32 / (rings - 1) as f32;
+    for k in 0..rings {
+        // `k * (full - 1) / (rings - 1)` is `k` itself when nothing is dropped.
+        let source = (k as f32 * (full - 1) as f32 / (rings - 1) as f32).round() as usize;
+        let (center, dir) = axis[source];
+        let t = source as f32 / (full - 1) as f32;
         let radius = lerp(node.base_radius, node.tip_radius, t);
         let twist = (t * twist_deg).to_radians();
         let basis = RingBasis::from_axis(dir);
@@ -81,7 +87,7 @@ fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg
         prev_ring = Some(ring);
     }
 
-    let (end_pos, end_dir) = axis[rings as usize - 1];
+    let (end_pos, end_dir) = axis[full as usize - 1];
     emit_cap(
         mesh,
         end_pos,
@@ -249,10 +255,16 @@ pub(crate) fn primary_root(node: &Node) -> Option<Vec3> {
 /// The wood behind a primary's base ring at `at` (radius `radius`, around the
 /// branch axis), appended to `mesh`: an extension into the trunk, or for a
 /// steep branch a rounded end, so the base ring coincides with the tube's or
-/// collar's and nothing shows a flat cut.
-fn append_primary_base(mesh: &mut MeshData, node: &Node, at: Vec3, radius: f32, segments: u32) {
+/// collar's and nothing shows a flat cut. With `flat_end` a steep branch is
+/// closed with a flat disc instead of the rounded end: a few triangles, for the
+/// coarse levels of detail, where the knot is too small to see.
+fn append_primary_base(mesh: &mut MeshData, node: &Node, at: Vec3, radius: f32, segments: u32, flat_end: bool) {
     match primary_root(node) {
         Some(root) => append_root_segment(mesh, root, at, node.direction, segments, radius),
+        None if flat_end => {
+            let basis = RingBasis::from_axis(node.direction);
+            emit_cap(mesh, at, basis, segments.max(3), 0.0, -node.direction, |_, _| radius);
+        }
         None => append_root_dome(mesh, at, node.direction, segments, radius),
     }
 }
@@ -366,7 +378,37 @@ pub(crate) fn skeleton_mesh_with(
     skeleton: &Skeleton,
     params: &TreeParams,
     trunk: TrunkPieces,
+    spans: Option<&mut Vec<WoodSpan>>,
+) -> MeshData {
+    skeleton_mesh_inner(skeleton, params, trunk, spans, None)
+}
+
+/// How coarse a level of detail's wood is: no tube, collar or base has more
+/// than `sides` sides (at least 3) or `rings` rings (at least 2), and a steep
+/// branch's base is a flat disc. A node that already has fewer keeps them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Coarseness {
+    pub(crate) sides: u32,
+    pub(crate) rings: u32,
+}
+
+/// [`skeleton_mesh`] as a coarser level of detail.
+pub(crate) fn skeleton_mesh_coarse(skeleton: &Skeleton, params: &TreeParams, coarse: Coarseness) -> MeshData {
+    skeleton_mesh_inner(
+        skeleton,
+        params,
+        trunk_pieces(&params.trunk, &skeleton.nodes[0]),
+        None,
+        Some(coarse),
+    )
+}
+
+fn skeleton_mesh_inner(
+    skeleton: &Skeleton,
+    params: &TreeParams,
+    trunk: TrunkPieces,
     mut spans: Option<&mut Vec<WoodSpan>>,
+    coarse: Option<Coarseness>,
 ) -> MeshData {
     let b = &params.branches;
     let mut mesh = trunk_mesh_with(&params.trunk, &skeleton.nodes[0], params.seed, trunk);
@@ -385,10 +427,13 @@ pub(crate) fn skeleton_mesh_with(
         if node.length <= 1e-4 || node.base_radius <= 0.0 {
             continue;
         }
-        let segments = radial_segments_for(node, params);
+        let segments = match coarse {
+            Some(c) => radial_segments_for(node, params).min(c.sides.max(3)),
+            None => radial_segments_for(node, params),
+        };
         if node.kind == NodeKind::Primary {
             let first = roots.positions.len();
-            append_primary_base(&mut roots, node, node.start, node.base_radius, segments);
+            append_primary_base(&mut roots, node, node.start, node.base_radius, segments, coarse.is_some());
             if recording {
                 root_spans.push(base_span(index, node, false, first, roots.positions.len(), segments));
             }
@@ -415,6 +460,7 @@ pub(crate) fn skeleton_mesh_with(
                     collar_start(node.start, node.direction, collar_length),
                     node.base_radius * COLLAR_FLARE,
                     collar_segments,
+                    coarse.is_some(),
                 );
                 if recording {
                     root_spans.push(base_span(index, node, true, first, roots.positions.len(), collar_segments));
@@ -422,7 +468,7 @@ pub(crate) fn skeleton_mesh_with(
             }
         }
         let first = mesh.positions.len();
-        append_tube(&mut mesh, node, segments, b.twist);
+        append_tube(&mut mesh, node, segments, b.twist, coarse.map_or(u32::MAX, |c| c.rings));
         record(
             &mut spans,
             WoodSpan {
@@ -529,7 +575,7 @@ mod tests {
 
     fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
         let mut mesh = MeshData::default();
-        append_primary_base(&mut mesh, node, at, radius, segments);
+        append_primary_base(&mut mesh, node, at, radius, segments, false);
         mesh
     }
 

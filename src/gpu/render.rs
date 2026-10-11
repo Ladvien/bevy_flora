@@ -12,9 +12,9 @@ use super::mesh::build_growth_data;
 use super::state::GrowthState;
 use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
 use crate::plugin::{
-    Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, leaf_material,
-    material, replace_mesh,
+    Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, replace_mesh,
 };
+use crate::shading::{FloraUniform, FloraWind, flora_base};
 use crate::skeleton::generate_skeleton;
 
 /// What a tree that grows on the GPU draws with.
@@ -104,23 +104,31 @@ fn state_buffer(state: &GrowthState) -> ShaderBuffer {
     ShaderBuffer::from(data)
 }
 
-/// Set the base colour, marking the material modified only when it differs.
-fn set_color(materials: &mut Assets<GrowthMaterial>, handle: &Handle<GrowthMaterial>, color: bevy::color::Color) {
+/// Bring a material's base colour and flora uniform up to date, marking it modified only when
+/// one differs.
+fn sync_growth(
+    materials: &mut Assets<GrowthMaterial>,
+    handle: &Handle<GrowthMaterial>,
+    color: bevy::color::Color,
+    flora: FloraUniform,
+) {
     if let Some(mut material) = materials.get_mut(handle)
-        && material.base.base_color != color
+        && (material.base.base_color != color || material.extension.flora != flora)
     {
         material.base.base_color = color;
+        material.extension.flora = flora;
     }
 }
 
 /// Build (or bring up to date) the render state of trees that grow on the GPU.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn rebuild_gpu_trees(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GrowthMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     support: Res<GpuGrowthSupport>,
+    wind: Res<FloraWind>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
@@ -162,8 +170,9 @@ pub(crate) fn rebuild_gpu_trees(
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
                 }
-                set_color(&mut materials, &paint.trunk, params.trunk_color);
-                set_color(&mut materials, &paint.foliage, params.foliage.color);
+                let uniform = FloraUniform::new(params, &wind);
+                sync_growth(&mut materials, &paint.trunk, params.trunk_color, uniform.wood());
+                sync_growth(&mut materials, &paint.foliage, params.foliage.color, uniform);
                 match (&mut render.foliage, leaves) {
                     (Some((child, handle)), Some(leaves)) => {
                         replace_mesh(&mut commands, &mut meshes, *child, handle, leaves);
@@ -196,13 +205,14 @@ pub(crate) fn rebuild_gpu_trees(
                 let nodes = buffers.add(state_buffer(&state));
                 let (wood, leaves) = data.into_meshes();
 
+                let uniform = FloraUniform::new(params, &wind);
                 let trunk_material = materials.add(GrowthMaterial {
-                    base: material(params.trunk_color),
-                    extension: GrowthExtension { nodes: nodes.clone() },
+                    base: flora_base(params.trunk_color),
+                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform.wood(), leaf: false },
                 });
                 let foliage_material = materials.add(GrowthMaterial {
-                    base: leaf_material(params.foliage.color),
-                    extension: GrowthExtension { nodes: nodes.clone() },
+                    base: flora_base(params.foliage.color),
+                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform, leaf: true },
                 });
                 let trunk_mesh = meshes.add(wood);
                 let trunk = commands

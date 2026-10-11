@@ -38,7 +38,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
-    CrownShape, FloraPlugin, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation, LeafStyle, MeshData,
+    CrownShape, FloraPlugin, FloraWind, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation, LeafStyle,
+    MeshData,
     NodeKind, ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
 
@@ -614,6 +615,8 @@ fn main() {
             }),
             FloraPlugin,
         ))
+        // Still air: the captures must repeat.
+        .insert_resource(FloraWind { strength: 0.0, ..default() })
         .insert_resource(ClearColor(Color::srgb(0.55, 0.72, 0.92)))
         .insert_resource(GlobalAmbientLight {
             color: Color::srgb(0.6, 0.6, 0.6),

@@ -109,11 +109,18 @@ fn changing_the_parameters_rebuilds_the_mature_tree_and_the_buffer() {
     assert_eq!(uploaded_buffer(&app, tree).unwrap(), expected_buffer(&params, 4.0));
     assert_eq!(modified::<Mesh>(&app), 2, "the wood and leaf meshes are replaced in place");
 
-    // A colour change touches the materials, once, and not the mesh.
+    // A colour change touches the materials, once, and not the mesh. Counted from a cursor: the
+    // frame before rewrote both materials for the new trunk height, and its messages can still
+    // be around.
     let red = bevy::color::Color::srgb(1.0, 0.0, 0.0);
     app.world_mut().get_mut::<ProceduralTree>(tree).unwrap().0.trunk_color = red;
+    let mut cursor = app.world().resource::<Messages<AssetEvent<GrowthMaterial>>>().get_cursor_current();
     app.update();
-    assert_eq!(modified::<GrowthMaterial>(&app), 1);
+    let materials_modified = cursor
+        .read(app.world().resource::<Messages<AssetEvent<GrowthMaterial>>>())
+        .filter(|e| matches!(e, AssetEvent::Modified { .. }))
+        .count();
+    assert_eq!(materials_modified, 1);
     let world = app.world();
     let render = world.get::<TreeRender>(tree).unwrap();
     let Paint::Growth(paint) = &render.paint else { panic!("still on the GPU") };

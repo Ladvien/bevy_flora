@@ -186,6 +186,7 @@ fn oak() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.365, 0.227, 0.102),
+        wind: WindResponse { sway: 0.8, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -271,6 +272,7 @@ fn pine() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.420, 0.267, 0.137),
+        wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
 
@@ -356,6 +358,7 @@ fn willow() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.478, 0.361, 0.239),
+        wind: WindResponse { sway: 1.4, flutter: 1.6, sway_frequency: 0.7, flutter_frequency: 0.8 },
     }
 }
 
@@ -441,6 +444,7 @@ fn birch() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.961, 0.961, 0.863),
+        wind: WindResponse { sway: 1.2, flutter: 1.3, sway_frequency: 1.1, flutter_frequency: 1.3 },
     }
 }
 
@@ -526,6 +530,7 @@ fn palm() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.545, 0.451, 0.333),
+        wind: WindResponse { sway: 1.5, flutter: 1.2, sway_frequency: 0.6, flutter_frequency: 0.9 },
     }
 }
 
@@ -611,6 +616,7 @@ fn cypress() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.290, 0.235, 0.165),
+        wind: WindResponse { sway: 0.6, flutter: 0.6, sway_frequency: 1.0, flutter_frequency: 1.2 },
     }
 }
 
@@ -696,6 +702,7 @@ fn bonsai() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.361, 0.251, 0.200),
+        wind: WindResponse { sway: 0.2, flutter: 0.6, sway_frequency: 1.5, flutter_frequency: 1.2 },
     }
 }
 
@@ -781,6 +788,7 @@ fn maple() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.32, 0.21, 0.12),
+        wind: WindResponse { sway: 0.9, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -872,6 +880,7 @@ fn spruce() -> TreeParams {
             ..Default::default()
         },
         trunk_color: Color::srgb(0.380, 0.243, 0.141),
+        wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
 
@@ -957,6 +966,7 @@ fn poplar() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.553, 0.514, 0.435),
+        wind: WindResponse { sway: 1.1, flutter: 1.8, sway_frequency: 1.1, flutter_frequency: 1.8 },
     }
 }
 
@@ -1042,6 +1052,7 @@ fn baobab() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.506, 0.424, 0.369),
+        wind: WindResponse { sway: 0.3, flutter: 0.8, sway_frequency: 0.8, flutter_frequency: 1.0 },
     }
 }
 
@@ -1127,6 +1138,7 @@ fn dragon_tree() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.463, 0.396, 0.322),
+        wind: WindResponse { sway: 0.3, flutter: 0.7, sway_frequency: 0.9, flutter_frequency: 0.9 },
     }
 }
 
@@ -1212,6 +1224,7 @@ fn japanese_maple() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.376, 0.282, 0.212),
+        wind: WindResponse { sway: 1.0, flutter: 1.2, sway_frequency: 1.1, flutter_frequency: 1.1 },
     }
 }
 
@@ -1284,6 +1297,7 @@ fn dead_tree() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.388, 0.361, 0.325),
+        wind: WindResponse { sway: 0.6, flutter: 0.0, sway_frequency: 1.2, flutter_frequency: 1.0 },
     }
 }
 
@@ -1369,6 +1383,7 @@ fn redwood() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.463, 0.263, 0.161),
+        wind: WindResponse { sway: 0.5, flutter: 0.6, sway_frequency: 0.6, flutter_frequency: 1.0 },
     }
 }
 

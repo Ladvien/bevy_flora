@@ -13,6 +13,9 @@ use crate::skeleton::{Node, NodeKind, Skeleton, trunk_depth};
 /// existing draw (leaf positions, sizes and rotations stay as in 0.1).
 const LEAF_TINT_SALT: i32 = 0x7135_1EAF;
 
+/// Separate random stream for leaf hues, for the same reason.
+const LEAF_HUE_SALT: i32 = 0x4E0E_1EAF;
+
 /// One leaf: where it sits and how it is oriented.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeafPoint {
@@ -26,6 +29,8 @@ pub struct LeafPoint {
     pub rotation: f32,
     /// Per-leaf colour draw in -1..1, scaled by [`FoliageParams::color_variation`].
     pub tint: f32,
+    /// Per-leaf hue draw in −1..1, scaled by [`FoliageParams::hue_variation`].
+    pub hue: f32,
 }
 
 /// Leaf points for every node of `skeleton`.
@@ -137,6 +142,11 @@ pub fn leaf_points_for_node(
         p.tint = tint_rng.range(-1.0, 1.0);
     }
 
+    let mut hue_rng = SeededRng::from_parts(seed ^ LEAF_HUE_SALT, node.id);
+    for p in &mut points[first..] {
+        p.hue = hue_rng.range(-1.0, 1.0);
+    }
+
     if leaf_scale < 1.0 {
         for p in &mut points[first..] {
             p.size *= leaf_scale;
@@ -178,6 +188,7 @@ fn add_terminal_leaves(
             size,
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
             tint: 0.0,
+            hue: 0.0,
         });
     }
 }
@@ -202,6 +213,7 @@ fn add_distributed_leaves(
             size,
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
             tint: 0.0,
+            hue: 0.0,
         });
     }
 }
@@ -240,6 +252,7 @@ fn add_cluster_leaves(
             size,
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
             tint: 0.0,
+            hue: 0.0,
         });
     }
 }
@@ -280,8 +293,10 @@ fn leaf_direction(node: &NodeCtx, foliage: &FoliageParams, rng: &mut SeededRng) 
 /// Geometry for all `points` in `foliage.style`.
 ///
 /// Each leaf gets a vertex colour (its tint scaled by
-/// [`FoliageParams::color_variation`]), and every normal is bent toward
-/// pointing out of the crown by [`FoliageParams::normal_bend`].
+/// [`FoliageParams::color_variation`], its hue by [`FoliageParams::hue_variation`]), every
+/// normal is bent toward pointing out of the crown by [`FoliageParams::normal_bend`], and the
+/// leaf shader's inputs are baked in: `uv1.x` flags the upper side of each card, `uv1.y` is the
+/// crown visibility ([`FoliageParams::occlusion`]) and `sway` is the flutter vector.
 pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
     foliage_mesh_with(points, foliage, None)
 }
@@ -298,9 +313,12 @@ pub(crate) fn foliage_mesh_with(
         return mesh;
     }
     let variation = foliage.color_variation.clamp(0.0, 0.5);
+    let hue_span = foliage.hue_variation.clamp(0.0, 0.5);
+    let mut ranges = Vec::with_capacity(points.len());
     for point in points {
+        let first = mesh.positions.len();
         if let Some(firsts) = firsts.as_deref_mut() {
-            firsts.push(mesh.positions.len() as u32);
+            firsts.push(first as u32);
         }
         match foliage.style {
             LeafStyle::CrossedPlanes => crossed_planes(&mut mesh, point),
@@ -309,14 +327,62 @@ pub(crate) fn foliage_mesh_with(
             LeafStyle::StarBurst => star_burst(&mut mesh, point),
             LeafStyle::NeedleCluster => needle_cluster(&mut mesh, point),
         }
+        let end = mesh.positions.len();
+        ranges.push((first, end));
+
+        // Normals are still the cards' own here, which is what tells the sides apart.
         let factor = 1.0 + point.tint * variation;
-        mesh.colors
-            .resize(mesh.positions.len(), Vec4::new(factor, factor, factor, 1.0));
+        let hue = point.hue * hue_span;
+        mesh.colors.resize(
+            end,
+            Vec4::new(
+                factor * (1.0 + 0.6 * hue),
+                factor * (1.0 + 0.1 * hue),
+                factor * (1.0 - 0.6 * hue),
+                1.0,
+            ),
+        );
+        mesh.uv1.extend(
+            mesh.normals[first..end]
+                .iter()
+                .map(|&n| Vec2::new(if is_upper(n) { 1.0 } else { 0.0 }, 1.0)),
+        );
+
+        // One flutter direction and phase per leaf; both faces and both crossed cards share them.
+        let (_, _, forward) = build_basis(point.direction, point.rotation);
+        let phase = (point.position.dot(Vec3::new(12.9898, 78.233, 37.719)).sin() * 43_758.547)
+            .fract()
+            .abs();
+        let rigid = foliage.style == LeafStyle::ClusterSphere;
+        for &vertex in &mesh.positions[first..end] {
+            let lever = if rigid { point.size * 0.4 } else { (vertex - point.position).length() };
+            mesh.sway.push((forward * lever).extend(phase));
+        }
+    }
+
+    let center = points.iter().map(|p| p.position).sum::<Vec3>() / points.len() as f32;
+
+    // Leaves deep in the crown see less sky.
+    if points.len() >= 2 {
+        let occlusion = foliage.occlusion.clamp(0.0, 1.0);
+        let extent = points
+            .iter()
+            .fold(Vec3::ZERO, |m, p| m.max((p.position - center).abs()))
+            .max(Vec3::splat(1e-3));
+        for (point, &(first, end)) in points.iter().zip(&ranges) {
+            let rel = (point.position - center) / extent;
+            let d = rel.length().min(1.0);
+            let up = rel.y.clamp(-1.0, 1.0);
+            let openness = (0.8 * d + 0.2 * (0.5 * up + 0.5)).clamp(0.0, 1.0);
+            let visibility = 1.0 - occlusion * (1.0 - openness);
+            for uv in &mut mesh.uv1[first..end] {
+                uv.y = visibility;
+            }
+        }
     }
 
     let bend = foliage.normal_bend.clamp(0.0, 1.0);
     if bend > 0.0 {
-        let center = points.iter().map(|p| p.position).sum::<Vec3>() / points.len() as f32;
         for (normal, &position) in mesh.normals.iter_mut().zip(&mesh.positions) {
             let out = (position - center).normalize_or(Vec3::Y);
             *normal = normal.lerp(out, bend).normalize_or(out);
@@ -401,6 +467,13 @@ fn build_basis(direction: Vec3, rotation: f32) -> (Vec3, Vec3, Vec3) {
     let up = right.cross(direction).normalize_or_zero();
     let (sin_r, cos_r) = rotation.sin_cos();
     (right * cos_r + up * sin_r, up * cos_r - right * sin_r, direction)
+}
+
+/// Whether a card face with normal `n` is the leaf's upper side. Decided on the first of
+/// `y, x, z` that is not zero, so exactly one of a double-sided card's two copies is the
+/// upper one, even for a vertical card.
+fn is_upper(n: Vec3) -> bool {
+    [n.y, n.x, n.z].into_iter().find(|c| c.abs() > 1e-4).is_none_or(|c| c > 0.0)
 }
 
 /// Quad spanned by `half_right`/`half_up` around `center`, emitted twice with
@@ -507,6 +580,7 @@ mod tests {
             size: 1.0,
             rotation: 0.0,
             tint: 0.0,
+            hue: 0.0,
         }
     }
 
@@ -516,6 +590,7 @@ mod tests {
             style,
             normal_bend: 0.0,
             color_variation: 0.0,
+            hue_variation: 0.0,
             ..FoliageParams::default()
         }
     }
@@ -552,6 +627,7 @@ mod tests {
             size: 0.8,
             rotation: 1.1,
             tint: 0.0,
+            hue: 0.0,
         };
         for style in [
             LeafStyle::CrossedPlanes,
@@ -576,6 +652,7 @@ mod tests {
             size: 0.8,
             rotation: 1.1,
             tint: 0.0,
+            hue: 0.0,
         };
         let (_, up, _) = build_basis(p.direction, p.rotation);
         for style in [LeafStyle::CrossedPlanes, LeafStyle::SingleQuad] {
@@ -623,7 +700,7 @@ mod tests {
         assert_eq!(params.foliage.style, LeafStyle::CrossedPlanes);
         let leaf_vertices = 36;
 
-        let varied = FoliageParams { color_variation: 0.2, ..params.foliage.clone() };
+        let varied = FoliageParams { color_variation: 0.2, hue_variation: 0.0, ..params.foliage.clone() };
         let mesh = foliage_mesh(&points, &varied);
         assert_eq!(mesh.colors.len(), mesh.positions.len());
         assert_eq!(mesh.colors.len(), points.len() * leaf_vertices);
@@ -637,9 +714,139 @@ mod tests {
         }
         assert!(distinct.len() > 1, "all leaves share one colour");
 
-        let plain = FoliageParams { color_variation: 0.0, ..params.foliage.clone() };
+        let plain = FoliageParams { color_variation: 0.0, hue_variation: 0.0, ..params.foliage.clone() };
         let mesh = foliage_mesh(&points, &plain);
         assert!(mesh.colors.iter().all(|c| *c == Vec4::ONE));
+    }
+
+    #[test]
+    fn leaf_hues_vary_per_leaf() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        let foliage = FoliageParams { hue_variation: 0.5, color_variation: 0.0, ..params.foliage.clone() };
+        let mesh = foliage_mesh(&points, &foliage);
+        let leaf_vertices = 36;
+        let (mut warm, mut cool) = (false, false);
+        for leaf in mesh.colors.chunks(leaf_vertices) {
+            assert!(leaf.iter().all(|c| *c == leaf[0]), "one leaf, several colours");
+            let c = leaf[0];
+            assert!((c.x - 1.0).abs() <= 0.3 + 1e-5, "red {} out of bounds", c.x);
+            warm |= c.x > c.z;
+            cool |= c.x < c.z;
+        }
+        assert!(warm && cool, "hues do not lean both ways");
+    }
+
+    #[test]
+    fn upper_flag_marks_the_face_that_looks_up() {
+        let tilted = LeafPoint {
+            position: Vec3::new(1.0, 2.0, -0.5),
+            direction: Vec3::new(0.4, -0.3, 0.7).normalize(),
+            size: 0.8,
+            rotation: 1.1,
+            ..point()
+        };
+        let sideways = LeafPoint { direction: Vec3::X, ..point() };
+        for style in [
+            LeafStyle::CrossedPlanes,
+            LeafStyle::SingleQuad,
+            LeafStyle::ClusterSphere,
+            LeafStyle::StarBurst,
+            LeafStyle::NeedleCluster,
+        ] {
+            for p in [point(), tilted.clone(), sideways.clone()] {
+                let mesh = foliage_mesh(std::slice::from_ref(&p), &flat(style));
+                assert_eq!(mesh.uv1.len(), mesh.positions.len());
+                for (uv, &normal) in mesh.uv1.iter().zip(&mesh.normals) {
+                    assert!(uv.x == 0.0 || uv.x == 1.0, "{style:?}: flag {}", uv.x);
+                    assert_eq!(uv.x == 1.0, is_upper(normal), "{style:?}: flag against normal {normal:?}");
+                }
+                // A card is emitted twice, back to back; exactly one copy is the upper side.
+                let face = match style {
+                    LeafStyle::ClusterSphere => continue,
+                    LeafStyle::NeedleCluster => 4,
+                    _ => 9,
+                };
+                for card in mesh.uv1.chunks(2 * face) {
+                    assert!(
+                        card[..face].iter().all(|uv| uv.x != card[face].x)
+                            && card[..face].iter().all(|uv| uv.x == card[0].x)
+                            && card[face..].iter().all(|uv| uv.x == card[face].x),
+                        "{style:?}: a card's two faces share a side"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crown_occlusion_is_darkest_inside() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        let leaf_vertices = 36;
+        let center = points.iter().map(|p| p.position).sum::<Vec3>() / points.len() as f32;
+        let by_distance = |a: &&(usize, &LeafPoint), b: &&(usize, &LeafPoint)| {
+            (a.1.position - center).length().total_cmp(&(b.1.position - center).length())
+        };
+        let indexed: Vec<_> = points.iter().enumerate().collect();
+        let nearest = indexed.iter().min_by(by_distance).unwrap().0;
+        let farthest = indexed.iter().max_by(by_distance).unwrap().0;
+
+        let dark = FoliageParams { occlusion: 0.6, ..params.foliage.clone() };
+        let mesh = foliage_mesh(&points, &dark);
+        assert!(mesh.uv1.iter().all(|uv| (0.4 - 1e-5..=1.0).contains(&uv.y)), "visibility out of [0.4, 1]");
+        assert!(
+            mesh.uv1[nearest * leaf_vertices].y < mesh.uv1[farthest * leaf_vertices].y,
+            "the leaf at the crown's heart is not darker than the outermost one"
+        );
+
+        let open = FoliageParams { occlusion: 0.0, ..params.foliage.clone() };
+        assert!(foliage_mesh(&points, &open).uv1.iter().all(|uv| uv.y == 1.0));
+    }
+
+    #[test]
+    fn leaf_sway_is_one_motion_per_leaf() {
+        let a = LeafPoint {
+            position: Vec3::new(1.0, 2.0, -0.5),
+            direction: Vec3::new(0.4, -0.3, 0.7).normalize(),
+            size: 0.8,
+            rotation: 1.1,
+            ..point()
+        };
+        let b = LeafPoint { position: Vec3::new(-2.0, 3.0, 1.0), ..a.clone() };
+        for style in [
+            LeafStyle::CrossedPlanes,
+            LeafStyle::SingleQuad,
+            LeafStyle::ClusterSphere,
+            LeafStyle::StarBurst,
+            LeafStyle::NeedleCluster,
+        ] {
+            let points = [a.clone(), b.clone()];
+            let mesh = foliage_mesh(&points, &flat(style));
+            assert_eq!(mesh.sway.len(), mesh.positions.len());
+            let per_leaf = mesh.positions.len() / 2;
+            let mut phases = Vec::new();
+            for (i, p) in points.iter().enumerate() {
+                let range = i * per_leaf..(i + 1) * per_leaf;
+                let (_, _, forward) = build_basis(p.direction, p.rotation);
+                let phase = mesh.sway[range.start].w;
+                assert!((0.0..1.0).contains(&phase), "{style:?}: phase {phase}");
+                phases.push(phase);
+                for (sway, &vertex) in mesh.sway[range.clone()].iter().zip(&mesh.positions[range]) {
+                    assert_eq!(sway.w, phase, "{style:?}: a leaf with two phases");
+                    let offset = sway.truncate();
+                    assert!(offset.cross(forward).length() < 1e-4, "{style:?}: flutter not along the leaf's direction");
+                    match style {
+                        LeafStyle::CrossedPlanes | LeafStyle::SingleQuad => {
+                            assert!((offset.length() - (vertex - p.position).length()).abs() < 1e-5, "{style:?}: lever");
+                        }
+                        LeafStyle::ClusterSphere => {
+                            assert!((offset.length() - p.size * 0.4).abs() < 1e-5, "{style:?}: a cluster must move as one");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            assert_ne!(phases[0], phases[1], "{style:?}: two leaves flutter in step");
+        }
     }
 
     #[test]

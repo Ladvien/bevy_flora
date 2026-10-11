@@ -1,0 +1,127 @@
+// A far tree: one quad that turns about the trunk to face the camera and shows
+// the baked view nearest to where the camera looks from, lit by the scene's own lights. The Rust
+// side is `impostor/mod.rs` (the quad, the atlases) and `impostor/material.rs`.
+//
+// The quad is built in the tree's local space with the picture's frame: x across,
+// y up, z toward the viewer. `world_from_local` carries the tree's position, yaw
+// and size; only the position and the size are used to place it, the yaw to pick
+// the view and to turn the baked normals back into the world.
+import bevy_pbr::render::{
+    mesh_functions,
+    forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
+    view_transformations::position_world_to_clip,
+    mesh_view_bindings::{view, globals},
+    pbr_types,
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing, calculate_view},
+    mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
+};
+import package::shading::common::{flora, wind_bend, oct_decode, transmitted_light};
+
+@if(VISIBILITY_RANGE_DITHER)
+import bevy_pbr::render::pbr_functions::visibility_range_dither;
+
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var albedo: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var atlas_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var surface: texture_2d<f32>;
+// x: views in the atlas.
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> params: vec4<f32>;
+
+const TAU: f32 = 6.283185307179586;
+
+@vertex
+fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
+    var out: VertexOutput;
+    let vertex = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
+    let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
+
+    let origin = world_from_local[3].xyz;
+    let scale_x = length(world_from_local[0].xyz);
+    let scale_y = length(world_from_local[1].xyz);
+    let scale_z = length(world_from_local[2].xyz);
+
+    // Toward the camera, along the ground.
+    let to_camera = view.world_position - origin;
+    var flat_to_camera = vec3<f32>(to_camera.x, 0.0, to_camera.z);
+    if dot(flat_to_camera, flat_to_camera) < 1.0e-8 {
+        flat_to_camera = vec3<f32>(0.0, 0.0, 1.0);
+    }
+    flat_to_camera = normalize(flat_to_camera);
+
+    // The quad's right: up cross toward-the-camera, the camera's own right.
+    let right = vec3<f32>(flat_to_camera.z, 0.0, -flat_to_camera.x);
+    let world_position = origin
+        + right * (vertex.position.x * scale_x)
+        + vec3<f32>(0.0, 1.0, 0.0) * (vertex.position.y * scale_y);
+
+    // The view: the yaw of the camera in the tree's own frame, to the nearest
+    // of the baked ones (view k looks from the local +Z turned k / views of a
+    // turn about Y).
+    let local_x = dot(to_camera, world_from_local[0].xyz) / (scale_x * scale_x);
+    let local_z = dot(to_camera, world_from_local[2].xyz) / (scale_z * scale_z);
+    let views = params.x;
+    let yaw = atan2(local_x, local_z);
+    let view_index = floor(yaw / TAU * views + 0.5);
+    let tile = view_index - views * floor(view_index / views);
+
+    // The tree sways with the wind like its meshes do.
+    let bent = wind_bend(world_position, vertex.position.y, origin, scale_y, globals.time);
+    out.world_position = vec4<f32>(bent, 1.0);
+    out.position = position_world_to_clip(bent);
+    // The tree's own +Z in the world (its yaw): what the baked normals are relative to.
+    out.world_normal = normalize(vec3<f32>(world_from_local[2].x, 0.0, world_from_local[2].z));
+@if(VERTEX_UVS_A)
+    out.uv = vec2<f32>((tile + vertex.uv.x) / views, vertex.uv.y);
+@if(VERTEX_OUTPUT_INSTANCE_INDEX)
+    out.instance_index = vertex_no_morph.instance_index;
+@if(VISIBILITY_RANGE_DITHER)
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
+        vertex_no_morph.instance_index, world_from_local[3]);
+
+    return out;
+}
+
+@fragment
+fn fragment(in: VertexOutput) -> FragmentOutput {
+@if(VISIBILITY_RANGE_DITHER)
+    visibility_range_dither(in.position, in.visibility_range_dither);
+
+    let color = textureSample(albedo, atlas_sampler, in.uv);
+    let baked = textureSample(surface, atlas_sampler, in.uv);
+    if color.a < 0.5 {
+        discard;
+    }
+
+    // The baked normal is in the tree's frame: x across (its local +X in the world), y up,
+    // z along its local +Z.
+    let n = oct_decode(baked.rg * 2.0 - 1.0);
+    let z = normalize(in.world_normal);
+    let x = vec3<f32>(z.z, 0.0, -z.x);
+    let N = normalize(x * n.x + vec3<f32>(0.0, 1.0, 0.0) * n.y + z * n.z);
+
+    var p = pbr_types::pbr_input_new();
+    p.material.base_color = vec4<f32>(color.rgb, 1.0);
+    p.material.perceptual_roughness = 0.9;
+    p.material.flags = p.material.flags | pbr_types::STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
+    p.frag_coord = in.position;
+    p.world_position = in.world_position;
+    p.world_normal = N;
+    p.N = N;
+    p.is_orthographic = view.clip_from_view[3].w == 1.0;
+    p.V = calculate_view(in.world_position, p.is_orthographic);
+    p.flags = MESH_FLAGS_SHADOW_RECEIVER_BIT;
+    // What the crown's own leaves keep from the sky and the sun.
+    p.diffuse_occlusion = vec3<f32>(baked.b);
+    p.directional_shadow_factor = baked.b;
+
+    var out: FragmentOutput;
+    out.color = apply_pbr_lighting(p);
+    let through = color.rgb * flora.tint.rgb * flora.leaf.x * baked.a;
+    out.color = vec4<f32>(
+        out.color.rgb + view.exposure * transmitted_light(
+            p.world_position, N, N, p.V, p.frag_coord, p.flags, baked.b, through, baked.b
+        ),
+        1.0
+    );
+    out.color = main_pass_post_lighting_processing(p, out.color);
+    return out;
+}
