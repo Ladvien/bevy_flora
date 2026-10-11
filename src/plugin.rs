@@ -145,6 +145,10 @@ impl bevy::app::Plugin for FloraPlugin {
             );
         crate::gpu::build(app);
     }
+
+    fn finish(&self, app: &mut bevy::app::App) {
+        crate::gpu::finish(app);
+    }
 }
 
 /// Share of diffuse light a leaf lets through to its other side, so leaves
