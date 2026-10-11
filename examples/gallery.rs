@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! cargo run --example gallery -- [--out <dir>] [--filter <substr>]... [--no-shadows] [--gpu]
+//!     [--warmup-secs <s>]
 //! ```
 //!
 //! `--out` defaults to `target/gallery/latest`. `--filter` keeps scenarios whose
@@ -14,6 +15,9 @@
 //! disables shadow maps, to tell shadows from geometry defects. `--gpu` grows
 //! every tree in the vertex shader (`GpuGrowth`); compare its PNGs with a CPU
 //! render of the same scenarios using the `compare_gallery` example.
+//! `--warmup-secs <s>` renders for at least that long before the first capture:
+//! shaders compile in the background, and on a slow (software) renderer the first
+//! capture would otherwise come out empty.
 //!
 //! The views render into an offscreen image, so captures do not depend on the
 //! window being visible (the window itself stays blank). A capture that comes
@@ -23,6 +27,7 @@ use std::f32::consts::PI;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use bevy::app::AppExit;
 use bevy::camera::{RenderTarget, Viewport};
@@ -33,8 +38,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
-    CrownShape, FloraPlugin, FoliagePlacement, GpuGrowth, LeafOrientation, LeafStyle, MeshData, NodeKind,
-    ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
+    CrownShape, FloraPlugin, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation, LeafStyle, MeshData,
+    NodeKind, ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
 
 const WINDOW: UVec2 = UVec2::new(1280, 960);
@@ -547,6 +552,10 @@ struct Gallery {
     shadows: bool,
     /// Grow the tree on the GPU.
     gpu: bool,
+    /// When the run started, and the least time to render before the first
+    /// capture (see `--warmup-secs`).
+    started: Instant,
+    min_warmup: Duration,
     /// Offscreen image the four views render into; captures do not depend on
     /// the window being visible.
     target: Handle<Image>,
@@ -559,7 +568,7 @@ struct Gallery {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: gallery [--out <dir>] [--filter <substr>]... [--no-shadows] [--gpu]");
+    eprintln!("usage: gallery [--out <dir>] [--filter <substr>]... [--no-shadows] [--gpu] [--warmup-secs <s>]");
     std::process::exit(2);
 }
 
@@ -568,6 +577,7 @@ fn main() {
     let mut filters: Vec<String> = Vec::new();
     let mut shadows = true;
     let mut gpu = false;
+    let mut min_warmup = 0.0f32;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -575,6 +585,7 @@ fn main() {
             "--filter" => filters.push(args.next().unwrap_or_else(|| usage())),
             "--no-shadows" => shadows = false,
             "--gpu" => gpu = true,
+            "--warmup-secs" => min_warmup = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| usage()),
             _ => usage(),
         }
     }
@@ -615,6 +626,8 @@ fn main() {
             tsv,
             shadows,
             gpu,
+            started: Instant::now(),
+            min_warmup: Duration::from_secs_f32(min_warmup),
             target: Handle::default(),
             blank_capture: false,
             index: 0,
@@ -716,6 +729,7 @@ fn check_capture(captured: On<ScreenshotCaptured>, mut gallery: ResMut<Gallery>)
 }
 
 /// Scenario state machine: Warmup → (Apply → Settle → Capture)* → exit.
+#[allow(clippy::too_many_arguments)]
 fn drive(
     mut commands: Commands,
     mut gallery: ResMut<Gallery>,
@@ -724,12 +738,20 @@ fn drive(
     mut overlay: Single<&mut Text, With<Overlay>>,
     screenshots: Query<Entity, With<Screenshot>>,
     mut exit: MessageWriter<AppExit>,
+    support: Res<GpuGrowthSupport>,
 ) {
     let gallery = &mut *gallery;
     match gallery.phase {
         Phase::Warmup => {
             gallery.frames += 1;
-            if gallery.frames >= WARMUP_FRAMES {
+            if gallery.frames >= WARMUP_FRAMES && gallery.started.elapsed() >= gallery.min_warmup {
+                // Without GPU growth the trees would quietly grow on the CPU and
+                // the "GPU" renders would prove nothing.
+                if gallery.gpu && !support.0 {
+                    eprintln!("gallery --gpu: this device cannot grow trees on the GPU (GpuGrowthSupport is false)");
+                    exit.write(AppExit::error());
+                    return;
+                }
                 gallery.phase = Phase::Apply;
             }
         }
