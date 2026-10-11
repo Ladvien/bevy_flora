@@ -5,6 +5,24 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.4.1] - 2026-10-10
+
+Bug fix for 0.4.0; no API changes, and the meshes are bit-identical (all 319 gallery images
+byte-identical to 0.4.0).
+
+### Fixed
+
+- `FloraPlugin` panicked at startup (`Requested resource ... does not exist`) when it was added
+  before `AssetPlugin` / `DefaultPlugins`, as in `App::new().add_plugins(FloraPlugin)
+  .add_plugins(DefaultPlugins)`. 0.3.5 accepted any order and so does 0.4.1. The plugin now
+  registers `GrowthMaterial` with the renderer only when the renderer's plugins (and `PbrPlugin`)
+  were added first, and otherwise registers the asset types in `Plugin::finish`; trees with
+  `GpuGrowth` then grow on the CPU, and one warning says to add the plugin after `DefaultPlugins`
+  to use GPU growth. Checked in a fresh project against both orders (CPU fallback and GPU growth
+  both render) and by a regression test that fails on 0.4.0.
+- `docs/growth.gif`, the README clip, was re-recorded for this release; it comes out
+  byte-identical.
+
 ## [0.4.0] - 2026-10-10
 
 A new opt-in growth path. Without the new component a tree is exactly as in 0.3.5 (all 319
@@ -296,6 +314,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.4.1]: https://github.com/Ladvien/bevy_flora/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Ladvien/bevy_flora/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/Ladvien/bevy_flora/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/Ladvien/bevy_flora/compare/v0.3.3...v0.3.4

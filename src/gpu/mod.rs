@@ -10,10 +10,10 @@
 //! [`Skeleton::aged`]: crate::Skeleton::aged
 
 use bevy::app::App;
-use bevy::asset::{AssetApp, Assets};
+use bevy::asset::{AssetApp, AssetServer, Assets};
 use bevy::ecs::prelude::*;
 use bevy::mesh::{MeshVertexAttribute, VertexFormat};
-use bevy::pbr::MaterialPlugin;
+use bevy::pbr::{MaterialPlugin, PbrPlugin};
 use bevy::reflect::Reflect;
 use bevy::render::RenderApp;
 use bevy::render::storage::ShaderBuffer;
@@ -88,7 +88,10 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 ///
 /// The per-node state lives in a storage buffer, which WebGL2 does not have. On
 /// such a device (and until the renderer is ready) the tree falls back to the
-/// CPU path and a warning is logged once.
+/// CPU path and a warning is logged once. The same happens if
+/// [`FloraPlugin`](crate::FloraPlugin) was added before the renderer's plugins
+/// (`DefaultPlugins`): it works in any order, but only registers
+/// [`GrowthMaterial`] with a renderer that is already there, so add it after.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
 #[reflect(Component)]
 pub struct GpuGrowth;
@@ -106,19 +109,40 @@ pub struct GpuGrowthSupport(pub bool);
 #[derive(Resource)]
 pub(crate) struct GrowthMaterialAdded;
 
-/// Register what GPU growth needs: the support flag, the material and its
-/// shaders when there is a renderer, and the asset types the systems use when
-/// there is none.
+/// Register what GPU growth needs: the support flag, and, when the renderer's
+/// plugins have already been added, the material and its shaders.
+///
+/// Plugins may be added in any order. Added ahead of the renderer's (or of the
+/// asset plugin), this registers nothing that needs them; [`finish`] covers the
+/// asset types, and `GpuGrowthSupport` stays `false`, so trees grow on the CPU.
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<GpuGrowthSupport>().register_type::<GpuGrowth>();
-    if app.get_sub_app(RenderApp).is_some() {
+    if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         material::add_shaders(app);
         app.add_plugins(MaterialPlugin::<GrowthMaterial>::default())
             .insert_resource(GrowthMaterialAdded);
     } else {
+        add_asset_types(app);
+    }
+}
+
+/// Once every plugin is built, make sure the asset types the systems take exist
+/// even if the plugin was added too early to register them.
+pub(crate) fn finish(app: &mut App) {
+    add_asset_types(app);
+}
+
+/// Register [`GrowthMaterial`] and [`ShaderBuffer`] as assets where the asset
+/// plugin is present and nobody has yet (the renderer's plugins do it when they
+/// are).
+fn add_asset_types(app: &mut App) {
+    if !app.world().contains_resource::<AssetServer>() {
+        return;
+    }
+    if !app.world().contains_resource::<Assets<GrowthMaterial>>() {
         app.init_asset::<GrowthMaterial>();
-        if !app.world().contains_resource::<Assets<ShaderBuffer>>() {
-            app.init_asset::<ShaderBuffer>();
-        }
+    }
+    if !app.world().contains_resource::<Assets<ShaderBuffer>>() {
+        app.init_asset::<ShaderBuffer>();
     }
 }

@@ -171,3 +171,27 @@ fn growing_trees_reach_their_mature_state_on_the_gpu() {
     assert!(age > 0.0 && age <= mature_at);
     assert_eq!(uploaded_buffer(&app, tree).unwrap(), expected_buffer(&params, age));
 }
+
+#[test]
+fn the_plugin_can_be_added_before_the_asset_plugin() {
+    // Plugins may be added in any order (0.3.5 did not care). GPU growth needs
+    // the renderer, which is not there yet: it stays off and trees grow on the CPU.
+    let mut app = App::new();
+    app.add_plugins(FloraPlugin);
+    app.add_plugins((bevy::MinimalPlugins, AssetPlugin::default()));
+    app.init_asset::<Mesh>();
+    app.init_asset::<StandardMaterial>();
+    app.finish();
+    app.cleanup();
+    assert!(!app.world().resource::<GpuGrowthSupport>().0);
+
+    let params = TreePreset::Oak.params();
+    let tree = app
+        .world_mut()
+        .spawn((ProceduralTree(params.clone()), TreeAge(4.0), GpuGrowth))
+        .id();
+    app.update();
+    assert!(app.world().get::<TreeRender>(tree).is_some());
+    assert!(!is_gpu(&app, tree));
+    assert_eq!(app.world().get::<Children>(tree).unwrap().len(), 2);
+}
