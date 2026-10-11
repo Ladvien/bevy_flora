@@ -140,9 +140,9 @@ pub struct PoolVariant {
 ///
 /// The children are drawn by distance (see [`LodDistances`]). The impostor casts
 /// no shadow; the three levels of detail do. (In the `forest` example, 100 000
-/// trees with a shadow-casting sun cost about 15 ms a frame on an Apple M5, leaf shading and
-/// wind included (see the README); the shadow maps are about a third of that, and narrowing
-/// the cascades to 120 m in 2 did not change it.)
+/// trees with a shadow-casting sun cost 7.3 ms a frame on an Apple M4 Pro, leaf shading and
+/// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
+/// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
 #[derive(Component, Clone, Debug)]
 #[require(Transform, Visibility)]
 pub struct PooledTree {

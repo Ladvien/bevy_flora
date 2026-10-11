@@ -63,7 +63,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 15 ms a frame (1080p, Apple M5).
+//! 7.3 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
