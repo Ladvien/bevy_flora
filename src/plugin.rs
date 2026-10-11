@@ -10,7 +10,8 @@
 //! CPU per tree); `Growing` is meant for a few hero trees, not a forest. The
 //! full-grown skeleton is kept between frames and regenerated only when
 //! [`ProceduralTree`] changes. Trees built or rebuilt in the same frame are built
-//! on all cores. Trees with equal looks share their materials, which are never
+//! on all cores. Trees with equal looks (equal colours, trunk height, wind response and leaf
+//! shading; seeds do not matter) share their materials, which are never
 //! written in place, so the renderer prepares each look once and does not
 //! re-prepare anything as a tree grows.
 //!
@@ -104,7 +105,8 @@ pub struct TreeRender {
 /// How a tree's wood and leaves are drawn.
 pub(crate) enum Paint {
     /// Meshes rebuilt on the CPU, drawn with plain materials (the renderer's plugins came after
-    /// this one, so [`FloraMaterial`] is not registered).
+    /// this one, or the device has no storage buffers in the vertex stage, so
+    /// [`FloraMaterial`] cannot be drawn).
     Standard {
         trunk: Handle<StandardMaterial>,
         foliage: Handle<StandardMaterial>,

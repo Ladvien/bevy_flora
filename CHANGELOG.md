@@ -5,6 +5,36 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [Unreleased]
+
+Media and documentation; the library's behaviour does not change.
+
+### Added
+
+- `capture_growth --grove` records a second README clip, `docs/grove.gif`: a grove of eight trees
+  of six species (oak, two maples, two birches, pine, cypress, willow, Japanese maple), each
+  growing from its own start frame, with the camera circling it and a `GustFront` crossing it
+  in the last seconds.
+- `FloraMaterialSupport` and `SharedFlora` are re-exported at the crate root, like
+  `GpuGrowthSupport`.
+
+### Changed
+
+- `capture_growth` steps a fixed clock, one 1/24 s step per captured frame, so the wind sways
+  smoothly and two runs write the same frames (with the wind at its default strength, 0.3, the
+  clip used to catch whatever the wall clock gave each frame). The clips are lit by a light wind
+  (strength 0.5), the single tree is a maple by default (it was an oak) and starts as a visible
+  seedling instead of bare ground. `docs/growth.gif` is re-recorded (480x360, 24 fps, 192
+  frames, 5.0 MB).
+- The README forest table is measured again on one machine, an Apple M4 Pro, for 0.6.0; before,
+  its columns mixed the 0.5.0 numbers (Apple M5) with 0.6.0 prose.
+- Documentation brought up to 0.6.0: the Leaf look section of `ARCHITECTURE.md` (the mesh feeds
+  the leaf shader, it is not a plain `StandardMaterial`), the three `Paint` variants, what
+  trees need to share a material ("equal looks"), the WebGL2 fallback in the `PooledTree`,
+  `PoolMaterials`, `GpuGrowth` and `Paint::Standard` docs and the no-impostors warning, the gust
+  examples (launch a gust once, not every frame), `MeshData`'s fields, the `forest` flags, and
+  `CLAUDE.md` and `AGENTS.md` (both clips, CI's commands, committing `Cargo.lock`).
+
 ## [0.6.0] - 2026-10-11
 
 Draws faster, looks the same. All 319 gallery scenarios, rendered by the CPU path and with
@@ -489,6 +519,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[Unreleased]: https://github.com/Ladvien/bevy_flora/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/Ladvien/bevy_flora/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Ladvien/bevy_flora/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Ladvien/bevy_flora/compare/v0.4.0...v0.4.1

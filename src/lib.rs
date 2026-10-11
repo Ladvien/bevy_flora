@@ -63,7 +63,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 15 ms a frame (1080p, Apple M5).
+//! 7.3 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -80,7 +80,9 @@
 //! use bevy::prelude::*;
 //! use bevy_flora::{FloraWind, GustFront};
 //!
-//! fn gust(mut wind: ResMut<FloraWind>, time: Res<Time>) {
+//! // Call this once, when the gust begins (a system run on an event or a timer), not
+//! // every frame: launching restarts the front at its origin.
+//! fn start_storm(mut wind: ResMut<FloraWind>, time: Res<Time>) {
 //!     wind.strength = 0.6;
 //!     wind.launch_gust(GustFront { speed: 20.0, ..default() }, &time);
 //! }
@@ -128,7 +130,10 @@ pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, T
 pub use pool::{PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
-pub use shading::{FloraExtension, FloraKey, FloraMaterial, FloraUniform, FloraWind, FloraWindBuffer, GustFront};
+pub use shading::{
+    FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWind, FloraWindBuffer, GustFront,
+    SharedFlora,
+};
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 // Compile the README's Rust examples as doctests.

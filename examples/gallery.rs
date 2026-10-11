@@ -19,7 +19,8 @@
 //! shaders compile in the background, and on a slow (software) renderer the first
 //! capture would otherwise come out empty.
 //!
-//! The views render into an offscreen image, so captures do not depend on the
+//! The wind is off (`FloraWind` strength 0), so captures repeat. The views render into an
+//! offscreen image, so captures do not depend on the
 //! window being visible (the window itself stays blank). A capture that comes
 //! back as a single flat color is flagged `BLANK_CAPTURE`.
 

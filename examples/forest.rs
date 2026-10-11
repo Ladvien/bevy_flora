@@ -5,6 +5,7 @@
 //!     [--preset <name>] [--frames <n>] [--warmup-secs <s>] [--spacing <m>]
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
+//!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>]
 //! ```
 //!
@@ -503,7 +504,8 @@ fn drive(
 ) {
     let bench = &mut *bench;
     if bench.args.wind_animate && bench.phase != Phase::Loading {
-        // Mutated every frame on purpose: the wind changes, so every flora material is rewritten.
+        // Mutated every frame on purpose: the wind changes, so the shared wind buffer is written
+        // every frame (and no material is touched).
         wind.strength = 0.6 + 0.3 * (time.elapsed_secs() * 1.7).sin();
     }
     match bench.phase {

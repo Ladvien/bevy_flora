@@ -52,7 +52,7 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 /// The mature tree is built once per change of [`ProceduralTree`](crate::ProceduralTree)
 /// and uploaded once; each frame only a few kilobytes of per-node state are
 /// written. A tree on this path costs the CPU microseconds per frame instead of
-/// the 0.1-0.5 ms the CPU path takes, which makes growing a forest affordable.
+/// the 0.1-0.4 ms the CPU path takes, which makes growing a forest affordable.
 ///
 /// Without this component a tree behaves exactly as before.
 ///
@@ -88,7 +88,9 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 ///
 /// The per-node state lives in a storage buffer, which WebGL2 does not have. On
 /// such a device (and until the renderer is ready) the tree falls back to the
-/// CPU path and a warning is logged once. The same happens if
+/// CPU path and a warning is logged once. The fallback tree is drawn with plain materials
+/// (no leaf shading, no wind) when the device lacks vertex-stage storage buffers. The same
+/// happens if
 /// [`FloraPlugin`](crate::FloraPlugin) was added before the renderer's plugins
 /// (`DefaultPlugins`): it works in any order, but only registers
 /// [`GrowthMaterial`] with a renderer that is already there, so add it after.

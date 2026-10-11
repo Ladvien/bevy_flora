@@ -84,7 +84,8 @@ impl Default for GustFront {
 /// faster; how far and how fast each species does is [`TreeParams::wind`]. It is global: the
 /// plugin writes it into one shared GPU buffer ([`FloraWindBuffer`]) whenever it changes, and
 /// no material is touched, so a game may animate it every frame at the cost of one small buffer
-/// write. Set `strength` to 0 for a still scene (the gallery does, so its captures repeat).
+/// write. Set `strength` to 0 and `gust` to `None` for a still scene (the gallery sets strength 0,
+/// so its captures repeat).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct FloraWind {

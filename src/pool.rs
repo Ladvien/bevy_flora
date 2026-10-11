@@ -101,7 +101,8 @@ pub enum PoolMaterials {
         leaves: Handle<FloraMaterial>,
     },
     /// Plain materials: [`FloraPlugin`](crate::FloraPlugin) was added before the renderer's
-    /// plugins, so [`FloraMaterial`] is not registered.
+    /// plugins, or the device has no storage buffers in the vertex stage (WebGL2), so
+    /// [`FloraMaterial`] cannot be drawn.
     Standard {
         /// The wood.
         wood: Handle<StandardMaterial>,
@@ -139,8 +140,9 @@ pub struct PoolVariant {
 ///
 /// The children are drawn by distance (see [`LodDistances`]). The impostor casts
 /// no shadow; the three levels of detail do. (In the `forest` example, 100 000
-/// trees with a shadow-casting sun cost 10.1 ms a frame and 8.5 ms without
-/// shadow maps; narrowing the cascades to 120 m in 2 did not change that.)
+/// trees with a shadow-casting sun cost 7.3 ms a frame on an Apple M4 Pro, leaf shading and
+/// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
+/// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
 #[derive(Component, Clone, Debug)]
 #[require(Transform, Visibility)]
 pub struct PooledTree {
@@ -357,7 +359,8 @@ pub(crate) fn spawn_pooled_trees(
             *warned = true;
             warn!(
                 "bevy_flora: a tree pool has no impostors: FloraPlugin was added before the renderer's \
-                 plugins (or there is no renderer). Add it after DefaultPlugins, or set \
+                 plugins, there is no renderer, or the device has no vertex-stage storage buffers \
+                 (WebGL2). Add it after DefaultPlugins, or set \
                  LodDistances::impostor to infinity to draw the coarsest level of detail at any distance"
             );
         }
