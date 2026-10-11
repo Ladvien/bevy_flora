@@ -9,8 +9,10 @@
 //! Performance: a growing tree rebuilds both meshes every frame (0.1-0.4 ms of
 //! CPU per tree); `Growing` is meant for a few hero trees, not a forest. The
 //! full-grown skeleton is kept between frames and regenerated only when
-//! [`ProceduralTree`] changes, and the materials are only touched when a colour
-//! changes, so the renderer does not re-prepare them every frame.
+//! [`ProceduralTree`] changes. Trees built or rebuilt in the same frame are built
+//! on all cores. Trees with equal looks share their materials, which are never
+//! written in place, so the renderer prepares each look once and does not
+//! re-prepare anything as a tree grows.
 //!
 //! For a forest, add [`GpuGrowth`] to the trees: the mature meshes are built and
 //! uploaded once, and each frame only a few kilobytes of per-node state are

@@ -12,8 +12,9 @@
 //!   leaf (Crysis' vegetation animation, GPU Gems 3 chapter 16). A species answers it in its
 //!   own way ([`WindResponse`](crate::WindResponse)), and a [`GustFront`] sweeps a band of
 //!   stronger wind across the world. It runs in the vertex stage of the main pass and of the
-//!   shadow maps alike, so shadows follow the motion, and costs the CPU nothing per frame: only
-//!   [`FloraWind`] changing rewrites the materials.
+//!   shadow maps alike, so shadows follow the motion, and costs the CPU nothing per frame:
+//!   changing [`FloraWind`] writes one small shared buffer ([`FloraWindBuffer`]) and touches no
+//!   material.
 //!
 //! The plugin uses it for every tree it draws ([`ProceduralTree`](crate::ProceduralTree),
 //! [`GpuGrowth`](crate::GpuGrowth), [`TreePool`](crate::TreePool) and its impostors).

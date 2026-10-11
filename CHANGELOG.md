@@ -5,6 +5,82 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.6.0] - 2026-10-11
+
+Draws faster, looks the same. All 319 gallery scenarios, rendered by the CPU path and with
+`--gpu`, are byte-identical to 0.5.0 (the 638 PNGs and both `stats.tsv`). The forest screenshots
+(wind on, fixed time step) are identical too, apart from one pixel of a 1920x1080 frame that is one
+level of 255 darker in the red channel (the shader compiler's arithmetic: the wind is read from a
+buffer now). `FloraUniform` and the three flora materials changed, so a program that builds them by
+hand needs a small change (below).
+
+### Changed
+
+- **The wind no longer lives in the materials.** 0.5.0 copied the global wind into the uniform of
+  every flora material and rewrote all of them whenever `FloraWind` changed. Bevy re-specializes
+  every entity of a material whenever the material asset is modified, so one change cost time
+  proportional to the number of trees: a pooled forest of 20 000 trees took 212 ms a frame, and 1.2
+  s of CPU, while the wind changed every frame (a storm that builds, a wind that turns) against
+  3.3 ms still. The wind is now one small storage buffer, `FloraWindBuffer`, that `FloraExtension`,
+  `GrowthExtension` and `ImpostorMaterial` bind at binding 102 and the shaders read; changing
+  `FloraWind` or launching a `GustFront` writes it in place and modifies no material.
+  - `FloraUniform` loses `wind`, `motion`, `rate`, `front` and `front_shape`; it holds `tree`,
+    `response`, `leaf` and `tint`, what belongs to a tree and its species.
+  - `FloraExtension`, `GrowthExtension` and `ImpostorMaterial` gain `wind: Handle<ShaderBuffer>`,
+    and `ImpostorMaterial::new` takes the `&FloraWindBuffer`.
+  - Reading the buffer needs storage buffers in the vertex stage. A device without them (WebGL2)
+    now gets plain `StandardMaterial` trees, pools without impostors, and one warning, as when the
+    plugin is added before the renderer's plugins; in 0.5.0 it had the flora material there.
+- **Trees with equal looks share their materials.** A `ProceduralTree` used to own two flora
+  materials, so no two trees shared a bind group and no draw could reuse the last one's state.
+  Trees whose colours and species-level shading (`TreeParams::wind`, `LeafShading`, trunk height)
+  are equal now resolve the same two materials from `SharedFlora`, which a tree never writes in
+  place: a tree whose look changes is given other shared ones. A thousand oaks that differ by seed
+  take 21.5 ms a frame instead of 58 ms, at about a third of the CPU. Give every tree its own colour,
+  or its own `trunk.height`, and each is its own material again, as in 0.5.0. This replaces the
+  "known cost" listed under 0.5.0, whose suspected cause (a non-bindless extension) was only part
+  of it.
+- **Trees built in the same frame are built on all cores.** `rebuild_trees` and
+  `rebuild_gpu_trees` collect the trees whose parameters or age changed, build their meshes on the
+  compute task pool in batches, and apply the results in order; the meshes are bit-identical to
+  the serial build. Spawning 1 000 oaks takes 0.3 s instead of 0.6 s, 4 000 take 1.0 s instead of
+  2.4 s. A frame that rebuilds one or two trees (a hero tree growing) runs inline.
+
+### Added
+
+- `FloraWindBuffer` and `SharedFlora`, public because the plugin's systems take them.
+- `forest` example: `--mode gpu`, `--mode gpu-live` and `--mode cpu-live` (`GpuGrowth` trees,
+  fully grown or growing for the whole run, and CPU-rebuilt growing trees), `--wind-animate`
+  (the wind's strength changes every frame), `--deterministic` (a fixed 1/60 s step and a warmup
+  counted in frames, so two builds' `--screenshot`s can be compared byte for byte), and the
+  result line gains the median, the minimum and `cpu`, the CPU time of all threads per measured
+  frame, which stays comparable when the machine is busy.
+
+### Measured
+
+`forest --offscreen`, 1920x1080, a shadow-casting sun, an oak forest on an 8 m grid seen from 30 m
+up, release build, Apple M4 Pro (14 cores) with nothing else running, three runs interleaved
+against 0.5.0:
+
+| scene | 0.5.0 | 0.6.0 |
+|---|---|---|
+| 1 000 `ProceduralTree`s, ms per frame (CPU ms per frame) | 57-59 (74-76) | 21.4-22.0 (17-26) |
+| pool of 20 000 trees, wind changed every frame | 211.6 ms (1 158 ms CPU) | 3.3 ms (12.7 ms CPU) |
+| pool of 20 000 trees, wind still | 3.3 ms (12.7 ms CPU) | 3.3 ms (12.7 ms CPU) |
+| 1 000 trees spawned, until all exist | 0.6 s | 0.3 s |
+| 4 000 trees spawned (6 m grid) | 2.4 s | 1.0 s |
+| 500 `GpuGrowth` trees | 36 ms | 36 ms |
+
+### Notes
+
+- `GpuGrowth` trees are bound by the GPU, not by their materials: sharing them (one node buffer
+  with a slice per tree, the slice's start passed in `MeshTag`, one material per look) was built
+  and measured at 36.4 ms against 35.5 ms for 500 oaks, so it is not in this release. Most of the
+  cost is the shadow cascades: with the sun's shadows off 500 trees take 15 ms a frame instead of
+  36 ms.
+- Impostors and pooled trees were already sharing their materials; the pooled forest's cost is
+  unchanged.
+
 ## [0.5.0] - 2026-10-11
 
 Forest scale, leaf shading and wind. The meshes are unchanged (the `stats.tsv`
@@ -413,6 +489,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.6.0]: https://github.com/Ladvien/bevy_flora/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Ladvien/bevy_flora/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Ladvien/bevy_flora/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Ladvien/bevy_flora/compare/v0.3.5...v0.4.0
