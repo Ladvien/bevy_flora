@@ -19,7 +19,7 @@
 //! [`GpuGrowth`](crate::GpuGrowth), [`TreePool`](crate::TreePool) and its impostors).
 
 use bevy::app::App;
-use bevy::asset::{Asset, AssetApp, AssetServer, Assets, Handle, embedded_asset};
+use bevy::asset::{Asset, AssetApp, AssetServer, Assets, embedded_asset};
 use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
@@ -42,6 +42,9 @@ use bevy::time::Time;
 use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{LeafStyle, TreeParams};
+
+mod share;
+pub use share::SharedFlora;
 
 /// A gust that sweeps across the world: a band of stronger wind, `width` metres deep, moving
 /// along `direction` at `speed`. Launch it with [`FloraWind::launch_gust`].
@@ -310,23 +313,6 @@ pub(crate) fn flora_material(
     FloraMaterial { base: flora_base(color), extension: FloraExtension { flora, wind: wind.0.clone(), leaf } }
 }
 
-/// Bring `handle`'s colour and uniform up to date, marking it modified only if one differs: a
-/// modified material is re-extracted and re-prepared by the renderer, which a growing tree would
-/// otherwise cause every frame.
-pub(crate) fn sync_flora(
-    materials: &mut Assets<FloraMaterial>,
-    handle: &Handle<FloraMaterial>,
-    color: Color,
-    flora: FloraUniform,
-) {
-    if let Some(mut material) = materials.get_mut(handle)
-        && (material.base.base_color != color || material.extension.flora != flora)
-    {
-        material.base.base_color = color;
-        material.extension.flora = flora;
-    }
-}
-
 /// Whether [`FloraMaterial`] can be drawn: the plugin was added after the renderer's plugins
 /// (which registers the material) and the device has storage buffers in the vertex stage (the
 /// wind lives in one; everything but WebGL2 does). Decided at runtime, once the renderer
@@ -405,7 +391,7 @@ pub(crate) fn sync_wind(
 /// this registers nothing that needs them; [`finish`] covers the asset types, and trees are drawn
 /// with plain materials.
 pub(crate) fn build(app: &mut App) {
-    app.init_resource::<FloraWind>().register_type::<FloraWind>().register_type::<GustFront>();
+    app.init_resource::<FloraWind>().init_resource::<SharedFlora>().register_type::<FloraWind>().register_type::<GustFront>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         add_shaders(app);
         app.add_plugins(MaterialPlugin::<FloraMaterial>::default()).insert_resource(FloraSupportPending);
