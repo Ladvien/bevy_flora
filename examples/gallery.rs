@@ -6,12 +6,14 @@
 //! sanity flags to `stats.tsv`.
 //!
 //! ```text
-//! cargo run --example gallery -- [--out <dir>] [--filter <substr>]... [--no-shadows]
+//! cargo run --example gallery -- [--out <dir>] [--filter <substr>]... [--no-shadows] [--gpu]
 //! ```
 //!
 //! `--out` defaults to `target/gallery/latest`. `--filter` keeps scenarios whose
 //! name contains the substring; repeat it to match any of several. `--no-shadows`
-//! disables shadow maps, to tell shadows from geometry defects.
+//! disables shadow maps, to tell shadows from geometry defects. `--gpu` grows
+//! every tree in the vertex shader (`GpuGrowth`); compare its PNGs with a CPU
+//! render of the same scenarios using the `compare_gallery` example.
 //!
 //! The views render into an offscreen image, so captures do not depend on the
 //! window being visible (the window itself stays blank). A capture that comes
@@ -31,7 +33,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
-    CrownShape, FloraPlugin, FoliagePlacement, LeafOrientation, LeafStyle, MeshData, NodeKind,
+    CrownShape, FloraPlugin, FoliagePlacement, GpuGrowth, LeafOrientation, LeafStyle, MeshData, NodeKind,
     ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
 
@@ -543,6 +545,8 @@ struct Gallery {
     tsv: File,
     /// Render without shadow maps, to tell shadows from geometry defects.
     shadows: bool,
+    /// Grow the tree on the GPU.
+    gpu: bool,
     /// Offscreen image the four views render into; captures do not depend on
     /// the window being visible.
     target: Handle<Image>,
@@ -555,7 +559,7 @@ struct Gallery {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: gallery [--out <dir>] [--filter <substr>]... [--no-shadows]");
+    eprintln!("usage: gallery [--out <dir>] [--filter <substr>]... [--no-shadows] [--gpu]");
     std::process::exit(2);
 }
 
@@ -563,12 +567,14 @@ fn main() {
     let mut out = PathBuf::from("target/gallery/latest");
     let mut filters: Vec<String> = Vec::new();
     let mut shadows = true;
+    let mut gpu = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--out" => out = args.next().unwrap_or_else(|| usage()).into(),
             "--filter" => filters.push(args.next().unwrap_or_else(|| usage())),
             "--no-shadows" => shadows = false,
+            "--gpu" => gpu = true,
             _ => usage(),
         }
     }
@@ -608,6 +614,7 @@ fn main() {
             out,
             tsv,
             shadows,
+            gpu,
             target: Handle::default(),
             blank_capture: false,
             index: 0,
@@ -653,7 +660,10 @@ fn setup(
     ));
 
     let first = &gallery.scenarios[0];
-    commands.spawn((ProceduralTree(first.params.clone()), TreeAge(first.age)));
+    let tree = commands.spawn((ProceduralTree(first.params.clone()), TreeAge(first.age))).id();
+    if gallery.gpu {
+        commands.entity(tree).insert(GpuGrowth);
+    }
 
     let mut view0 = Entity::PLACEHOLDER;
     for i in 0..4usize {

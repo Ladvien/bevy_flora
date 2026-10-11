@@ -337,8 +337,8 @@ fn grown_leaves_match_the_cpu_meshers() {
         for i in 0..mature.nodes.len() {
             let before = mature_points.len();
             leaf_points_for_node(&mature, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut mature_points);
-            for p in before..mature_points.len() {
-                mature_direction.insert((mature.nodes[i].id, (p - before) as u32), mature_points[p].direction);
+            for (ordinal, point) in mature_points[before..].iter().enumerate() {
+                mature_direction.insert((mature.nodes[i].id, ordinal as u32), point.direction);
             }
         }
         for age in AGES {

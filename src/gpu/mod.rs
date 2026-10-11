@@ -9,16 +9,27 @@
 //!
 //! [`Skeleton::aged`]: crate::Skeleton::aged
 
+use bevy::app::App;
+use bevy::asset::{AssetApp, Assets};
 use bevy::ecs::prelude::*;
 use bevy::mesh::{MeshVertexAttribute, VertexFormat};
+use bevy::pbr::MaterialPlugin;
 use bevy::reflect::Reflect;
+use bevy::render::RenderApp;
+use bevy::render::storage::ShaderBuffer;
 
 mod frame;
+mod material;
 mod mesh;
+pub(crate) mod render;
 mod state;
 
 #[cfg(test)]
+mod app_tests;
+#[cfg(test)]
 mod tests;
+
+pub use material::{GrowthExtension, GrowthMaterial};
 
 /// Per-vertex: the node (`Node::id`) in the low word, the placement class
 /// (low 8 bits) and a leaf's ordinal (the rest) in the high word.
@@ -65,6 +76,8 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 ///   ([`FoliagePlacement::TipClusters`](crate::FoliagePlacement::TipClusters))
 ///   keep the mirroring the mature tree chose.
 /// - Leaf normals and the shape of primary bases follow the mature tree.
+/// - A growing pointed trunk ends in a flat cap; with smoothing on, the CPU
+///   path softens that cap into a point while the tree is young.
 /// - The [`Mesh`](bevy::mesh::Mesh) assets on the tree's children, and the
 ///   bounding box derived from them, are the **mature** tree at every age:
 ///   picking, physics and frustum culling see the grown size, not the current one.
@@ -79,3 +92,27 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
 #[reflect(Component)]
 pub struct GpuGrowth;
+
+/// Whether this device can grow trees in the vertex shader. [`FloraPlugin`](crate::FloraPlugin)
+/// sets it once the renderer is ready, from the device's limits: `true` where
+/// the vertex stage can read a storage buffer, `false` on WebGL2. While it is
+/// `false`, trees with [`GpuGrowth`] grow on the CPU. Insert it yourself only
+/// where there is no renderer (a headless test).
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuGrowthSupport(pub bool);
+
+/// Register what GPU growth needs: the support flag, the material and its
+/// shaders when there is a renderer, and the asset types the systems use when
+/// there is none.
+pub(crate) fn build(app: &mut App) {
+    app.init_resource::<GpuGrowthSupport>().register_type::<GpuGrowth>();
+    if app.get_sub_app(RenderApp).is_some() {
+        material::add_shaders(app);
+        app.add_plugins(MaterialPlugin::<GrowthMaterial>::default());
+    } else {
+        app.init_asset::<GrowthMaterial>();
+        if !app.world().contains_resource::<Assets<ShaderBuffer>>() {
+            app.init_asset::<ShaderBuffer>();
+        }
+    }
+}

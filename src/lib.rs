@@ -28,6 +28,33 @@
 //! }
 //! ```
 //!
+//! # Growing a forest: [`GpuGrowth`]
+//!
+//! Rebuilding a growing tree's meshes costs the CPU 0.1-0.4 ms per tree per
+//! frame. Add [`GpuGrowth`] and the tree is built once, at maturity, and grown in
+//! the vertex shader instead (a few microseconds of CPU per tree per frame, 0.004
+//! ms in the 0.4.0 measurements):
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::{FloraPlugin, GpuGrowth, Growing, ProceduralTree, TreeAge, TreePreset};
+//!
+//! fn setup(mut commands: Commands) {
+//!     for i in 0..200 {
+//!         commands.spawn((
+//!             ProceduralTree(TreePreset::Oak.params()),
+//!             TreeAge(0.0),
+//!             Growing::default(),
+//!             GpuGrowth,
+//!             Transform::from_xyz((i % 20) as f32 * 8.0, 0.0, (i / 20) as f32 * 8.0),
+//!         ));
+//!     }
+//! }
+//! ```
+//!
+//! It needs a device with storage buffers in the vertex stage (everything but
+//! WebGL2; see [`GpuGrowthSupport`]); elsewhere the trees grow on the CPU.
+//!
 //! # Building meshes without Bevy's ECS
 //!
 //! ```rust
@@ -52,7 +79,7 @@ pub mod skeleton;
 
 pub use crown::CrownShape;
 pub use foliage::LeafPoint;
-pub use gpu::GpuGrowth;
+pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use growth::GrowthParams;
 pub use mesh::MeshData;
 pub use params::{

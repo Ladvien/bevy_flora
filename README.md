@@ -14,20 +14,20 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.3 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.4 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.3"
+bevy_flora = "0.4"
 ```
 
 | feature | default | what it does |
 |---|---|---|
 | `serde` | — | `Serialize` / `Deserialize` on every parameter type, so trees can be authored in RON or JSON |
 
-The library depends on `bevy` with default features off (`std`, `bevy_asset`, `bevy_color`, `bevy_mesh`, `bevy_pbr`), so it adds no windowing or audio to a build.
+The library depends on `bevy` with default features off (`std`, `bevy_asset`, `bevy_color`, `bevy_log`, `bevy_mesh`, `bevy_pbr`), so it adds no windowing or audio to a build.
 
 ## Quickstart
 
@@ -62,6 +62,37 @@ fn setup(mut commands: Commands) {
 
 The plugin keeps two child entities on each tree (wood and leaves) and rebuilds their meshes whenever `ProceduralTree` or `TreeAge` changes. It sends a `TreeGenerated` message after each rebuild.
 
+### Growing many trees: `GpuGrowth`
+
+A growing tree normally rebuilds both meshes every frame, 0.1 to 0.4 ms of CPU per tree. Add `GpuGrowth` and the tree is built once, at maturity, and grown in the vertex shader: each frame the plugin ages the skeleton and writes a few kilobytes of per-node state, and nothing else is uploaded.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::{FloraPlugin, GpuGrowth, Growing, ProceduralTree, TreeAge, TreePreset};
+
+fn forest(mut commands: Commands) {
+    for i in 0..200 {
+        commands.spawn((
+            ProceduralTree(TreePreset::Oak.params()),
+            TreeAge(0.0),
+            Growing::default(),
+            GpuGrowth,
+            Transform::from_xyz((i % 20) as f32 * 8.0, 0.0, (i / 20) as f32 * 8.0),
+        ));
+    }
+}
+```
+
+Main-world cost per frame with every tree growing (a headless `App`, release build, Apple M-series, median of three runs):
+
+| 200 growing trees | CPU rebuild | `GpuGrowth` |
+|---|---|---|
+| oak | 17.6 ms | 0.81 ms |
+| willow | 25.4 ms | 0.90 ms |
+| oak, 2 smoothing passes | 69.8 ms | 0.70 ms |
+
+Shadows follow the growth (the prepass shares the vertex shader), and the grown frames match the CPU path: over all 319 gallery scenarios the mean difference between the two renders is 0.08 of 255 (105 PNGs are byte-identical, the worst is a willow at 2.2). What differs, and why, is listed on `GpuGrowth` in the docs: smoothing is computed once on the mature mesh and deformed, side counts stay at the mature count, `AllBranches` leaves keep their mature positions, and the `Mesh` assets (picking, physics, culling) are the mature tree. It needs storage buffers in the vertex stage, so not WebGL2; there the trees grow on the CPU.
+
 ### Without the plugin
 
 `build_tree` is a pure function from parameters and age to CPU meshes and the aged skeleton, so you can bake trees offline, feed your own renderer, or build colliders from the skeleton:
@@ -83,15 +114,16 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Deterministic.** Each branch draws randomness from its own seeded stream, so the same `seed` gives the same tree on every run, and aging never re-rolls branches or leaves that already exist.
 - **Branch shape**: crown envelopes, phyllotaxis, apical dominance, Y-splits, recursive sub-branches, twist, and a gravity bend that sub-branches and leaves follow. Floor avoidance keeps even strongly drooping wood above the ground.
 - **Closed wood.** Branches meet the trunk through flared collars and root segments, forks taper into their halves, and trunk tops end in a flat cap, a cone or a leader branch. Optional pipe-model radii, radius-adaptive ring counts and volume-preserving (Taubin) smoothing that keeps seams, branch ends and twig seats in place.
-- **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. Leaf cards are leaf-shaped (cut into the geometry, so there is no alpha-mask `discard`) and grow out of their twigs, crowns shade as one soft volume through crown-bent normals (`normal_bend`), and each leaf gets its own brightness through a vertex colour (`color_variation`). All of it is baked into the mesh, so the stock `StandardMaterial` is enough and no custom shader is involved. The leaf material is translucent, so back-lit leaves are not black.
+- **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. Leaf cards are leaf-shaped (cut into the geometry, so there is no alpha-mask `discard`) and grow out of their twigs, crowns shade as one soft volume through crown-bent normals (`normal_bend`), and each leaf gets its own brightness through a vertex colour (`color_variation`). All of it is baked into the mesh, so the stock `StandardMaterial` is enough and no custom shader is needed (the opt-in `GpuGrowth` path adds a vertex shader, below). The leaf material is translucent, so back-lit leaves are not black.
 
 ## Examples
 
 | example | what it shows |
 |---|---|
-| `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds. |
-| `gallery` | Renders 319 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it. |
-| `capture_growth` | Records the clip above as numbered PNG frames. |
+| `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU. |
+| `gallery` | Renders 319 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
+| `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
+| `capture_growth` | Records the clip above as numbered PNG frames (`--gpu` grows the tree in the vertex shader). |
 
 ```sh
 cargo run --release --example showcase

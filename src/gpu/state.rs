@@ -194,14 +194,14 @@ impl GrowthState {
             self.cone_lift,
         ];
         let (nodes, rings) = out[HEADER_VEC4S..].split_at_mut(NODE_VEC4S * self.nodes.len());
-        for (slot, node) in nodes.chunks_exact_mut(NODE_VEC4S).zip(&self.nodes) {
+        for (slot, node) in nodes.as_chunks_mut::<NODE_VEC4S>().0.iter_mut().zip(&self.nodes) {
             slot[0] = v(node.start, node.length);
             slot[1] = [node.base_radius, node.tip_radius, node.leaf_scale, node.leaf_count];
             slot[2] = v(node.collar_start, node.collar_start_radius);
             slot[3] = v(node.collar_end, node.collar_end_radius);
             slot[4] = v(node.root, node.flags as f32);
         }
-        for (slot, ring) in rings.chunks_exact_mut(RING_VEC4S).zip(&self.rings) {
+        for (slot, ring) in rings.as_chunks_mut::<RING_VEC4S>().0.iter_mut().zip(&self.rings) {
             slot[0] = v(ring.center, ring.radius);
             slot[1] = [ring.bulge, ring.twist, 0.0, 0.0];
         }

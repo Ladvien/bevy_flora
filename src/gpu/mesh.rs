@@ -34,6 +34,7 @@ pub(crate) struct GrowthData {
     /// One tag per wood vertex.
     pub wood_tags: Vec<Tag>,
     /// Which node and piece each run of wood vertices belongs to.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub wood_spans: Vec<WoodSpan>,
     /// Leaves; empty without foliage.
     pub leaves: MeshData,
@@ -143,8 +144,8 @@ fn tag_wood_span(
             }
         }
     }
-    for i in first..first + count {
-        measure(&mut tags[i], wood.positions[i], state);
+    for (slot, &position) in tags[first..first + count].iter_mut().zip(&wood.positions[first..first + count]) {
+        measure(slot, position, state);
     }
 }
 

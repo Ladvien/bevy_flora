@@ -2,13 +2,14 @@
 //! reseeding and an orbit camera.
 //!
 //! Controls: right-drag orbit, wheel zoom, `[`/`]` previous/next preset,
-//! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild.
+//! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
+//! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU.
 
 use std::f32::consts::PI;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy_flora::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset};
+use bevy_flora::{FloraPlugin, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset};
 
 #[derive(Resource)]
 struct Showcase {
@@ -99,13 +100,14 @@ fn camera_transform(cam: &OrbitCamera) -> Transform {
     Transform::from_translation(cam.target + offset).looking_at(cam.target, Vec3::Y)
 }
 
+#[allow(clippy::type_complexity)]
 fn handle_keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut showcase: ResMut<Showcase>,
     mut commands: Commands,
-    tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge, Option<&Growing>)>,
+    tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge, Option<&Growing>, Has<GpuGrowth>)>,
 ) {
-    let (entity, mut tree, mut age, growing) = tree.into_inner();
+    let (entity, mut tree, mut age, growing, gpu) = tree.into_inner();
     let count = TreePreset::ALL.len();
 
     let mut preset_changed = false;
@@ -143,6 +145,13 @@ fn handle_keys(
     if keys.just_pressed(KeyCode::KeyG) {
         tree.set_changed();
     }
+    if keys.just_pressed(KeyCode::KeyU) {
+        if gpu {
+            commands.entity(entity).remove::<GpuGrowth>();
+        } else {
+            commands.entity(entity).insert(GpuGrowth);
+        }
+    }
 }
 
 /// Re-frame the camera when the tree height changes noticeably.
@@ -175,10 +184,10 @@ fn orbit_camera(
 
 fn update_hud(
     showcase: Res<Showcase>,
-    tree: Single<(&ProceduralTree, &TreeAge, Option<&Growing>)>,
+    tree: Single<(&ProceduralTree, &TreeAge, Option<&Growing>, Has<GpuGrowth>)>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
-    let (tree, age, growing) = tree.into_inner();
+    let (tree, age, growing, gpu) = tree.into_inner();
     let maturity = tree.0.growth.maturity_age;
     let age_text = if age.0.is_finite() {
         format!("{:.1}", age.0)
@@ -186,13 +195,15 @@ fn update_hud(
         "mature".to_string()
     };
     hud.0 = format!(
-        "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\n\n\
+        "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\ngrowth: {}\n\n\
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
-         Space: toggle growing   R: restart   M: mature   G: rebuild",
+         Space: toggle growing   R: restart   M: mature   G: rebuild\n\
+         U: grow in the vertex shader or rebuild on the CPU",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),
         showcase.seed,
         if growing.is_some() { "on" } else { "off" },
+        if gpu { "vertex shader (GpuGrowth)" } else { "CPU rebuild" },
     );
 }

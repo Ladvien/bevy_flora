@@ -8,7 +8,7 @@
 
 use bevy::math::Vec3;
 
-use super::state::{BASE, BASE_COLLAR, COLLAR, CONE, GrowthState, TOP_CAP, WOOD};
+use super::state::{BASE, BASE_COLLAR, COLLAR, GrowthState, TOP_CAP, WOOD};
 
 /// Which formula places a vertex. The numbers are shared with the shader.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -67,8 +67,10 @@ pub(crate) struct Placement {
     /// Length the offset is multiplied by.
     pub scale: f32,
     /// False when the piece does not exist at this age.
+    #[cfg_attr(not(test), allow(dead_code))] // read by `position`, the shader's mirror
     pub on: bool,
     /// Where every vertex of an absent piece goes, so its triangles vanish.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub collapse: Vec3,
     /// Turn of the offset about the Y axis, in radians (trunk rings).
     pub twist: f32,
@@ -134,8 +136,10 @@ pub(crate) fn placement(tag: &Tag, state: &GrowthState) -> Placement {
     }
 }
 
-/// Position of `tag`'s vertex under `state`.
+/// Position of `tag`'s vertex under `state`: what the vertex shader computes.
+#[cfg(test)]
 pub(crate) fn position(tag: &Tag, state: &GrowthState) -> Vec3 {
+    use super::state::CONE;
     let p = placement(tag, state);
     if tag.class == Class::TrunkCone {
         return if state.trunk_flags & CONE != 0 {
