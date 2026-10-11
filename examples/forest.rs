@@ -1,7 +1,7 @@
 //! Forest-scale benchmark: how many trees can be drawn at what frame rate.
 //!
 //! ```text
-//! cargo run --release --example forest -- [--trees <n>] [--mode <naive|pool>]
+//! cargo run --release --example forest -- [--trees <n>] [--mode <naive|pool|gpu|gpu-live>]
 //!     [--preset <name>] [--frames <n>] [--warmup-secs <s>] [--spacing <m>]
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
@@ -23,13 +23,20 @@
 //! `--wind <strength>` (0 still to 1 strong; the library's default if not given) sways the
 //! trees, leaves and impostors alike; `--wind-dir <x,z>` turns the wind. `--gust <speed>`
 //! sends a gust front across the grid along +x, from its edge, when the trees are ready.
+//! `--wind-animate` changes the wind's strength every frame, as a game with weather would.
+//! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
+//! fully grown or still growing through the whole run.
 //!
 //! After the trees exist and `--warmup-secs` have passed (shaders compile in the
 //! background), the example times `--frames` frames and prints one line:
 //!
 //! ```text
-//! forest pool oak 100000 trees: 12.3 ms/frame (81.3 fps), p95 14.0 ms
+//! forest pool oak 100000 trees: 12.3 ms/frame (81.3 fps), p95 14.0 ms, median 11.9 ms, min 9.0 ms, cpu 18.2 ms/frame
 //! ```
+//!
+//! `cpu` is the CPU time of every thread per measured frame. It does not grow when other
+//! programs compete for the machine, and it is far below the frame time when the GPU is the
+//! limit, so it tells the two apart and compares runs on a machine that is not quiet.
 //!
 //! With `--screenshot <path>` the camera renders into an offscreen image
 //! instead, which is saved to `path` once the forest is ready; nothing is timed.
@@ -55,8 +62,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_flora::{
-    FloraPlugin, FloraWind, GustFront, LodDistances, LodSettings, PooledTree, ProceduralTree,
-    SeededRng, TreeParams, TreePool, TreePreset, build_pool,
+    FloraPlugin, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
+    ProceduralTree, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -69,6 +76,10 @@ const CAMERA_HEIGHT: f32 = 30.0;
 enum Mode {
     Naive,
     Pool,
+    /// `ProceduralTree` with `GpuGrowth`, fully grown.
+    Gpu,
+    /// `ProceduralTree` with `GpuGrowth`, still growing every frame of the run.
+    GpuLive,
 }
 
 impl Mode {
@@ -76,6 +87,8 @@ impl Mode {
         match self {
             Mode::Naive => "naive",
             Mode::Pool => "pool",
+            Mode::Gpu => "gpu",
+            Mode::GpuLive => "gpu-live",
         }
     }
 }
@@ -110,6 +123,8 @@ struct Args {
     wind_dir: Option<Vec2>,
     /// Speed of a gust front to send across the grid when the trees are ready, if any.
     gust: Option<f32>,
+    /// Change the wind's strength every frame, as a game with weather would.
+    wind_animate: bool,
     /// Render into an image, with no window.
     offscreen: bool,
     screenshot: Option<PathBuf>,
@@ -124,10 +139,10 @@ impl Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: forest [--trees <n>] [--mode <naive|pool>] [--preset <name>] [--frames <n>] \
+        "usage: forest [--trees <n>] [--mode <naive|pool|gpu|gpu-live>] [--preset <name>] [--frames <n>] \
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
-         [--wind-dir <x,z>] [--gust <speed>] \
+         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] \
          [--offscreen] [--screenshot <path>]"
     );
     std::process::exit(2);
@@ -148,6 +163,7 @@ fn parse_args() -> Args {
         wind: None,
         wind_dir: None,
         gust: None,
+        wind_animate: false,
         offscreen: false,
         screenshot: None,
     };
@@ -164,6 +180,8 @@ fn parse_args() -> Args {
                 args.mode = match it.next().as_deref() {
                     Some("naive") => Mode::Naive,
                     Some("pool") => Mode::Pool,
+                    Some("gpu") => Mode::Gpu,
+                    Some("gpu-live") => Mode::GpuLive,
                     _ => usage(),
                 }
             }
@@ -209,6 +227,7 @@ fn parse_args() -> Args {
                 args.wind_dir = Some(Vec2::new(x, z));
             }
             "--gust" => args.gust = Some(value(&mut it)),
+            "--wind-animate" => args.wind_animate = true,
             "--lod" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -233,6 +252,8 @@ enum Phase {
     Measuring,
     /// A screenshot was requested and has not come back yet.
     Capturing,
+    /// The result was printed; the app is exiting.
+    Done,
 }
 
 #[derive(Resource)]
@@ -243,6 +264,8 @@ struct Bench {
     loaded: Instant,
     /// Start of the previous frame while measuring.
     last: Option<Instant>,
+    /// Process CPU seconds (all threads) when measuring began.
+    cpu_start: Option<f64>,
     /// Seconds per measured frame.
     frames: Vec<f32>,
     /// Offscreen target for `--screenshot`.
@@ -299,6 +322,7 @@ fn main() {
             loaded: Instant::now(),
             last: None,
             frames: Vec::new(),
+            cpu_start: None,
             target: Handle::default(),
         })
         .add_systems(Startup, setup)
@@ -417,7 +441,17 @@ fn setup(
             None => {
                 let mut params: TreeParams = base.clone();
                 params.seed = base.seed.wrapping_add((i % VARIANTS) as i32);
-                commands.spawn((ProceduralTree(params), transform, ForestTree));
+                let mut tree = commands.spawn((ProceduralTree(params), transform, ForestTree));
+                match bench.args.mode {
+                    Mode::Gpu => {
+                        tree.insert(GpuGrowth);
+                    }
+                    // Young enough to keep growing for as long as the run takes.
+                    Mode::GpuLive => {
+                        tree.insert((GpuGrowth, TreeAge(3.0), Growing { rate: 0.01 }));
+                    }
+                    _ => {}
+                }
             }
             Some(pool) => {
                 commands.spawn((
@@ -445,6 +479,10 @@ fn drive(
     time: Res<Time>,
 ) {
     let bench = &mut *bench;
+    if bench.args.wind_animate && bench.phase != Phase::Loading {
+        // Mutated every frame on purpose: the wind changes, so every flora material is rewritten.
+        wind.strength = 0.6 + 0.3 * (time.elapsed_secs() * 1.7).sin();
+    }
     match bench.phase {
         Phase::Loading => {
             if unfinished.is_empty() {
@@ -495,6 +533,7 @@ fn drive(
                 bench.phase = Phase::Capturing;
             } else {
                 bench.phase = Phase::Measuring;
+                bench.cpu_start = cpu_seconds();
             }
         }
         Phase::Measuring => {
@@ -504,6 +543,7 @@ fn drive(
             }
             if bench.frames.len() >= bench.args.frames {
                 report(bench);
+                bench.phase = Phase::Done;
                 exit.write(AppExit::Success);
             }
         }
@@ -513,6 +553,7 @@ fn drive(
                 exit.write(AppExit::Success);
             }
         }
+        Phase::Done => {}
     }
 }
 
@@ -521,13 +562,39 @@ fn report(bench: &Bench) {
     sorted.sort_by(f32::total_cmp);
     let mean = bench.frames.iter().sum::<f32>() / bench.frames.len() as f32;
     let p95 = sorted[((sorted.len() as f32 * 0.95) as usize).min(sorted.len() - 1)];
+    let median = sorted[sorted.len() / 2];
+    // CPU time of every thread per frame: unlike the frame time it does not grow when other
+    // programs compete for the machine, and it is far below the frame time when the GPU is the
+    // limit.
+    let cpu = match (bench.cpu_start, cpu_seconds()) {
+        (Some(start), Some(end)) => format!("{:.2}", (end - start) * 1000.0 / bench.frames.len() as f64),
+        _ => "?".to_string(),
+    };
     println!(
-        "forest {} {} {} trees: {:.2} ms/frame ({:.1} fps), p95 {:.2} ms",
+        "forest {} {} {} trees: {:.2} ms/frame ({:.1} fps), p95 {:.2} ms, median {:.2} ms, min {:.2} ms, cpu {} ms/frame",
         bench.args.mode.name(),
         bench.args.preset.name(),
         bench.args.trees,
         mean * 1000.0,
         1.0 / mean,
         p95 * 1000.0,
+        median * 1000.0,
+        sorted[0] * 1000.0,
+        cpu,
     );
+}
+
+/// CPU time this process has used so far, all threads, in seconds (`ps`, 10 ms resolution).
+fn cpu_seconds() -> Option<f64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    // `[hh:]mm:ss.cc`
+    let mut seconds = 0.0;
+    for part in text.trim().split(':') {
+        seconds = seconds * 60.0 + part.parse::<f64>().ok()?;
+    }
+    Some(seconds)
 }
