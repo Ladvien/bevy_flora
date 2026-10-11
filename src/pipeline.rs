@@ -25,13 +25,10 @@ pub fn build_tree(params: &TreeParams, age: f32) -> TreeMeshes {
     build_aged(&generate_skeleton(params), params, age)
 }
 
-/// [`build_tree`] from the full-grown skeleton `full` that
-/// [`generate_skeleton`] made from `params`, so a growing tree can reuse it
-/// from frame to frame instead of regenerating it at every age.
-pub(crate) fn build_aged(full: &Skeleton, params: &TreeParams, age: f32) -> TreeMeshes {
-    let mature_at = full.mature_at(&params.growth);
+/// The skeleton `full` (from [`generate_skeleton`]) as it looks at `age`: the
+/// aged nodes, with pipe-model radii when `params.mesh.pipe_radius_enabled`.
+pub(crate) fn aged_skeleton(full: &Skeleton, params: &TreeParams, age: f32) -> Skeleton {
     let mut skeleton = full.aged(age, &params.growth);
-
     if params.mesh.pipe_radius_enabled {
         apply_pipe_radius(
             &mut skeleton,
@@ -39,6 +36,15 @@ pub(crate) fn build_aged(full: &Skeleton, params: &TreeParams, age: f32) -> Tree
             params.mesh.pipe_radius_min,
         );
     }
+    skeleton
+}
+
+/// [`build_tree`] from the full-grown skeleton `full` that
+/// [`generate_skeleton`] made from `params`, so a growing tree can reuse it
+/// from frame to frame instead of regenerating it at every age.
+pub(crate) fn build_aged(full: &Skeleton, params: &TreeParams, age: f32) -> TreeMeshes {
+    let mature_at = full.mature_at(&params.growth);
+    let skeleton = aged_skeleton(full, params, age);
 
     let trunk = skeleton_mesh(&skeleton, params);
 

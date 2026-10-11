@@ -49,6 +49,24 @@ pub fn collect_leaf_points(
     points
 }
 
+/// Growth scale of `node`'s leaves: 0 until `progress` passes
+/// [`GrowthParams::leaf_threshold`], 1 once the node is fully grown. Leaf size
+/// (and a tip cluster's radius) is proportional to it.
+pub(crate) fn node_leaf_scale(node: &Node, growth: &GrowthParams) -> f32 {
+    if growth.leaf_threshold >= 1.0 {
+        if node.progress >= 1.0 { 1.0 } else { 0.0 }
+    } else {
+        ((node.progress - growth.leaf_threshold) / (1.0 - growth.leaf_threshold)).clamp(0.0, 1.0)
+    }
+}
+
+/// Leaves along a branch of `length` metres under
+/// [`FoliagePlacement::AllBranches`]: at least one, more on longer wood.
+pub(crate) fn distributed_leaf_count(foliage: &FoliageParams, length: f32, height_ratio: f32) -> i32 {
+    let height_mod = height_modifier(height_ratio, foliage);
+    ((foliage.density * length * height_mod) as i32).max(1)
+}
+
 /// Append the leaf points of node `i` to `points`.
 #[allow(clippy::too_many_arguments)]
 pub fn leaf_points_for_node(
@@ -67,11 +85,7 @@ pub fn leaf_points_for_node(
         return;
     }
 
-    let leaf_scale = if growth.leaf_threshold >= 1.0 {
-        if node.progress >= 1.0 { 1.0 } else { 0.0 }
-    } else {
-        ((node.progress - growth.leaf_threshold) / (1.0 - growth.leaf_threshold)).clamp(0.0, 1.0)
-    };
+    let leaf_scale = node_leaf_scale(node, growth);
     if leaf_scale <= 0.0 {
         return;
     }
@@ -174,8 +188,7 @@ fn add_distributed_leaves(
     foliage: &FoliageParams,
     rng: &mut SeededRng,
 ) {
-    let height_mod = height_modifier(node.height_ratio, foliage);
-    let count = ((foliage.density * node.length * height_mod) as i32).max(1);
+    let count = distributed_leaf_count(foliage, node.length, node.height_ratio);
     for i in 0..count {
         let t = (i as f32 + rng.range(0.0, 1.0)) / count as f32;
         let biased_t = t * t;
@@ -270,12 +283,25 @@ fn leaf_direction(node: &NodeCtx, foliage: &FoliageParams, rng: &mut SeededRng) 
 /// [`FoliageParams::color_variation`]), and every normal is bent toward
 /// pointing out of the crown by [`FoliageParams::normal_bend`].
 pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
+    foliage_mesh_with(points, foliage, None)
+}
+
+/// [`foliage_mesh`] that also records, when `firsts` is given, the index of
+/// each leaf's first vertex (one entry per point, in order).
+pub(crate) fn foliage_mesh_with(
+    points: &[LeafPoint],
+    foliage: &FoliageParams,
+    mut firsts: Option<&mut Vec<u32>>,
+) -> MeshData {
     let mut mesh = MeshData::default();
     if points.is_empty() {
         return mesh;
     }
     let variation = foliage.color_variation.clamp(0.0, 0.5);
     for point in points {
+        if let Some(firsts) = firsts.as_deref_mut() {
+            firsts.push(mesh.positions.len() as u32);
+        }
         match foliage.style {
             LeafStyle::CrossedPlanes => crossed_planes(&mut mesh, point),
             LeafStyle::SingleQuad => single_quad(&mut mesh, point),

@@ -5,7 +5,7 @@ use bevy::math::Vec3;
 use super::MeshData;
 use super::rings::{RingBasis, connect_rings, emit_cap, emit_ring};
 use super::smoothing::laplacian_smooth;
-use super::trunk::trunk_mesh;
+use super::trunk::{TrunkPieces, trunk_mesh_with, trunk_pieces};
 use crate::params::TreeParams;
 use crate::skeleton::{Node, NodeKind, Skeleton};
 
@@ -31,10 +31,16 @@ pub fn root_segment(root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f
     mesh
 }
 
+/// Whether [`append_root_segment`] emits anything: `root` must lie behind
+/// `base` along `axis`.
+fn root_segment_emitted(root: Vec3, base: Vec3, axis: Vec3) -> bool {
+    (base - root).dot(RingBasis::from_axis(axis).axis()) > 1e-4
+}
+
 /// [`root_segment`], appended to `mesh`.
 fn append_root_segment(mesh: &mut MeshData, root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f32) {
-    let basis = RingBasis::from_axis(axis);
-    if (base - root).dot(basis.axis()) > 1e-4 {
+    if root_segment_emitted(root, base, axis) {
+        let basis = RingBasis::from_axis(axis);
         let segments = segments.max(3);
         let a = emit_ring(mesh, root, basis, segments, 0.0, 0.0, |_, _| radius);
         let b = emit_ring(mesh, base, basis, segments, 0.0, 0.0, |_, _| radius);
@@ -98,25 +104,43 @@ pub fn collar_mesh(node: &Node, collar_length: f32, radial_segments: u32) -> Mes
     mesh
 }
 
+/// Where a primary's collar runs and how wide it is at each end.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CollarGeometry {
+    /// Centre of the wide end (outside the branch's start, along its direction).
+    pub start: Vec3,
+    /// Centre of the narrow end.
+    pub end: Vec3,
+    /// Radius of the wide end.
+    pub start_radius: f32,
+    /// Radius of the narrow end: the tube's own radius there.
+    pub end_radius: f32,
+}
+
+/// The collar of primary `node`, `collar_length` metres long (see [`collar_mesh`]).
+pub(crate) fn collar_geometry(node: &Node, collar_length: f32) -> CollarGeometry {
+    let along = (collar_length * 0.5 / node.length).min(1.0);
+    CollarGeometry {
+        start: collar_start(node.start, node.direction, collar_length),
+        end: node.point_at(along),
+        start_radius: node.base_radius * COLLAR_FLARE,
+        end_radius: lerp(node.base_radius, node.tip_radius, along),
+    }
+}
+
 /// [`collar_mesh`], appended to `mesh`.
 fn append_collar(mesh: &mut MeshData, node: &Node, collar_length: f32, radial_segments: u32) {
     let segments = radial_segments.max(3);
     let rings = 3u32;
-    let (start, direction) = (node.start, node.direction);
-    let basis = RingBasis::from_axis(direction);
-
-    let along = (collar_length * 0.5 / node.length).min(1.0);
-    let collar_start = collar_start(start, direction, collar_length);
-    let collar_end = node.point_at(along);
-    let start_radius = node.base_radius * COLLAR_FLARE;
-    let end_radius = lerp(node.base_radius, node.tip_radius, along);
+    let basis = RingBasis::from_axis(node.direction);
+    let collar = collar_geometry(node, collar_length);
 
     let mut prev_ring = None;
     for k in 0..rings {
         let t = k as f32 / (rings - 1) as f32;
-        let center = collar_start.lerp(collar_end, t);
+        let center = collar.start.lerp(collar.end, t);
         let smooth_t = t * t * (3.0 - 2.0 * t);
-        let radius = lerp(start_radius, end_radius, smooth_t);
+        let radius = lerp(collar.start_radius, collar.end_radius, smooth_t);
         let ring = emit_ring(mesh, center, basis, segments, 0.0, t, |_, _| radius);
         if let Some(prev) = prev_ring {
             connect_rings(mesh, prev, ring, segments);
@@ -268,28 +292,117 @@ fn append_root_dome(mesh: &mut MeshData, base: Vec3, axis: Vec3, segments: u32, 
     }
 }
 
+/// Which wood piece a run of vertices belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WoodPiece {
+    /// The trunk: rings, caps and tip cone (see [`trunk_mesh_with`]).
+    Trunk,
+    /// A branch tube: its rings, then the tip cap (centre, then rim).
+    Tube,
+    /// A primary's collar: three rings.
+    Collar,
+    /// A primary's extension into the trunk: the far ring, then the near ring.
+    /// `collar` tells the base under the collar from the plain one.
+    Root { collar: bool },
+    /// A primary's rounded base.
+    Dome { collar: bool },
+}
+
+/// A run of vertices in a wood mesh and the node that produced it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WoodSpan {
+    /// Index of the node in the skeleton.
+    pub node: usize,
+    /// Which piece the vertices form.
+    pub piece: WoodPiece,
+    /// Index of the span's first vertex in the wood mesh.
+    pub first: u32,
+    /// Number of vertices in the span.
+    pub count: u32,
+    /// Radial segments of the piece (0 for the trunk).
+    pub segments: u32,
+}
+
+fn record(spans: &mut Option<&mut Vec<WoodSpan>>, span: WoodSpan) {
+    if span.count > 0
+        && let Some(spans) = spans.as_deref_mut()
+    {
+        spans.push(span);
+    }
+}
+
+/// The span of a primary's base wood (`first..end` in the roots mesh).
+fn base_span(node_index: usize, node: &Node, collar: bool, first: usize, end: usize, segments: u32) -> WoodSpan {
+    let piece = if primary_root(node).is_some() {
+        WoodPiece::Root { collar }
+    } else {
+        WoodPiece::Dome { collar }
+    };
+    WoodSpan {
+        node: node_index,
+        piece,
+        first: first as u32,
+        count: (end - first) as u32,
+        segments: segments.max(3),
+    }
+}
+
 /// Wood mesh for the whole (aged) skeleton: trunk, collars and branch tubes,
 /// optionally smoothed.
 pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
+    skeleton_mesh_with(skeleton, params, trunk_pieces(&params.trunk, &skeleton.nodes[0]), None)
+}
+
+/// [`skeleton_mesh`] with the trunk's optional `trunk` pieces given. When
+/// `spans` is given it receives, in no particular order, every run of vertices
+/// and the node and piece it belongs to.
+pub(crate) fn skeleton_mesh_with(
+    skeleton: &Skeleton,
+    params: &TreeParams,
+    trunk: TrunkPieces,
+    mut spans: Option<&mut Vec<WoodSpan>>,
+) -> MeshData {
     let b = &params.branches;
-    let mut mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed);
+    let mut mesh = trunk_mesh_with(&params.trunk, &skeleton.nodes[0], params.seed, trunk);
+    let recording = spans.is_some();
+    record(
+        &mut spans,
+        WoodSpan { node: 0, piece: WoodPiece::Trunk, first: 0, count: mesh.positions.len() as u32, segments: 0 },
+    );
     // Primary bases extended into the trunk. Added after smoothing: the bases
     // are open boundaries then, so smoothing keeps them in place and does not
     // pull the junction toward the trunk axis.
     let mut roots = MeshData::default();
+    let mut root_spans: Vec<WoodSpan> = Vec::new();
 
-    for node in skeleton.nodes.iter().skip(1) {
+    for (index, node) in skeleton.nodes.iter().enumerate().skip(1) {
         if node.length <= 1e-4 || node.base_radius <= 0.0 {
             continue;
         }
         let segments = radial_segments_for(node, params);
         if node.kind == NodeKind::Primary {
+            let first = roots.positions.len();
             append_primary_base(&mut roots, node, node.start, node.base_radius, segments);
+            if recording {
+                root_spans.push(base_span(index, node, false, first, roots.positions.len(), segments));
+            }
             if params.mesh.collar_enabled {
                 let collar_length = node.base_radius * params.mesh.collar_length;
                 // Same sides as the tube it wraps.
                 let collar_segments = segments;
+                let first = mesh.positions.len();
                 append_collar(&mut mesh, node, collar_length, collar_segments);
+                record(
+                    &mut spans,
+                    WoodSpan {
+                        node: index,
+                        piece: WoodPiece::Collar,
+                        first: first as u32,
+                        count: (mesh.positions.len() - first) as u32,
+                        segments: collar_segments.max(3),
+                    },
+                );
+                let first = roots.positions.len();
                 append_primary_base(
                     &mut roots,
                     node,
@@ -297,9 +410,23 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
                     node.base_radius * COLLAR_FLARE,
                     collar_segments,
                 );
+                if recording {
+                    root_spans.push(base_span(index, node, true, first, roots.positions.len(), collar_segments));
+                }
             }
         }
+        let first = mesh.positions.len();
         append_tube(&mut mesh, node, segments, b.twist);
+        record(
+            &mut spans,
+            WoodSpan {
+                node: index,
+                piece: WoodPiece::Tube,
+                first: first as u32,
+                count: (mesh.positions.len() - first) as u32,
+                segments: segments.max(3),
+            },
+        );
     }
 
     if params.mesh.smooth_iterations > 0 {
@@ -337,7 +464,11 @@ pub fn skeleton_mesh(skeleton: &Skeleton, params: &TreeParams) -> MeshData {
             |p| p.y <= GROUND_EPSILON || pins.contains(p),
         );
     }
+    let roots_at = mesh.positions.len() as u32;
     mesh.extend(&roots);
+    for span in root_spans {
+        record(&mut spans, WoodSpan { first: span.first + roots_at, ..span });
+    }
 
     mesh
 }

@@ -16,6 +16,28 @@ const TRUNK_BASIS: RingBasis = RingBasis {
 /// Height of a pointed trunk's tip cone relative to the trunk's top radius.
 const POINTED_TIP_ASPECT: f32 = 4.0;
 
+/// The optional pieces of a trunk mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TrunkPieces {
+    /// A mature pointed trunk's tip cone above its top ring.
+    pub cone: bool,
+    /// A cap closing the top ring: flat-capped trunks always, the others
+    /// only while still growing (once mature, the pointed tip or the leader
+    /// branch closes the top).
+    pub top_cap: bool,
+}
+
+/// The pieces the (aged) trunk `node` has.
+pub(crate) fn trunk_pieces(trunk: &TrunkParams, node: &Node) -> TrunkPieces {
+    TrunkPieces {
+        cone: trunk.termination == TrunkTermination::PointedTip && node.progress >= 1.0,
+        top_cap: match trunk.termination {
+            TrunkTermination::FlatCap => true,
+            TrunkTermination::PointedTip | TrunkTermination::LeaderBranch => node.progress < 1.0,
+        },
+    }
+}
+
 /// Mesh for the (aged) trunk `node`.
 ///
 /// Ring `k` evaluates the full-height profile at `t = k / (rings - 1) *
@@ -23,6 +45,14 @@ const POINTED_TIP_ASPECT: f32 = 4.0;
 /// computed on the full trunk; radii are scaled by `node.radius_progress`.
 /// Returns an empty mesh when `node.progress <= 0`.
 pub fn trunk_mesh(trunk: &TrunkParams, node: &Node, seed: i32) -> MeshData {
+    trunk_mesh_with(trunk, node, seed, trunk_pieces(trunk, node))
+}
+
+/// [`trunk_mesh`] with the optional `pieces` given. Vertex order: the rings
+/// (`segments + 1` vertices each, bottom to top), the tip cone's apex ring if
+/// any, the bottom cap (centre, then `segments + 1` rim vertices), the top cap
+/// likewise if any.
+pub(crate) fn trunk_mesh_with(trunk: &TrunkParams, node: &Node, seed: i32, pieces: TrunkPieces) -> MeshData {
     let mut mesh = MeshData::default();
     if node.progress <= 0.0 {
         return mesh;
@@ -71,8 +101,8 @@ pub fn trunk_mesh(trunk: &TrunkParams, node: &Node, seed: i32) -> MeshData {
     }
 
     // A mature pointed trunk closes in a cone above its top ring.
-    if let (TrunkTermination::PointedTip, Some(top_ring)) = (trunk.termination, prev_ring)
-        && node.progress >= 1.0
+    if pieces.cone
+        && let Some(top_ring) = prev_ring
     {
         let tip_length = trunk_radius_at(trunk, 1.0) * rp * POINTED_TIP_ASPECT;
         let apex = center_at(1.0) + Vec3::Y * tip_length;
@@ -89,11 +119,7 @@ pub fn trunk_mesh(trunk: &TrunkParams, node: &Node, seed: i32) -> MeshData {
 
     // Top cap: flat-capped trunks always; the others only while still growing
     // (once mature, the pointed tip or the leader branch closes the top).
-    let top_cap = match trunk.termination {
-        TrunkTermination::FlatCap => true,
-        TrunkTermination::PointedTip | TrunkTermination::LeaderBranch => node.progress < 1.0,
-    };
-    if top_cap {
+    if pieces.top_cap {
         let t_top = node.progress;
         let radius = trunk_radius_at(trunk, t_top);
         let root_blend = root_blend_at(t_top * trunk.height);
