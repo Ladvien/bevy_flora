@@ -24,6 +24,9 @@
 //! trees, leaves and impostors alike; `--wind-dir <x,z>` turns the wind. `--gust <speed>`
 //! sends a gust front across the grid along +x, from its edge, when the trees are ready.
 //! `--wind-animate` changes the wind's strength every frame, as a game with weather would.
+//! `--deterministic` steps the clock a fixed 1/60 s per frame and counts `--warmup-secs` as
+//! 60 frames a second, so a `--screenshot` of two versions of the code is the same image
+//! wherever they draw the same (compare the PNGs byte for byte).
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run.
 //!
@@ -125,6 +128,9 @@ struct Args {
     gust: Option<f32>,
     /// Change the wind's strength every frame, as a game with weather would.
     wind_animate: bool,
+    /// Step the clock a fixed 1/60 s per frame and count the warmup in frames, so two runs of
+    /// different code render the same image at the same frame.
+    deterministic: bool,
     /// Render into an image, with no window.
     offscreen: bool,
     screenshot: Option<PathBuf>,
@@ -142,7 +148,7 @@ fn usage() -> ! {
         "usage: forest [--trees <n>] [--mode <naive|pool|gpu|gpu-live>] [--preset <name>] [--frames <n>] \
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
-         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] \
+         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>]"
     );
     std::process::exit(2);
@@ -164,6 +170,7 @@ fn parse_args() -> Args {
         wind_dir: None,
         gust: None,
         wind_animate: false,
+        deterministic: false,
         offscreen: false,
         screenshot: None,
     };
@@ -228,6 +235,7 @@ fn parse_args() -> Args {
             }
             "--gust" => args.gust = Some(value(&mut it)),
             "--wind-animate" => args.wind_animate = true,
+            "--deterministic" => args.deterministic = true,
             "--lod" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -266,6 +274,8 @@ struct Bench {
     last: Option<Instant>,
     /// Process CPU seconds (all threads) when measuring began.
     cpu_start: Option<f64>,
+    /// Frames rendered in the warmup so far.
+    warm_frames: u32,
     /// Seconds per measured frame.
     frames: Vec<f32>,
     /// Offscreen target for `--screenshot`.
@@ -306,6 +316,9 @@ fn main() {
             ..base
         });
     }
+    if args.deterministic {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
+    }
     // Unfocused, Bevy's default settings update 60 times a second; a benchmark
     // must run flat out whatever has the focus.
     app.insert_resource(bevy::winit::WinitSettings::continuous())
@@ -323,6 +336,7 @@ fn main() {
             last: None,
             frames: Vec::new(),
             cpu_start: None,
+            warm_frames: 0,
             target: Handle::default(),
         })
         .add_systems(Startup, setup)
@@ -511,7 +525,13 @@ fn drive(
             }
         }
         Phase::Warmup => {
-            if bench.loaded.elapsed() < bench.args.warmup {
+            bench.warm_frames += 1;
+            let warm = if bench.args.deterministic {
+                (bench.warm_frames as f32 / 60.0) < bench.args.warmup.as_secs_f32()
+            } else {
+                bench.loaded.elapsed() < bench.args.warmup
+            };
+            if warm {
                 return;
             }
             // Trees wait for their impostors, so a pool without them here means the
