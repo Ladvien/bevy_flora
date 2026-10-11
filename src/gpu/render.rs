@@ -11,10 +11,12 @@ use super::material::{GrowthExtension, GrowthMaterial};
 use super::mesh::build_growth_data;
 use super::state::GrowthState;
 use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
+use crate::params::TreeParams;
 use crate::plugin::{
-    Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, replace_mesh,
+    Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, build_in_batches,
+    replace_mesh,
 };
-use crate::shading::{FloraUniform, FloraWind, flora_base};
+use crate::shading::{FloraUniform, FloraWindBuffer, flora_base};
 use crate::skeleton::generate_skeleton;
 
 /// What a tree that grows on the GPU draws with.
@@ -128,19 +130,19 @@ pub(crate) fn rebuild_gpu_trees(
     mut materials: ResMut<Assets<GrowthMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     support: Res<GpuGrowthSupport>,
-    wind: Res<FloraWind>,
+    wind: Res<FloraWindBuffer>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
         Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>,
     >,
 ) {
+    // Trees that only aged are updated here; the others are built on all cores below.
+    let mut jobs = Vec::new();
     for (entity, tree, age, mut render, gpu) in &mut trees {
         if !(gpu && support.0) {
             continue;
         }
-        let params = &tree.0;
-        let progress;
         match render.as_deref_mut() {
             // Only the age changed: age the kept skeleton and write the node state.
             Some(render) if !tree.is_changed() => {
@@ -152,25 +154,47 @@ pub(crate) fn rebuild_gpu_trees(
                 else {
                     continue;
                 };
-                paint.state.update(full, params, age.0);
+                paint.state.update(full, &tree.0, age.0);
                 write_state(&mut buffers, &paint.nodes, &paint.state);
-                progress = paint.state.trunk_progress;
+                generated.write(TreeGenerated {
+                    entity,
+                    height: tree.0.trunk.height * paint.state.trunk_progress,
+                    radius: tree.0.trunk.radius,
+                });
             }
             // The parameters changed: rebuild the mature meshes in place.
             Some(render) => {
-                let Paint::Growth(paint) = &mut render.paint else { continue };
-                let full = generate_skeleton(params);
-                let data = build_growth_data(&full, params);
-                paint.state.update(&full, params, age.0);
+                if matches!(render.paint, Paint::Growth(_)) {
+                    jobs.push(GrowthJob { entity, params: tree.0.clone(), age: age.0 });
+                }
+            }
+            None => jobs.push(GrowthJob { entity, params: tree.0.clone(), age: age.0 }),
+        }
+    }
+
+    let build = |job: GrowthJob| {
+        let full = generate_skeleton(&job.params);
+        let mut data = build_growth_data(&full, &job.params);
+        let state = std::mem::take(&mut data.state);
+        let (wood, leaves) = data.into_meshes();
+        (job.entity, job.age, full, state, wood, leaves)
+    };
+    build_in_batches(jobs, true, build, |(entity, age, full, state, wood, leaves)| {
+        let Ok((_, tree, _, mut render, _)) = trees.get_mut(entity) else { return };
+        let params = &tree.0;
+        let progress;
+        match render.as_deref_mut() {
+            Some(render) => {
+                let Paint::Growth(paint) = &mut render.paint else { return };
+                paint.state.update(&full, params, age);
                 write_state(&mut buffers, &paint.nodes, &paint.state);
                 progress = paint.state.trunk_progress;
                 render.mature_at = full.mature_at(&params.growth);
                 render.full = full;
-                let (wood, leaves) = data.into_meshes();
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
                 }
-                let uniform = FloraUniform::new(params, &wind);
+                let uniform = FloraUniform::new(params);
                 sync_growth(&mut materials, &paint.trunk, params.trunk_color, uniform.wood());
                 sync_growth(&mut materials, &paint.foliage, params.foliage.color, uniform);
                 match (&mut render.foliage, leaves) {
@@ -197,22 +221,19 @@ pub(crate) fn rebuild_gpu_trees(
                 }
             }
             None => {
-                let full = generate_skeleton(params);
-                let data = build_growth_data(&full, params);
-                let mut state = data.state.clone();
-                state.update(&full, params, age.0);
+                let mut state = state;
+                state.update(&full, params, age);
                 progress = state.trunk_progress;
                 let nodes = buffers.add(state_buffer(&state));
-                let (wood, leaves) = data.into_meshes();
 
-                let uniform = FloraUniform::new(params, &wind);
+                let uniform = FloraUniform::new(params);
                 let trunk_material = materials.add(GrowthMaterial {
                     base: flora_base(params.trunk_color),
-                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform.wood(), leaf: false },
+                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform.wood(), wind: wind.0.clone(), leaf: false },
                 });
                 let foliage_material = materials.add(GrowthMaterial {
                     base: flora_base(params.foliage.color),
-                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform, leaf: true },
+                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform, wind: wind.0.clone(), leaf: true },
                 });
                 let trunk_mesh = meshes.add(wood);
                 let trunk = commands
@@ -256,5 +277,12 @@ pub(crate) fn rebuild_gpu_trees(
             height: params.trunk.height * progress,
             radius: params.trunk.radius,
         });
-    }
+    });
+}
+
+/// One tree for `rebuild_gpu_trees` to build: its parameters and the age to write.
+struct GrowthJob {
+    entity: Entity,
+    params: TreeParams,
+    age: f32,
 }

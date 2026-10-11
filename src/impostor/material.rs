@@ -14,7 +14,9 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 
-use crate::shading::FloraUniform;
+use bevy::render::storage::ShaderBuffer;
+
+use crate::shading::{FloraUniform, FloraWindBuffer};
 
 /// Draws a far tree as a quad that turns about the trunk to face the camera and
 /// shows the baked view (see [`ImpostorAtlas`](super::ImpostorAtlas)) closest to
@@ -42,19 +44,30 @@ pub struct ImpostorMaterial {
     /// `x`: the number of views in the atlas.
     #[uniform(3)]
     pub params: Vec4,
-    /// The wind and the leaves' look.
+    /// The look of the leaves and the species' response to the wind.
     #[uniform(101)]
     pub flora: FloraUniform,
+    /// The weather, shared by every flora material: [`FloraWindBuffer`](crate::FloraWindBuffer).
+    #[storage(102, read_only)]
+    pub wind: Handle<ShaderBuffer>,
 }
 
 impl ImpostorMaterial {
-    /// A material for the atlases `albedo` and `surface` with `views` views.
-    pub fn new(albedo: Handle<Image>, surface: Handle<Image>, views: u32, flora: FloraUniform) -> Self {
+    /// A material for the atlases `albedo` and `surface` with `views` views, bending in the wind
+    /// of `wind`.
+    pub fn new(
+        albedo: Handle<Image>,
+        surface: Handle<Image>,
+        views: u32,
+        flora: FloraUniform,
+        wind: &FloraWindBuffer,
+    ) -> Self {
         Self {
             albedo,
             surface,
             params: Vec4::new(views as f32, 0.0, 0.0, 0.0),
             flora,
+            wind: wind.0.clone(),
         }
     }
 }

@@ -14,13 +14,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.5 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.6 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.5"
+bevy_flora = "0.6"
 ```
 
 | feature | default | what it does |
@@ -95,7 +95,7 @@ Shadows follow the growth (the prepass shares the vertex shader), and the grown 
 
 ### Drawing a forest: `TreePool`
 
-`ProceduralTree` gives every tree its own meshes, which a GPU can draw a few thousand of. For a forest build a `TreePool` once, a few seed variants of one tree, and place `PooledTree`s from it. Entities that share a mesh and a material are drawn in one instanced call, and the distance to the camera picks what is drawn: the full tree up close, two coarser levels of detail (30 m and 80 m by default, cross-fading) and, beyond 200 m, one camera-facing quad per tree that shows a view of the variant baked in the running app.
+`ProceduralTree` gives every tree its own meshes, which a GPU can draw a few thousand of (trees with equal parameters, seeds apart, share their two materials, so a thousand oaks cost 21 ms a frame, not 58). For a forest build a `TreePool` once, a few seed variants of one tree, and place `PooledTree`s from it. Entities that share a mesh and a material are drawn in one instanced call, and the distance to the camera picks what is drawn: the full tree up close, two coarser levels of detail (30 m and 80 m by default, cross-fading) and, beyond 200 m, one camera-facing quad per tree that shows a view of the variant baked in the running app.
 
 ```rust,no_run
 use bevy::prelude::*;
@@ -159,7 +159,7 @@ fn stiff_willow() -> bevy_flora::TreeParams {
 }
 ```
 
-Changing `FloraWind` rewrites every flora material once (two per tree, two per pool, one per impostor variant), so set it when the weather changes, not every frame; the gusts and the flutter animate by themselves. Wind writes no motion vectors, and branches do not sway on their own: the whole tree bends and the leaves flutter.
+Changing `FloraWind` writes one small shared buffer (`FloraWindBuffer`) and touches no material, so you can animate it every frame (a storm that builds, a wind that turns): a pooled forest of 20 000 trees takes 3.3 ms a frame with the wind changing every frame, where 0.5 took 212 ms (Apple M4 Pro). Launching a gust front writes the same buffer. Wind writes no motion vectors, and branches do not sway on their own: the whole tree bends and the leaves flutter. Leaf shading and wind need storage buffers in the vertex stage; on a device without them (WebGL2) trees are drawn with plain materials and one warning says so.
 
 ### Without the plugin
 

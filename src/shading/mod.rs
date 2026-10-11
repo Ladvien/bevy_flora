@@ -12,8 +12,9 @@
 //!   leaf (Crysis' vegetation animation, GPU Gems 3 chapter 16). A species answers it in its
 //!   own way ([`WindResponse`](crate::WindResponse)), and a [`GustFront`] sweeps a band of
 //!   stronger wind across the world. It runs in the vertex stage of the main pass and of the
-//!   shadow maps alike, so shadows follow the motion, and costs the CPU nothing per frame: only
-//!   [`FloraWind`] changing rewrites the materials.
+//!   shadow maps alike, so shadows follow the motion, and costs the CPU nothing per frame:
+//!   changing [`FloraWind`] writes one small shared buffer ([`FloraWindBuffer`]) and touches no
+//!   material.
 //!
 //! The plugin uses it for every tree it draws ([`ProceduralTree`](crate::ProceduralTree),
 //! [`GpuGrowth`](crate::GpuGrowth), [`TreePool`](crate::TreePool) and its impostors).
@@ -35,13 +36,17 @@ use bevy::render::RenderApp;
 use bevy::render::render_resource::{
     AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
+use bevy::render::renderer::RenderDevice;
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use bevy::time::Time;
 
-use crate::gpu::GrowthMaterial;
-use crate::impostor::ImpostorMaterial;
+use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{LeafStyle, TreeParams};
+
+mod share;
+pub use share::SharedFlora;
 
 /// A gust that sweeps across the world: a band of stronger wind, `width` metres deep, moving
 /// along `direction` at `speed`. Launch it with [`FloraWind::launch_gust`].
@@ -76,13 +81,10 @@ impl Default for GustFront {
 /// The wind every tree drawn with [`FloraMaterial`] moves in.
 ///
 /// Trees bend downwind as a whole, slowly and by more toward the top, and their leaves flutter
-/// faster; how far and how fast each species does is [`TreeParams::wind`]. It is global: change
-/// it and every flora material is rewritten once (two per [`ProceduralTree`](crate::ProceduralTree),
-/// two per [`TreePool`](crate::TreePool), one per impostor variant), with nothing else per frame.
-/// A game that animates it every frame therefore pays that many material re-preparations a
-/// frame; for a wind that varies, prefer the shaders' own gusts (`gust_strength`) and
-/// [`GustFront`]s. Set `strength` to 0 for a still scene (the gallery does, so its captures
-/// repeat).
+/// faster; how far and how fast each species does is [`TreeParams::wind`]. It is global: the
+/// plugin writes it into one shared GPU buffer ([`FloraWindBuffer`]) whenever it changes, and
+/// no material is touched, so a game may animate it every frame at the cost of one small buffer
+/// write. Set `strength` to 0 for a still scene (the gallery does, so its captures repeat).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct FloraWind {
@@ -140,23 +142,11 @@ impl FloraWind {
     }
 }
 
-/// What the flora shaders read from a material: the wind, the species' response to it and the
-/// look of the leaves of the tree it belongs to.
-///
-/// `wind`, `motion`, `rate`, `front` and `front_shape` are the same for every tree
-/// ([`FloraWind`]); `tree` and `response` are the tree's own, and so are `leaf` and `tint`.
+/// What the flora shaders read from a material: the species' response to the wind and the look
+/// of the leaves of the tree it belongs to. The wind itself is not here: it is the same for
+/// every tree and lives in [`FloraWindBuffer`].
 #[derive(ShaderType, Reflect, Clone, Copy, Debug, PartialEq, Default)]
 pub struct FloraUniform {
-    /// (direction x, direction z, strength, speed) of the wind.
-    pub wind: Vec4,
-    /// (bend, flutter, gust strength, turbulence).
-    pub motion: Vec4,
-    /// (gust frequency, flutter frequency, 0, 0).
-    pub rate: Vec4,
-    /// (origin x, origin z, direction x, direction z) of the [`GustFront`]; zero without one.
-    pub front: Vec4,
-    /// (speed, width, strength, start time) of the [`GustFront`]; zero without one.
-    pub front_shape: Vec4,
     /// (1 / trunk height, 0, 0, 0).
     pub tree: Vec4,
     /// (sway, flutter, sway frequency, flutter frequency) of the species: [`TreeParams::wind`].
@@ -168,19 +158,13 @@ pub struct FloraUniform {
 }
 
 impl FloraUniform {
-    pub(crate) fn new(params: &TreeParams, wind: &FloraWind) -> Self {
+    pub(crate) fn new(params: &TreeParams) -> Self {
         let s = &params.foliage.shading;
         let r = &params.wind;
         // The veins are drawn on leaf-shaped cards; the other styles' UVs are not a leaf.
         let veined = !matches!(params.foliage.style, LeafStyle::NeedleCluster | LeafStyle::ClusterSphere);
         let tint = s.transmission_tint.to_linear();
-        let [wind, motion, rate, front, front_shape] = global_wind(wind);
         Self {
-            wind,
-            motion,
-            rate,
-            front,
-            front_shape,
             tree: Vec4::new(1.0 / params.trunk.height.max(0.01), 0.0, 0.0, 0.0),
             response: Vec4::new(
                 r.sway.max(0.0),
@@ -198,29 +182,22 @@ impl FloraUniform {
         }
     }
 
-    /// The same wind for a tree's wood, which has no leaf look: the leaf fields are zeroed, so
-    /// changing how leaves are shaded does not touch the wood's material. The wood bends like
+    /// The same uniform for a tree's wood, which has no leaf look: the leaf fields are zeroed,
+    /// so changing how leaves are shaded does not touch the wood's material. The wood bends like
     /// the species does.
     pub(crate) fn wood(self) -> Self {
         Self { leaf: Vec4::ZERO, tint: Vec4::ZERO, ..self }
     }
-
-    /// Whether [`set_wind`](Self::set_wind) would change anything.
-    pub(crate) fn wind_differs(&self, wind: &FloraWind) -> bool {
-        [self.wind, self.motion, self.rate, self.front, self.front_shape] != global_wind(wind)
-    }
-
-    /// Rewrite the wind, keeping what belongs to the tree.
-    pub(crate) fn set_wind(&mut self, wind: &FloraWind) {
-        [self.wind, self.motion, self.rate, self.front, self.front_shape] = global_wind(wind);
-    }
 }
 
-/// The fields of [`FloraUniform`] that every tree shares: `wind`, `motion`, `rate`, `front` and
-/// `front_shape`.
-fn global_wind(wind: &FloraWind) -> [Vec4; 5] {
+/// The five `Vec4`s of [`FloraWind`] the shaders read, in the order of the shared buffer:
+/// `wind` (direction x, direction z, strength, speed), `motion` (bend, flutter, gust strength,
+/// turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front` (origin x, origin z,
+/// direction x, direction z) and `front_shape` (speed, width, strength, start time); the last
+/// two are zero without a [`GustFront`], or with one that has no direction. Directions are
+/// normalised and every value clamped to what the shaders can use.
+pub(crate) fn wind_vectors(wind: &FloraWind) -> [Vec4; 5] {
     let d = wind.direction.normalize_or_zero();
-    // A front with no direction, or none at all, is off: all zero.
     let (front, front_shape) = match wind.gust {
         Some(gust) if gust.direction.normalize_or_zero() != Vec2::ZERO => {
             let d = gust.direction.normalize_or_zero();
@@ -251,11 +228,14 @@ pub struct FloraKey {
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, PartialEq)]
 #[bind_group_data(FloraKey)]
 pub struct FloraExtension {
-    /// The wind and the leaves' look.
+    /// The look of the tree's leaves and its response to the wind.
     // Binding slots below 100 belong to the base material; 100 is GPU growth's node buffer,
     // which shares this extension's fragment shader.
     #[uniform(101)]
     pub flora: FloraUniform,
+    /// The weather, shared by every flora material: [`FloraWindBuffer`].
+    #[storage(102, read_only)]
+    pub wind: Handle<ShaderBuffer>,
     /// Leaves get the leaf surface, the light through the leaf and the flutter (their mesh must
     /// carry the attributes [`foliage_mesh`](crate::foliage::foliage_mesh) bakes); wood only bends.
     pub leaf: bool,
@@ -326,116 +306,110 @@ pub(crate) fn flora_base(color: Color) -> StandardMaterial {
     }
 }
 
-pub(crate) fn flora_material(color: Color, flora: FloraUniform, leaf: bool) -> FloraMaterial {
-    FloraMaterial { base: flora_base(color), extension: FloraExtension { flora, leaf } }
-}
-
-/// Bring `handle`'s colour and uniform up to date, marking it modified only if one differs: a
-/// modified material is re-extracted and re-prepared by the renderer, which a growing tree would
-/// otherwise cause every frame.
-pub(crate) fn sync_flora(
-    materials: &mut Assets<FloraMaterial>,
-    handle: &Handle<FloraMaterial>,
+pub(crate) fn flora_material(
     color: Color,
     flora: FloraUniform,
-) {
-    if let Some(mut material) = materials.get_mut(handle)
-        && (material.base.base_color != color || material.extension.flora != flora)
-    {
-        material.base.base_color = color;
-        material.extension.flora = flora;
-    }
+    leaf: bool,
+    wind: &FloraWindBuffer,
+) -> FloraMaterial {
+    FloraMaterial { base: flora_base(color), extension: FloraExtension { flora, wind: wind.0.clone(), leaf } }
 }
 
-/// Whether [`FloraMaterial`] was registered with the renderer, which only happens if
-/// [`FloraPlugin`](crate::FloraPlugin) was added after the renderer's plugins. While it is
-/// missing, trees are drawn with plain materials. Insert it yourself only where there is no
-/// renderer (a headless test) and the asset type was registered by hand.
+/// Whether [`FloraMaterial`] can be drawn: the plugin was added after the renderer's plugins
+/// (which registers the material) and the device has storage buffers in the vertex stage (the
+/// wind lives in one; everything but WebGL2 does). Decided at runtime, once the renderer
+/// exists; until then no tree is built. Without it, trees are drawn with plain materials and
+/// pools without impostors. Insert it yourself only where there is no renderer (a headless
+/// test) and the asset type was registered by hand.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FloraMaterialSupport;
 
-/// A material type that carries a [`FloraUniform`].
-pub(crate) trait HasFlora: Asset {
-    fn flora(&self) -> &FloraUniform;
-    fn flora_mut(&mut self) -> &mut FloraUniform;
-}
+/// The wind the flora shaders read: one storage buffer of five `Vec4`s (direction and strength,
+/// motion, rates and the [`GustFront`], packed from [`FloraWind`]), shared by every flora material
+/// (binding 102), so changing [`FloraWind`]
+/// writes this buffer in place and touches no material. Hand it to the `wind` field of a
+/// [`FloraExtension`], [`GrowthExtension`](crate::GrowthExtension) or
+/// [`ImpostorMaterial`](crate::ImpostorMaterial) you build yourself.
+#[derive(Resource, Clone, Debug)]
+pub struct FloraWindBuffer(pub Handle<ShaderBuffer>);
 
-impl HasFlora for FloraMaterial {
-    fn flora(&self) -> &FloraUniform {
-        &self.extension.flora
-    }
-    fn flora_mut(&mut self) -> &mut FloraUniform {
-        &mut self.extension.flora
-    }
-}
-
-impl HasFlora for GrowthMaterial {
-    fn flora(&self) -> &FloraUniform {
-        &self.extension.flora
-    }
-    fn flora_mut(&mut self) -> &mut FloraUniform {
-        &mut self.extension.flora
+impl FloraWindBuffer {
+    fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind) -> Self {
+        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind).map(|v| v.to_array()).to_vec())))
     }
 }
 
-impl HasFlora for ImpostorMaterial {
-    fn flora(&self) -> &FloraUniform {
-        &self.flora
-    }
-    fn flora_mut(&mut self) -> &mut FloraUniform {
-        &mut self.flora
+/// The renderer's plugins came before this one, so [`FloraMaterial`] is registered, but whether
+/// the device can draw it is not known until it exists.
+#[derive(Resource)]
+pub(crate) struct FloraSupportPending;
+
+/// Run condition: whether it is known how trees are drawn.
+pub(crate) fn flora_decided(pending: Option<Res<FloraSupportPending>>) -> bool {
+    pending.is_none()
+}
+
+/// Once the renderer's device exists, decide whether flora materials can be drawn on it; if
+/// not, trees are drawn with plain materials and pools without impostors.
+pub(crate) fn detect_flora_support(
+    mut commands: Commands,
+    device: Option<Res<RenderDevice>>,
+    pending: Option<Res<FloraSupportPending>>,
+) {
+    let (Some(device), Some(_)) = (device, pending) else { return };
+    commands.remove_resource::<FloraSupportPending>();
+    if bevy::render::storage_buffers_are_unsupported(&device.limits()) {
+        warn!(
+            "bevy_flora: this device has no storage buffers in the vertex stage (WebGL2?), so trees \
+             are drawn without leaf shading and wind, and pools without impostors"
+        );
+        commands.remove_resource::<ImpostorSupport>();
+    } else {
+        commands.insert_resource(FloraMaterialSupport);
     }
 }
 
-/// Write `wind` into every material of `assets` that does not have it yet.
-fn rewrite_wind<A: HasFlora>(assets: Option<ResMut<Assets<A>>>, wind: &FloraWind) {
-    let Some(mut assets) = assets else { return };
-    let stale: Vec<_> = assets
-        .iter()
-        .filter(|(_, material)| material.flora().wind_differs(wind))
-        .map(|(id, _)| id)
-        .collect();
-    for id in stale {
-        if let Some(mut material) = assets.get_mut(id) {
-            material.flora_mut().set_wind(wind);
-        }
-    }
-}
-
-/// Push [`FloraWind`] into the materials of every tree. Runs when the wind changed.
+/// Write [`FloraWind`] into the shared buffer, in place. Runs when the wind changed.
 pub(crate) fn sync_wind(
     wind: Res<FloraWind>,
-    flora: Option<ResMut<Assets<FloraMaterial>>>,
-    growth: Option<ResMut<Assets<GrowthMaterial>>>,
-    impostors: Option<ResMut<Assets<ImpostorMaterial>>>,
+    buffer: Res<FloraWindBuffer>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    rewrite_wind(flora, &wind);
-    rewrite_wind(growth, &wind);
-    rewrite_wind(impostors, &wind);
+    let packed = wind_vectors(&wind).map(|v| v.to_array());
+    // Look before borrowing mutably: a mutable borrow marks the buffer changed.
+    if buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>()) == Some(&packed[..]) {
+        return;
+    }
+    let Some(mut shader_buffer) = buffers.get_mut(&buffer.0) else { return };
+    match shader_buffer.cast_slice_mut::<[f32; 4]>() {
+        Some(slice) if slice.len() == packed.len() => slice.copy_from_slice(&packed),
+        _ => *shader_buffer = ShaderBuffer::from(packed.to_vec()),
+    }
 }
 
 /// Register the wind, and, when the renderer's plugins have already been added, the material
 /// and its shaders.
 ///
 /// Plugins may be added in any order. Added ahead of the renderer's (or of the asset plugin),
-/// this registers nothing that needs them; [`finish`] covers the asset type, and trees are drawn
+/// this registers nothing that needs them; [`finish`] covers the asset types, and trees are drawn
 /// with plain materials.
 pub(crate) fn build(app: &mut App) {
-    app.init_resource::<FloraWind>().register_type::<FloraWind>().register_type::<GustFront>();
+    app.init_resource::<FloraWind>().init_resource::<SharedFlora>().register_type::<FloraWind>().register_type::<GustFront>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         add_shaders(app);
-        app.add_plugins(MaterialPlugin::<FloraMaterial>::default())
-            .insert_resource(FloraMaterialSupport);
+        app.add_plugins(MaterialPlugin::<FloraMaterial>::default()).insert_resource(FloraSupportPending);
     } else {
         add_asset_types(app);
     }
+    add_wind_buffer(app);
 }
 
-/// Once every plugin is built, make sure the asset type the systems take exists even if the
-/// plugin was added too early to register it.
+/// Once every plugin is built, make sure the asset types the systems take exist even if the
+/// plugin was added too early to register them.
 pub(crate) fn finish(app: &mut App) {
     add_asset_types(app);
-    if app.get_sub_app(RenderApp).is_some() && !app.world().contains_resource::<FloraMaterialSupport>() {
+    add_wind_buffer(app);
+    if app.get_sub_app(RenderApp).is_some() && !app.world().contains_resource::<FloraSupportPending>() {
         warn!(
             "bevy_flora: FloraPlugin was added before the renderer's plugins, so trees are drawn \
              without leaf shading and wind; add it after DefaultPlugins"
@@ -443,14 +417,27 @@ pub(crate) fn finish(app: &mut App) {
     }
 }
 
-/// Register [`FloraMaterial`] as an asset where the asset plugin is present and nobody has yet
-/// (the renderer's plugins do it when they are).
+/// Register [`FloraMaterial`] and [`ShaderBuffer`] as assets where the asset plugin is present
+/// and nobody has yet (the renderer's plugins do it when they are).
 fn add_asset_types(app: &mut App) {
-    if app.world().contains_resource::<AssetServer>()
-        && !app.world().contains_resource::<Assets<FloraMaterial>>()
-    {
-        app.init_asset::<FloraMaterial>();
+    if app.world().contains_resource::<AssetServer>() {
+        if !app.world().contains_resource::<Assets<FloraMaterial>>() {
+            app.init_asset::<FloraMaterial>();
+        }
+        if !app.world().contains_resource::<Assets<ShaderBuffer>>() {
+            app.init_asset::<ShaderBuffer>();
+        }
     }
+}
+
+/// Make the shared wind buffer, once there are buffer assets to put it in.
+fn add_wind_buffer(app: &mut App) {
+    if app.world().contains_resource::<FloraWindBuffer>() || !app.world().contains_resource::<Assets<ShaderBuffer>>() {
+        return;
+    }
+    let wind = *app.world().resource::<FloraWind>();
+    let buffer = FloraWindBuffer::new(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), &wind);
+    app.insert_resource(buffer);
 }
 
 /// Embed the shaders.
@@ -470,12 +457,11 @@ mod tests {
 
     #[test]
     fn veins_are_drawn_only_on_leaf_shaped_cards() {
-        let wind = FloraWind::default();
         let veins = |style| {
             let mut params = TreePreset::Oak.params();
             params.foliage.style = style;
             params.foliage.shading.veins = 0.7;
-            FloraUniform::new(&params, &wind).leaf.z
+            FloraUniform::new(&params).leaf.z
         };
         assert_eq!(veins(LeafStyle::CrossedPlanes), 0.7);
         assert_eq!(veins(LeafStyle::SingleQuad), 0.7);
@@ -484,9 +470,16 @@ mod tests {
     }
 
     #[test]
-    fn the_wind_is_rewritten_without_touching_the_tree() {
-        let params = TreePreset::Willow.params();
-        let calm = FloraUniform::new(&params, &FloraWind { strength: 0.0, ..Default::default() });
+    fn the_uniform_holds_the_tree_and_nothing_of_the_weather() {
+        let uniform = FloraUniform::new(&TreePreset::Willow.params());
+        assert_eq!(uniform.response, Vec4::new(1.4, 1.6, 0.7, 0.8));
+        let wood = uniform.wood();
+        assert_eq!((wood.tree, wood.response), (uniform.tree, uniform.response));
+        assert_eq!((wood.leaf, wood.tint), (Vec4::ZERO, Vec4::ZERO));
+    }
+
+    #[test]
+    fn the_wind_is_packed_normalised_and_clamped() {
         let gale = FloraWind {
             direction: Vec2::new(0.0, -5.0),
             strength: 7.0,
@@ -499,31 +492,23 @@ mod tests {
             turbulence: -1.0,
             gust: None,
         };
-        assert!(calm.wind_differs(&gale));
-
-        let mut uniform = calm;
-        uniform.set_wind(&gale);
-        assert!(!uniform.wind_differs(&gale));
+        let [wind, motion, rate, front, front_shape] = wind_vectors(&gale);
         // Direction normalised, a negative speed stopped, strength not capped, the rest clamped.
-        assert_eq!(uniform.wind, Vec4::new(0.0, -1.0, 7.0, 0.0));
-        assert_eq!(uniform.motion, Vec4::new(3.0, 2.0, 1.0, 0.0));
-        assert_eq!(uniform.rate, Vec4::new(0.5, 4.0, 0.0, 0.0));
-        // What belongs to the tree stays.
-        assert_eq!(
-            (uniform.tree, uniform.response, uniform.leaf, uniform.tint),
-            (calm.tree, calm.response, calm.leaf, calm.tint)
-        );
-        assert_eq!(uniform.response, Vec4::new(1.4, 1.6, 0.7, 0.8));
-        assert_eq!(uniform, FloraUniform::new(&params, &gale));
+        assert_eq!(wind, Vec4::new(0.0, -1.0, 7.0, 0.0));
+        assert_eq!(motion, Vec4::new(3.0, 2.0, 1.0, 0.0));
+        assert_eq!(rate, Vec4::new(0.5, 4.0, 0.0, 0.0));
+        assert_eq!((front, front_shape), (Vec4::ZERO, Vec4::ZERO));
+        assert_ne!(wind_vectors(&FloraWind { strength: 0.0, ..gale }), wind_vectors(&gale));
     }
 
     #[test]
     fn gust_front_is_packed_normalised_and_off_when_absent() {
-        let params = TreeParams::default();
-        let pack = |gust: Option<GustFront>| FloraUniform::new(&params, &FloraWind { gust, ..Default::default() });
+        let pack = |gust: Option<GustFront>| {
+            let [.., front, front_shape] = wind_vectors(&FloraWind { gust, ..Default::default() });
+            (front, front_shape)
+        };
 
-        let none = pack(None);
-        assert_eq!((none.front, none.front_shape), (Vec4::ZERO, Vec4::ZERO));
+        assert_eq!(pack(None), (Vec4::ZERO, Vec4::ZERO));
 
         let front = GustFront {
             origin: Vec2::new(4.0, -2.0),
@@ -533,13 +518,10 @@ mod tests {
             strength: 2.0,
             start: 7.5,
         };
-        let on = pack(Some(front));
-        assert_eq!(on.front, Vec4::new(4.0, -2.0, 0.0, 1.0));
-        assert_eq!(on.front_shape, Vec4::new(12.0, 0.01, 2.0, 7.5));
+        assert_eq!(pack(Some(front)), (Vec4::new(4.0, -2.0, 0.0, 1.0), Vec4::new(12.0, 0.01, 2.0, 7.5)));
 
         // No direction, no front.
-        let still = pack(Some(GustFront { direction: Vec2::ZERO, ..front }));
-        assert_eq!((still.front, still.front_shape), (Vec4::ZERO, Vec4::ZERO));
+        assert_eq!(pack(Some(GustFront { direction: Vec2::ZERO, ..front })), (Vec4::ZERO, Vec4::ZERO));
     }
 
     #[test]
@@ -551,5 +533,7 @@ mod tests {
         let front = wind.gust.expect("the gust was launched");
         assert_eq!(front.start, time.elapsed_secs_wrapped());
         assert_eq!(front.start, 5.0);
+        let [.., front_shape] = wind_vectors(&wind);
+        assert_eq!(front_shape.w, 5.0);
     }
 }
