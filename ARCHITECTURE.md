@@ -87,4 +87,5 @@ generated shading. Root segments are added after it, so junctions keep their sha
 
 - `ProceduralTree(TreeParams)` + `TreeAge(f32)` (default `INFINITY` = mature) + optional `Growing { rate }`.
 - `FloraPlugin` rebuilds meshes on `Changed<ProceduralTree>` / `Changed<TreeAge>`, keeping a wood child and a leaf child. An empty trunk (age 0) leaves the wood child hidden with no mesh; the mesh is created once the trunk has geometry.
+- The full-grown skeleton is cached per tree (`TreeRender.full`) and regenerated only when `ProceduralTree` changes; a `TreeAge`-only frame (growth) runs `pipeline::build_aged` on the cache. Materials are written only when a colour actually changed.
 - `TreeGenerated` message reports current height/radius after each rebuild.

@@ -5,6 +5,27 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.3.5] - 2026-10-10
+
+Performance only; no API changes, and the meshes are bit-identical (all 319 gallery images
+byte-identical to 0.3.4). The target is a growing tree, which rebuilds both meshes every frame.
+
+### Changed
+
+- A growing tree no longer regenerates its full-grown skeleton every frame. The skeleton is kept
+  and regenerated only when `ProceduralTree` changes; a frame that only advances `TreeAge` ages
+  the kept one.
+- A growing tree leaves its two materials alone unless a colour changed. Writing them every frame
+  made Bevy re-prepare both on the render thread each frame.
+- Wood pieces (tubes, collars, primary bases, root domes) are emitted straight into the tree's
+  mesh instead of into a temporary mesh that was then copied in.
+- Measured on a headless `App` with 20 trees growing at once (release build, Apple M-series,
+  median of three runs, milliseconds per frame): oak 5.4 to 2.0, willow 8.8 to 3.4, oak with 2
+  smoothing passes 14.5 to 10.9. Building the unsmoothed wood of one growing oak went from
+  0.135 ms to 0.044 ms, the willow's from 0.228 ms to 0.078 ms.
+- `docs/growth.gif`, the README clip, was re-recorded for this release; it comes out
+  byte-identical.
+
 ## [0.3.4] - 2026-10-10
 
 Performance only; no API changes, and the meshes are bit-identical (all 319 gallery images
@@ -223,6 +244,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.3.5]: https://github.com/Ladvien/bevy_flora/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/Ladvien/bevy_flora/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/Ladvien/bevy_flora/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/Ladvien/bevy_flora/compare/v0.3.1...v0.3.2
