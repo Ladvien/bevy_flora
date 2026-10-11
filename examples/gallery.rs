@@ -716,6 +716,7 @@ fn check_capture(captured: On<ScreenshotCaptured>, mut gallery: ResMut<Gallery>)
 }
 
 /// Scenario state machine: Warmup → (Apply → Settle → Capture)* → exit.
+#[allow(clippy::too_many_arguments)]
 fn drive(
     mut commands: Commands,
     mut gallery: ResMut<Gallery>,
