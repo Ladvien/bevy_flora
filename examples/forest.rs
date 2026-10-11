@@ -1,7 +1,7 @@
 //! Forest-scale benchmark: how many trees can be drawn at what frame rate.
 //!
 //! ```text
-//! cargo run --release --example forest -- [--trees <n>] [--mode <naive|pool|gpu|gpu-live>]
+//! cargo run --release --example forest -- [--trees <n>] [--mode <naive|pool|gpu|gpu-live|cpu-live>]
 //!     [--preset <name>] [--frames <n>] [--warmup-secs <s>] [--spacing <m>]
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
@@ -28,7 +28,8 @@
 //! 60 frames a second, so a `--screenshot` of two versions of the code is the same image
 //! wherever they draw the same (compare the PNGs byte for byte).
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
-//! fully grown or still growing through the whole run.
+//! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
+//! CPU, rebuilding every mesh each frame.
 //!
 //! After the trees exist and `--warmup-secs` have passed (shaders compile in the
 //! background), the example times `--frames` frames and prints one line:
@@ -83,6 +84,8 @@ enum Mode {
     Gpu,
     /// `ProceduralTree` with `GpuGrowth`, still growing every frame of the run.
     GpuLive,
+    /// `ProceduralTree` without `GpuGrowth`, still growing every frame of the run.
+    CpuLive,
 }
 
 impl Mode {
@@ -92,6 +95,7 @@ impl Mode {
             Mode::Pool => "pool",
             Mode::Gpu => "gpu",
             Mode::GpuLive => "gpu-live",
+            Mode::CpuLive => "cpu-live",
         }
     }
 }
@@ -145,7 +149,7 @@ impl Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: forest [--trees <n>] [--mode <naive|pool|gpu|gpu-live>] [--preset <name>] [--frames <n>] \
+        "usage: forest [--trees <n>] [--mode <naive|pool|gpu|gpu-live|cpu-live>] [--preset <name>] [--frames <n>] \
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
@@ -189,6 +193,7 @@ fn parse_args() -> Args {
                     Some("pool") => Mode::Pool,
                     Some("gpu") => Mode::Gpu,
                     Some("gpu-live") => Mode::GpuLive,
+                    Some("cpu-live") => Mode::CpuLive,
                     _ => usage(),
                 }
             }
@@ -463,6 +468,10 @@ fn setup(
                     // Young enough to keep growing for as long as the run takes.
                     Mode::GpuLive => {
                         tree.insert((GpuGrowth, TreeAge(3.0), Growing { rate: 0.01 }));
+                    }
+                    // The same, rebuilding the meshes on the CPU every frame.
+                    Mode::CpuLive => {
+                        tree.insert((TreeAge(3.0), Growing { rate: 0.01 }));
                     }
                     _ => {}
                 }

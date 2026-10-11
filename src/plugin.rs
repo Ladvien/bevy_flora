@@ -25,6 +25,7 @@ use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::reflect::Reflect;
 use bevy::render::render_resource::Face;
 use bevy::camera::visibility::Visibility;
+use bevy::tasks::{ComputeTaskPool, TaskPool};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 
@@ -249,27 +250,37 @@ pub fn rebuild_trees(
     >,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
+
+    // Phase 1: collect what to build.
+    let mut jobs = Vec::new();
     for (entity, tree, age, mut render, gpu) in &mut trees {
         // A tree that grows on the GPU is `rebuild_gpu_trees`'s.
         if gpu && support.0 {
             continue;
         }
-        let params = &tree.0;
-        let existing = match render.as_deref() {
-            Some(render) => match render.paint.cloned_cpu() {
-                Some(paint) => Some(paint),
-                // Left over from before the tree stopped growing on the GPU;
-                // `sync_growth_mode` removes it.
-                None => continue,
-            },
-            None => None,
-        };
+        // Left over from before the tree stopped growing on the GPU;
+        // `sync_growth_mode` removes it.
+        if render.as_deref().is_some_and(|render| render.paint.cloned_cpu().is_none()) {
+            continue;
+        }
         // Only the age changed: age the skeleton generated last time.
-        let full = match render.as_mut() {
-            Some(render) if !tree.is_changed() => std::mem::take(&mut render.full),
-            _ => generate_skeleton(params),
+        let kept = match render.as_mut() {
+            Some(render) if !tree.is_changed() => Some(std::mem::take(&mut render.full)),
+            _ => None,
         };
-        let out = build_aged(&full, params, age.0);
+        jobs.push(RebuildJob { entity, params: tree.0.clone(), age: age.0, kept });
+    }
+
+    // Phase 2 builds on all cores; phase 3 applies each result here, in order.
+    let build = |job: RebuildJob| {
+        let full = job.kept.unwrap_or_else(|| generate_skeleton(&job.params));
+        let out = build_aged(&full, &job.params, job.age);
+        (job.entity, full, out)
+    };
+    build_in_batches(jobs, build, |(entity, full, out)| {
+        let Ok((_, tree, _, render, _)) = trees.get_mut(entity) else { return };
+        let params = &tree.0;
+        let existing = render.as_deref().and_then(|render| render.paint.cloned_cpu());
         let trunk_progress = out.skeleton.nodes[0].progress;
         match (render, existing) {
             (None, _) => {
@@ -372,6 +383,37 @@ pub fn rebuild_trees(
             height: params.trunk.height * trunk_progress,
             radius: params.trunk.radius,
         });
+    });
+}
+
+/// Run `build` on every job, on the compute task pool, and hand each result to
+/// `apply` in the order of `jobs`. Jobs are built a few per thread at a time, so
+/// a large input never holds all its results at once; fewer than two jobs run
+/// inline, without a scope. `build` must be a pure function of its job: the
+/// results do not depend on the number of threads.
+pub(crate) fn build_in_batches<J: Send, R: Send + 'static>(
+    jobs: Vec<J>,
+    build: impl Fn(J) -> R + Sync,
+    mut apply: impl FnMut(R),
+) {
+    if jobs.len() < 2 {
+        jobs.into_iter().for_each(|job| apply(build(job)));
+        return;
+    }
+    let pool = ComputeTaskPool::get_or_init(TaskPool::default);
+    let batch = pool.thread_num() * 4;
+    let build = &build;
+    let mut jobs = jobs.into_iter();
+    loop {
+        let results = pool.scope(|scope| {
+            for job in jobs.by_ref().take(batch) {
+                scope.spawn(async move { build(job) });
+            }
+        });
+        if results.is_empty() {
+            return;
+        }
+        results.into_iter().for_each(&mut apply);
     }
 }
 
@@ -420,6 +462,15 @@ fn sync_trunk(
             *handle = Some(new);
         }
     }
+}
+
+/// One tree for `rebuild_trees` to build: its parameters, its age and, when only the age
+/// changed, the full-grown skeleton kept from last time.
+struct RebuildJob {
+    entity: Entity,
+    params: TreeParams,
+    age: f32,
+    kept: Option<Skeleton>,
 }
 
 /// Overwrite the asset behind `handle` in place; if it was removed externally,
@@ -578,6 +629,52 @@ mod tests {
         app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 6.0;
         app.update();
         assert_eq!(uploaded_trunk(&app, tree), expected_trunk(&params, 6.0));
+    }
+
+    #[test]
+    fn many_trees_built_in_one_frame_match_the_serial_build() {
+        // More trees than one batch, so the scope runs more than once; a changed tree and an
+        // aged tree go through the regenerate and kept-skeleton paths.
+        let mut app = app();
+        let mut specs = Vec::new();
+        for i in 0..40 {
+            let mut params = TreePreset::ALL[i % TreePreset::ALL.len()].params();
+            params.seed = i as i32;
+            let age = 1.0 + i as f32 * 0.4;
+            let tree = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(age))).id();
+            specs.push((tree, params, age));
+        }
+        app.update();
+        let check = |app: &App, specs: &[(Entity, TreeParams, f32)]| {
+            for (tree, params, age) in specs {
+                let want = crate::pipeline::build_tree(params, *age);
+                let world = app.world();
+                let render = world.get::<TreeRender>(*tree).unwrap();
+                let meshes = world.resource::<Assets<Mesh>>();
+                let positions = |handle: &Handle<Mesh>| -> Vec<[f32; 3]> {
+                    meshes.get(handle).unwrap().attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec()
+                };
+                let wanted = |data: &MeshData| -> Vec<[f32; 3]> { data.positions.iter().map(|p| p.to_array()).collect() };
+                match &render.trunk_mesh {
+                    Some(handle) => assert_eq!(positions(handle), wanted(&want.trunk)),
+                    None => assert!(want.trunk.is_empty()),
+                }
+                match &render.foliage {
+                    Some((_, handle)) => assert_eq!(positions(handle), wanted(&want.foliage)),
+                    None => assert!(want.foliage.is_empty()),
+                }
+                assert_eq!(render.mature_at, want.mature_at);
+            }
+        };
+        check(&app, &specs);
+
+        specs[3].1.trunk.height *= 1.3;
+        specs[3].1.seed = 99;
+        app.world_mut().get_mut::<ProceduralTree>(specs[3].0).unwrap().0 = specs[3].1.clone();
+        specs[5].2 += 2.0;
+        app.world_mut().get_mut::<TreeAge>(specs[5].0).unwrap().0 = specs[5].2;
+        app.update();
+        check(&app, &specs);
     }
 
     #[test]
