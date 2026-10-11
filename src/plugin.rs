@@ -7,7 +7,10 @@
 //! `TreeAge` every frame until the tree is mature.
 //!
 //! Performance: a growing tree rebuilds both meshes every frame; `Growing` is
-//! meant for a few hero trees, not a forest.
+//! meant for a few hero trees, not a forest. The full-grown skeleton is kept
+//! between frames and regenerated only when [`ProceduralTree`] changes, and
+//! the materials are only touched when a colour changes, so the renderer does
+//! not re-prepare them every frame.
 
 use bevy::asset::{Assets, Handle};
 use bevy::ecs::prelude::*;
@@ -21,7 +24,8 @@ use bevy::transform::components::Transform;
 
 use crate::mesh::MeshData;
 use crate::params::TreeParams;
-use crate::pipeline::build_tree;
+use crate::pipeline::build_aged;
+use crate::skeleton::{Skeleton, generate_skeleton};
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
 #[derive(Component, Clone, Debug, PartialEq, Reflect)]
@@ -75,6 +79,9 @@ pub struct TreeRender {
     trunk_material: Handle<StandardMaterial>,
     foliage: Option<(Entity, Handle<Mesh>)>,
     foliage_material: Handle<StandardMaterial>,
+    /// Full-grown skeleton generated from the current parameters; aging it
+    /// is all a growing tree needs per frame.
+    full: Skeleton,
     /// Age after which rebuilding changes nothing.
     pub mature_at: f32,
 }
@@ -151,15 +158,19 @@ pub fn rebuild_trees(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
-        (Entity, &ProceduralTree, &TreeAge, Option<&mut TreeRender>),
+        (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>),
         Or<(Changed<ProceduralTree>, Changed<TreeAge>)>,
     >,
 ) {
-    for (entity, tree, age, render) in &mut trees {
+    for (entity, tree, age, mut render) in &mut trees {
         let params = &tree.0;
-        let out = build_tree(params, age.0);
+        // Only the age changed: age the skeleton generated last time.
+        let full = match render.as_mut() {
+            Some(render) if !tree.is_changed() => std::mem::take(&mut render.full),
+            _ => generate_skeleton(params),
+        };
+        let out = build_aged(&full, params, age.0);
         let trunk_progress = out.skeleton.nodes[0].progress;
-
         match render {
             None => {
                 let trunk_material = materials.add(material(params.trunk_color));
@@ -192,10 +203,12 @@ pub fn rebuild_trees(
                     trunk_material,
                     foliage,
                     foliage_material,
+                    full,
                     mature_at: out.mature_at,
                 });
             }
             Some(mut render) => {
+                render.full = full;
                 render.mature_at = out.mature_at;
                 let trunk_entity = render.trunk;
                 sync_trunk(
@@ -205,12 +218,8 @@ pub fn rebuild_trees(
                     &mut render.trunk_mesh,
                     out.trunk,
                 );
-                if let Some(mut m) = materials.get_mut(&render.trunk_material) {
-                    m.base_color = params.trunk_color;
-                }
-                if let Some(mut m) = materials.get_mut(&render.foliage_material) {
-                    m.base_color = params.foliage.color;
-                }
+                set_color(&mut materials, &render.trunk_material, params.trunk_color);
+                set_color(&mut materials, &render.foliage_material, params.foliage.color);
 
                 match (&mut render.foliage, out.foliage.is_empty()) {
                     (Some((child, handle)), false) => {
@@ -243,6 +252,17 @@ pub fn rebuild_trees(
             height: params.trunk.height * trunk_progress,
             radius: params.trunk.radius,
         });
+    }
+}
+
+/// Set the material's base colour, marking it modified only when the colour
+/// differs: a modified material is re-extracted and re-prepared by the
+/// renderer, which a growing tree would otherwise trigger every frame.
+fn set_color(materials: &mut Assets<StandardMaterial>, handle: &Handle<StandardMaterial>, color: bevy::color::Color) {
+    if let Some(mut material) = materials.get_mut(handle)
+        && material.base_color != color
+    {
+        material.base_color = color;
     }
 }
 
@@ -390,5 +410,68 @@ mod tests {
         assert_eq!(age, mature_at);
         app.update();
         assert_eq!(app.world().get::<TreeAge>(tree).unwrap().0, mature_at);
+    }
+
+    /// Wood vertex positions the plugin uploaded for `tree`.
+    fn uploaded_trunk(app: &App, tree: Entity) -> Vec<[f32; 3]> {
+        let world = app.world();
+        let render = world.get::<TreeRender>(tree).unwrap();
+        let mesh = world.resource::<Assets<Mesh>>().get(render.trunk_mesh.as_ref().unwrap()).unwrap();
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec()
+    }
+
+    fn expected_trunk(params: &TreeParams, age: f32) -> Vec<[f32; 3]> {
+        crate::pipeline::build_tree(params, age).trunk.positions.iter().map(|p| p.to_array()).collect()
+    }
+
+    #[test]
+    fn growing_trees_reuse_their_skeleton_until_the_parameters_change() {
+        // The full skeleton is kept between age-only rebuilds; the meshes must
+        // still be exactly what `build_tree` makes, and a parameter change
+        // must regenerate it rather than age the old tree.
+        let mut app = app();
+        let mut params = TreePreset::Oak.params();
+        let tree = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(2.0))).id();
+        app.update();
+        app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 5.0;
+        app.update();
+        assert_eq!(uploaded_trunk(&app, tree), expected_trunk(&params, 5.0));
+
+        params.seed = 7;
+        params.trunk.height *= 1.2;
+        app.world_mut().get_mut::<ProceduralTree>(tree).unwrap().0 = params.clone();
+        app.update();
+        assert_eq!(uploaded_trunk(&app, tree), expected_trunk(&params, 5.0));
+        app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 6.0;
+        app.update();
+        assert_eq!(uploaded_trunk(&app, tree), expected_trunk(&params, 6.0));
+    }
+
+    #[test]
+    fn growing_leaves_materials_alone_until_a_colour_changes() {
+        // A modified material is re-extracted and re-prepared by the renderer;
+        // a growing tree used to mark both of its materials modified every frame.
+        let modified = |app: &App| {
+            app.world()
+                .resource::<Messages<bevy::asset::AssetEvent<StandardMaterial>>>()
+                .iter_current_update_messages()
+                .filter(|e| matches!(e, bevy::asset::AssetEvent::Modified { .. }))
+                .count()
+        };
+        let mut app = app();
+        let tree = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(2.0))).id();
+        app.update();
+        for age in [3.0, 4.0] {
+            app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = age;
+            app.update();
+            assert_eq!(modified(&app), 0, "age {age}");
+        }
+        let red = bevy::color::Color::srgb(1.0, 0.0, 0.0);
+        app.world_mut().get_mut::<ProceduralTree>(tree).unwrap().0.trunk_color = red;
+        app.update();
+        assert_eq!(modified(&app), 1);
+        let world = app.world();
+        let render = world.get::<TreeRender>(tree).unwrap();
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().get(&render.trunk_material).unwrap().base_color, red);
     }
 }

@@ -22,7 +22,13 @@ pub struct TreeMeshes {
 /// Build the tree described by `params` as it looks at `age`
 /// (`f32::INFINITY` for the mature tree).
 pub fn build_tree(params: &TreeParams, age: f32) -> TreeMeshes {
-    let full = generate_skeleton(params);
+    build_aged(&generate_skeleton(params), params, age)
+}
+
+/// [`build_tree`] from the full-grown skeleton `full` that
+/// [`generate_skeleton`] made from `params`, so a growing tree can reuse it
+/// from frame to frame instead of regenerating it at every age.
+pub(crate) fn build_aged(full: &Skeleton, params: &TreeParams, age: f32) -> TreeMeshes {
     let mature_at = full.mature_at(&params.growth);
     let mut skeleton = full.aged(age, &params.growth);
 
