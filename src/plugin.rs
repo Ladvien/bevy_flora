@@ -46,6 +46,7 @@ use crate::shading::{
     expire_shakes, flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
+use crate::tree_asset::sync_tree_assets;
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
 #[derive(Component, Clone, Debug, PartialEq, Reflect)]
@@ -189,6 +190,7 @@ impl bevy::app::Plugin for FloraPlugin {
                             wind.is_changed() || season.is_changed() || shakes.is_changed()
                         },
                     ),
+                    sync_tree_assets.run_if(resource_exists::<Assets<TreeParams>>),
                     grow_trees,
                     sync_growth_mode,
                     rebuild_trees.run_if(flora_decided),
@@ -213,6 +215,7 @@ impl bevy::app::Plugin for FloraPlugin {
         crate::gpu::build(app);
         crate::impostor::build(app);
         crate::pool::build(app);
+        crate::tree_asset::build(app);
     }
 
     fn finish(&self, app: &mut bevy::app::App) {
@@ -220,6 +223,7 @@ impl bevy::app::Plugin for FloraPlugin {
         crate::gpu::finish(app);
         crate::impostor::finish(app);
         crate::pool::finish(app);
+        crate::tree_asset::finish(app);
     }
 }
 

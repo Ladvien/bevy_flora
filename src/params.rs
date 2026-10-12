@@ -4,6 +4,7 @@
 //! generic "oak-ish" tree. Presets in [`crate::presets`] are plain
 //! `TreeParams` values.
 
+use bevy::asset::Asset;
 use bevy::color::Color;
 use bevy::math::Vec2;
 use bevy::reflect::Reflect;
@@ -74,7 +75,7 @@ pub enum LeafOrientation {
 
 /// Trunk shape.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct TrunkParams {
     /// Trunk height in metres.
     pub height: f32,
@@ -135,7 +136,7 @@ impl Default for TrunkParams {
 
 /// Branch placement, shape and recursion.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct BranchParams {
     /// Start of the branch zone as a fraction of trunk height.
     pub start: f32,
@@ -236,7 +237,7 @@ impl Default for BranchParams {
 
 /// Y-junction splitting of primary branches.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct SplitParams {
     /// Whether primary branches may split into Y-junctions.
     pub enabled: bool,
@@ -264,7 +265,7 @@ impl Default for SplitParams {
 
 /// Mesh construction options.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct MeshParams {
     /// Smoothing passes on the wood mesh (0 = off). Volume-preserving (Taubin)
     /// smoothing that softens creases but keeps the ground ring, branch ends,
@@ -347,7 +348,7 @@ impl LeafScan {
 
 /// Leaf placement and geometry.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct FoliageParams {
     /// Whether leaves are generated at all.
     pub enabled: bool,
@@ -437,7 +438,7 @@ impl Default for FoliageParams {
 /// Read by the shaders of [`FloraMaterial`](crate::FloraMaterial); trees drawn with a plain
 /// `StandardMaterial` ignore it.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct LeafShading {
     /// Strength of the light coming through a leaf lit from behind (0 = none).
     pub translucency: f32,
@@ -471,7 +472,7 @@ impl Default for LeafShading {
 /// Read by the shaders of [`FloraMaterial`](crate::FloraMaterial); trees drawn with a plain
 /// `StandardMaterial` do not move.
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct WindResponse {
     /// How far the whole tree bends (0 = rigid).
     pub sway: f32,
@@ -571,7 +572,7 @@ impl BarkScan {
 /// `fissured_above` the whole scan shows. The scan's average colour is divided out of the
 /// wood's base colour, so a textured tree has the same colour as an untextured one from afar.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct BarkParams {
     /// The scan to wear, or `None` for plain colour.
     pub scan: Option<BarkScan>,
@@ -606,8 +607,12 @@ pub enum RenderStyle {
 }
 
 /// Complete description of a tree.
-#[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+///
+/// It is also an [`Asset`]: a [`ProceduralTreeAsset`](crate::ProceduralTreeAsset) draws a tree
+/// from a handle, so trees that share one follow every change to it, and with the `ron` feature
+/// it loads from `.tree.ron` files (`TreeParams::to_ron` writes one).
+#[derive(Asset, Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct TreeParams {
     /// Random seed; the same params and seed always generate the same tree.
     pub seed: i32,

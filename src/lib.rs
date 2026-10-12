@@ -156,6 +156,13 @@
 //! }
 //! ```
 //!
+//! # Trees from assets and files
+//!
+//! [`TreeParams`] is an asset: a [`ProceduralTreeAsset`] draws a tree from a handle and follows
+//! every change to the asset, so trees that share one are edited together. With the `ron`
+//! feature the plugin loads `.tree.ron` files (`TreeParams::to_ron` writes one), and with Bevy's
+//! `file_watcher` a saved file rebuilds its trees while the game runs. See [`tree_asset`].
+//!
 //! # Gameplay shapes
 //!
 //! A [`TreeShape`] on a tree (opt-in: insert `TreeShape::default()`) is kept up to date by the
@@ -192,6 +199,7 @@ pub mod shading;
 pub mod skeleton;
 pub mod shape;
 mod textures;
+pub mod tree_asset;
 pub mod venation;
 
 pub use crown::CrownShape;
@@ -217,18 +225,21 @@ pub use shading::{
     SharedFlora, TreeShake, TreeShakes,
 };
 pub use shape::{TreeShape, WoodCapsule};
+pub use tree_asset::ProceduralTreeAsset;
+#[cfg(feature = "ron")]
+pub use tree_asset::{TreeFileError, TreeParamsLoader};
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 /// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
-/// growth components, the presets and parameters, the wind, the season, the shakes, the gameplay
-/// shape and the forest scatter.
+/// growth components, trees from assets, the presets and parameters, the wind, the season, the
+/// shakes, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront,
         LeafScan,
-        LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, ScatterPoint, TreeAge,
-        TreeGenerated, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, WindResponse,
-        WoodCapsule, build_pool,
+        LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint,
+        TreeAge, TreeGenerated, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape,
+        WindResponse, WoodCapsule, build_pool,
     };
 }
 
