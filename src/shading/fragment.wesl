@@ -1,6 +1,6 @@
 // Fragment stage of a tree drawn with `FloraMaterial` or `GrowthMaterial` (main pass, forward
-// only): Bevy's `pbr.wesl` with the leaf's surface before lighting and the light through the leaf
-// after it. Wood (no FLORA_LEAF) is StandardMaterial's.
+// only): Bevy's `pbr.wesl` with the leaf's surface and the season's snow before lighting and the
+// light through the leaf after it. Wood (no FLORA_LEAF) is StandardMaterial's, under the snow.
 import bevy_pbr::{
     render::{
         pbr_functions::alpha_discard,
@@ -26,6 +26,8 @@ import package::shading::common::{toon_lighting, toon_rim};
 
 @if(FLORA_LEAF)
 import package::shading::common::{leaf_surface, leaf_transmission};
+
+import package::shading::common::{snow_on, snow_shelter, facing_normal, LEAF_FROST};
 
 @fragment
 fn fragment(
@@ -54,6 +56,19 @@ fn fragment(
 @if(FLORA_LEAF)
     leaf_surface(&pbr_input, in.uv, in.uv_b);
 
+    // The season's snow (none in summer, which leaves the surface as it was): on the side of a leaf
+    // card the camera sees, if that side faces up, and a dusting on every leaf, as much as the leaf
+    // sees of the sky; on the wood, by its own normal. A leaf under snow lets no light through.
+@if(FLORA_LEAF)
+    let snowed = snow_on(
+        &pbr_input,
+        facing_normal(pbr_input.world_position.xyz, pbr_input.V),
+        snow_shelter(in.uv_b.y),
+        LEAF_FROST,
+    );
+@else
+    let snowed = snow_on(&pbr_input, pbr_input.world_normal, 1.0, 0.0);
+
     apply_decals(&pbr_input);
 
     var out: FragmentOutput;
@@ -63,7 +78,7 @@ fn fragment(
     out.color = apply_pbr_lighting(pbr_input);
 @if(FLORA_LEAF)
     out.color = vec4<f32>(
-        out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y),
+        out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y) * (1.0 - snowed),
         out.color.a
     );
 @if(FLORA_TOON)

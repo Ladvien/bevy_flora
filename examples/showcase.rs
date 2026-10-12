@@ -226,11 +226,12 @@ fn update_hud(
     let shape_text = shape.map_or("off".to_string(), |shape| {
         format!("{} capsules, {:.1} m tall", shape.capsules().count(), shape.height())
     });
-    let season_text = if tree.0.foliage.autumn.is_none() {
+    let leaves = if tree.0.foliage.autumn.is_none() {
         "evergreen".to_string()
     } else {
         format!("turned {:.0}%, fallen {:.0}%", season.autumn * 100.0, season.leaf_fall * 100.0)
     };
+    let season_text = format!("{leaves}, snow {:.0}%", season.snow * 100.0);
     hud.0 = format!(
         "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\ngrowth: {}\ncolliders: {shape_text}\n\
          season: {season_text}{}\n\n\

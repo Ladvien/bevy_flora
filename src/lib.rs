@@ -125,8 +125,9 @@
 //!
 //! The [`FloraSeason`] resource turns deciduous trees ([`FoliageParams::autumn`], set on the
 //! oak, willow, birch, bonsai, maple, poplar, baobab and Japanese maple presets) to their autumn
-//! colour and sheds their leaves, one leaf at a time; evergreens ignore it. It shares the wind's
-//! buffer, so a season that changes every frame costs no material change and nothing per tree.
+//! colour, sheds their leaves one leaf at a time (evergreens keep theirs) and lays snow on every
+//! tree, on what faces up. It shares the wind's buffer, so a season that changes every frame
+//! costs no material change and nothing per tree.
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;
