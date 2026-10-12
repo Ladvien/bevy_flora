@@ -5,6 +5,54 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.10.0] - 2026-10-12
+
+Gameplay. A tree can now carry a simple shape for colliders, picking and line of sight that
+follows it as it grows, a growing tree announces when it is done, and one `use` brings in what a
+game needs. Nothing is drawn differently. The API changes (`PoolVariant` gains fields,
+`grow_trees` takes a message writer), hence the minor bump.
+
+### Added
+
+- **`TreeShape`** (`shape` module) and **`WoodCapsule`**: a tree's gameplay shape in its local
+  space, made from its aged skeleton. Three capsules up the trunk that taper with it (one under
+  3 m; the lowest has at least the trunk's radius at 1 m, so a walking character meets what it
+  sees), one capsule along every stretch of wood whose mean radius reaches `limb_radius` (6 cm by
+  default; two along a branch gravity bends), a box around the leaves (`crown`) and the bounds of
+  it all. `TreeShape::from_skeleton` builds one from any `TreeMeshes::skeleton`;
+  `WoodCapsule::to_primitive` gives Bevy's `Capsule3d` and its `Isometry3d`, what physics
+  engines' capsule colliders take; `capsules()` iterates the trunk's and the limbs'.
+- As a component it is opt-in: insert `TreeShape::default()` (or `with_limb_radius`) next to a
+  `ProceduralTree` and the new system `update_tree_shapes` keeps it up to date on every rebuild,
+  every age step of a growing tree included, on the CPU and the `GpuGrowth` path alike, writing it
+  only when it changed (`Changed<TreeShape>` is the cue to rebuild colliders). On a `PooledTree`
+  it is filled once from its variant: `PoolVariant::shape` (default limb radius) and
+  `PoolVariant::skeleton` (the variant's aged skeleton, for shapes or gameplay of your own).
+- **`TreeMature`**, a message sent once when a `Growing` tree reaches its mature age.
+- **`bevy_flora::prelude`**: the plugin, the tree, pool and growth components, the presets and
+  parameters, the wind, the shapes and the messages.
+- `examples/showcase.rs` draws the shape over the tree (`C`) and the HUD counts its capsules;
+  `inspect --colliders` photographs it (`docs/shape.jpg` in the README).
+
+### Changed
+
+- API: `PoolVariant` gains `shape` and `skeleton`; `grow_trees` takes a
+  `MessageWriter<TreeMature>` (systems that call it by name are unaffected).
+
+### Measured
+
+- **Shapes.** A test builds every preset at ages 2, 5, 9 and mature and checks the crown box holds
+  every leaf vertex (it is within about half a metre of the leaves' own bounds on 14 presets, 1.8
+  m on the palm, whose fronds are long cards), the trunk stack rests on the ground, reaches the
+  trunk's top, tapers and has no gaps, and limbs respect their radius. Renders of the oak, maple,
+  willow, pine and baobab with the shape drawn over them, mature and at age 5, were looked at
+  (the trunk capsules sit inside the wood, a little inside the root flare, which they leave out).
+- **Cost.** Nothing changes for a tree without a `TreeShape`; the gallery renders as in 0.9.1.
+  With one, each rebuild or age step also ages the skeleton and builds the shape: 9.0, 7.7 and 5.8
+  microseconds for an oak, a maple and a willow (Apple M4 Pro, release, 400 ages each), of which
+  ageing is 3.1, 6.7 and 4.1. A growing `GpuGrowth` tree otherwise costs a few microseconds of CPU
+  a frame, so a shape doubles or triples that, which is why it is opt-in.
+
 ## [0.9.1] - 2026-10-12
 
 The birch looks like a birch. The scan 0.7.0 gave it (ambientCG `Bark004`) was scaly, pine-like
@@ -867,6 +915,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.10.0]: https://github.com/Ladvien/bevy_flora/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Ladvien/bevy_flora/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Ladvien/bevy_flora/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Ladvien/bevy_flora/compare/v0.7.0...v0.8.0

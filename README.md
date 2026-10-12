@@ -18,13 +18,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.9 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.10 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.9"
+bevy_flora = "0.10"
 ```
 
 | feature | default | what it does |
@@ -235,6 +235,46 @@ fn toon_oak() -> bevy_flora::TreeParams {
 }
 ```
 
+### Gameplay: colliders, growth events, the prelude
+
+A game wants a tree's shape in a handful of primitives, not twenty thousand triangles. Insert `TreeShape::default()` next to a `ProceduralTree` (or a `PooledTree`) and the plugin keeps it up to date: three capsules up the trunk that taper with it (the lowest has the trunk's radius at hip height, so a walking character meets what it sees), one capsule for every stretch of wood at least `limb_radius` thick (6 cm by default; `TreeShape::with_limb_radius`), and a box around the leaves, all in the tree's local space. A growing tree's shape grows with it on both the CPU and the `GpuGrowth` path, and it is written only when it changes, so `Changed<TreeShape>` is the cue to rebuild colliders. `WoodCapsule::to_primitive` gives Bevy's `Capsule3d` and where it sits, which is what most physics engines' capsule colliders take. Building the shape costs about as much as ageing the skeleton (6 to 9 microseconds a tree on an Apple M4 Pro), which is why it is opt-in. `TreeMature` is sent once when a `Growing` tree reaches maturity, and `use bevy_flora::prelude::*;` brings in the plugin, the components, the presets and parameters, the wind and the shapes.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::prelude::*;
+
+fn plant(mut commands: Commands) {
+    commands.spawn((
+        ProceduralTree(TreePreset::Oak.params()),
+        TreeAge(0.0),
+        Growing::default(),
+        TreeShape::default(), // kept up to date while the oak grows
+    ));
+}
+
+// Hand the capsules to your physics engine whenever the shape changes.
+fn colliders(trees: Query<(Entity, &TreeShape), Changed<TreeShape>>) {
+    for (tree, shape) in &trees {
+        for capsule in shape.capsules() {
+            let (capsule, place) = capsule.to_primitive(); // Capsule3d along the wood
+            info!("{tree}: a capsule of radius {:.2} m at {:?}", capsule.radius, place.translation);
+        }
+    }
+}
+
+fn on_mature(mut mature: MessageReader<TreeMature>, mut commands: Commands) {
+    for message in mature.read() {
+        commands.entity(message.entity).remove::<Growing>();
+    }
+}
+```
+
+`examples/showcase.rs` draws the shape over the tree (`C`), and `inspect --colliders` photographs it:
+
+![An oak with its gameplay shape drawn over it: three tapering capsules up the trunk, capsules along the thick limbs, and a box around the crown](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/shape.jpg)
+
+*`cargo run --release --example inspect -- --out target/shape --preset oak --mode tree --colliders --distance 13 --eye 2 --look 0.45 --yaw 30`*
+
 ### Without the plugin
 
 `build_tree` is a pure function from parameters and age to CPU meshes and the aged skeleton, so you can bake trees offline, feed your own renderer, or build colliders from the skeleton:
@@ -261,6 +301,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Bark.** Trunks and branches wear one of 14 bundled CC0 bark scans (colour and normal map; `TreeParams::bark`, `BarkScan`), laid out in metres on the mature tree so a growing tree's bark never slides, smooth on young wood and fissured as a branch thickens (`BarkParams`), and averaging the preset colour, so far trees, impostors and the plain-material fallback keep their colour. Compiled in by the default `textures` feature.
 - **Leaf scans and grown veins.** Seven presets cut their leaf cards to the real outline of a bundled CC0 leaf scan and wear its colour and normal map (`FoliageParams::scan`, `LeafScan`); every other leaf-shaped card has veins grown by space colonisation (`venation`), drawn by the leaf shader from one small shared image.
 - **Looks.** `TreeParams::style` draws a tree as `Natural`, `Painterly` (leaf normals point out of each clump's own centre: rounded masses) or `Toon` (banded light and an ink rim); impostors and pools follow.
+- **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
 - **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.3 ms a frame, leaf shading and wind included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 22 ms a frame), but each keeps its own meshes, so use a pool beyond that.
 
 ## Examples

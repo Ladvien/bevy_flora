@@ -6,7 +6,7 @@
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
-//!     [--style <natural|painterly|toon>]
+//!     [--style <natural|painterly|toon>] [--colliders]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -46,7 +46,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
     FloraPlugin, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreePool,
-    TreePreset, build_pool, build_tree,
+    TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -85,6 +85,8 @@ struct Args {
     empty: bool,
     style: RenderStyle,
     msaa: bool,
+    /// Give the tree a `TreeShape` and draw it over the picture.
+    colliders: bool,
 }
 
 fn usage() -> ! {
@@ -92,7 +94,8 @@ fn usage() -> ! {
         "usage: inspect --out <dir> [--preset <name>] [--mode pool|tree] [--age <a>] [--seed <n>] \
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
-         [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>]"
+         [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
+         [--colliders]"
     );
     std::process::exit(2);
 }
@@ -124,6 +127,7 @@ fn parse_args() -> Args {
         empty: false,
         style: RenderStyle::Natural,
         msaa: true,
+        colliders: false,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -199,6 +203,7 @@ fn parse_args() -> Args {
                 }
             }
             "--no-msaa" => args.msaa = false,
+            "--colliders" => args.colliders = true,
             _ => usage(),
         }
     }
@@ -258,8 +263,33 @@ fn main() {
         log: String::from("frame\tdistance\tfov\n"),
     })
     .add_systems(Startup, setup)
-    .add_systems(Update, drive);
+    .add_systems(Update, (drive, draw_colliders))
+    .add_systems(Startup, gizmos_on_top);
     app.run();
+}
+
+/// The collider lines are drawn over the tree, not hidden inside its wood, and thick enough to
+/// read in a downscaled picture.
+fn gizmos_on_top(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
+    config.depth_bias = -1.0;
+    config.line.width = 3.0;
+}
+
+/// With `--colliders`: the trees' gameplay shapes, capsules orange and the crown box cyan.
+fn draw_colliders(mut gizmos: Gizmos, shapes: Query<(&GlobalTransform, &TreeShape)>) {
+    for (transform, shape) in &shapes {
+        let (_, rotation, translation) = transform.to_scale_rotation_translation();
+        let tree = Isometry3d::new(translation, rotation);
+        for capsule in shape.capsules() {
+            let (primitive, local) = capsule.to_primitive();
+            gizmos.primitive_3d(&primitive, tree * local, Color::srgb(1.0, 0.45, 0.05));
+        }
+        if let Some((center, half)) = shape.crown {
+            let cuboid = Cuboid { half_size: half };
+            gizmos.primitive_3d(&cuboid, tree * Isometry3d::from_translation(center), Color::srgb(0.1, 0.9, 1.0));
+        }
+    }
 }
 
 fn setup(
@@ -338,10 +368,16 @@ fn setup(
             }
             let pool = build_pool(&params, 1, shoot.args.age, &lod, &mut meshes);
             let pool = pools.add(pool);
-            commands.spawn((PooledTree { pool, variant: 0 }, Transform::default()));
+            let tree = commands.spawn((PooledTree { pool, variant: 0 }, Transform::default())).id();
+            if shoot.args.colliders {
+                commands.entity(tree).insert(TreeShape::default());
+            }
         }
         Mode::Tree => {
-            commands.spawn((ProceduralTree(params), TreeAge(shoot.args.age), Transform::default()));
+            let tree = commands.spawn((ProceduralTree(params), TreeAge(shoot.args.age), Transform::default())).id();
+            if shoot.args.colliders {
+                commands.entity(tree).insert(TreeShape::default());
+            }
         }
     }
 }

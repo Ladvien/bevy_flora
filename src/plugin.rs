@@ -36,8 +36,9 @@ use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_tre
 use crate::gpu::{GpuGrowth, GpuGrowthSupport};
 use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bakes};
 use crate::params::TreeParams;
-use crate::pipeline::build_aged;
-use crate::pool::spawn_pooled_trees;
+use crate::pipeline::{aged_skeleton, build_aged};
+use crate::shape::TreeShape;
+use crate::pool::{fill_pooled_shapes, spawn_pooled_trees};
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraWind, FloraWindBuffer, SharedFlora, TextureLibrary, detect_flora_support,
     flora_decided, sync_wind,
@@ -85,6 +86,14 @@ pub struct TreeGenerated {
     pub height: f32,
     /// Trunk radius parameter.
     pub radius: f32,
+}
+
+/// Sent once when a [`Growing`] tree reaches its mature age (the age after which it no longer
+/// changes): the moment to swap a sapling's gameplay for a tree's, or to remove [`Growing`].
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeMature {
+    /// The tree entity.
+    pub entity: Entity,
 }
 
 /// Render state owned by the plugin for one tree entity.
@@ -163,6 +172,7 @@ pub struct FloraPlugin;
 impl bevy::app::Plugin for FloraPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_message::<TreeGenerated>()
+            .add_message::<TreeMature>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
@@ -176,6 +186,7 @@ impl bevy::app::Plugin for FloraPlugin {
                     sync_growth_mode,
                     rebuild_trees.run_if(flora_decided),
                     rebuild_gpu_trees,
+                    update_tree_shapes,
                 )
                     .chain(),
             )
@@ -186,6 +197,7 @@ impl bevy::app::Plugin for FloraPlugin {
                         .chain()
                         .run_if(resource_exists::<ImpostorSupport>),
                     spawn_pooled_trees.run_if(flora_decided),
+                    fill_pooled_shapes,
                 )
                     .chain(),
             );
@@ -224,13 +236,45 @@ pub(crate) fn leaf_material(base_color: bevy::color::Color) -> StandardMaterial 
     }
 }
 
-/// Advance the age of every [`Growing`] tree that already has render state.
-pub fn grow_trees(time: Res<Time>, mut trees: Query<(&mut TreeAge, &Growing, &TreeRender)>) {
+/// Advance the age of every [`Growing`] tree that already has render state, and send
+/// [`TreeMature`] for each that reaches its mature age this frame.
+pub fn grow_trees(
+    time: Res<Time>,
+    mut trees: Query<(Entity, &mut TreeAge, &Growing, &TreeRender)>,
+    mut mature: MessageWriter<TreeMature>,
+) {
     let dt = time.delta_secs();
-    for (mut age, growing, render) in &mut trees {
+    for (entity, mut age, growing, render) in &mut trees {
         let next = (age.0 + growing.rate * dt).min(render.mature_at);
         if next != age.0 {
+            if next >= render.mature_at && age.0 < render.mature_at {
+                mature.write(TreeMature { entity });
+            }
             age.0 = next;
+        }
+    }
+}
+
+/// Bring every [`TreeShape`] up to date: those of trees rebuilt this frame, and those just
+/// added to a tree that already has its meshes. The aged skeleton is made from the kept full
+/// skeleton, so both growth paths give the same shape. Written only when it changed.
+pub fn update_tree_shapes(
+    mut generated: MessageReader<TreeGenerated>,
+    mut trees: Query<(&ProceduralTree, &TreeAge, &TreeRender, &mut TreeShape)>,
+) {
+    fn update(tree: &ProceduralTree, age: &TreeAge, render: &TreeRender, shape: &mut Mut<TreeShape>) {
+        let skeleton = aged_skeleton(&render.full, &tree.0, age.0);
+        let new = TreeShape::from_skeleton(&skeleton, &tree.0, shape.limb_radius);
+        shape.set_if_neq(new);
+    }
+    for message in generated.read() {
+        if let Ok((tree, age, render, mut shape)) = trees.get_mut(message.entity) {
+            update(tree, age, render, &mut shape);
+        }
+    }
+    for (tree, age, render, mut shape) in &mut trees {
+        if shape.is_added() {
+            update(tree, age, render, &mut shape);
         }
     }
 }
@@ -531,6 +575,40 @@ mod tests {
         app.init_asset::<StandardMaterial>();
         app.add_plugins(FloraPlugin);
         app
+    }
+
+    #[test]
+    fn a_tree_shape_follows_its_tree_and_maturity_is_announced_once() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let mut app = app();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
+        let params = TreePreset::Oak.params();
+        let tree = app
+            .world_mut()
+            .spawn((ProceduralTree(params.clone()), TreeAge(2.0), TreeShape::with_limb_radius(0.04)))
+            .id();
+        let without = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(2.0))).id();
+        app.update();
+        let young = app.world().get::<TreeShape>(tree).expect("kept").clone();
+        assert!(app.world().get::<TreeShape>(without).is_none(), "the shape is opt-in");
+        // It is the shape of the aged tree with the component's limb radius.
+        let expected = crate::pipeline::build_tree(&params, 2.0);
+        assert_eq!(young, TreeShape::from_skeleton(&expected.skeleton, &params, 0.04));
+
+        // Growing to maturity grows the shape and sends `TreeMature` once.
+        app.world_mut().entity_mut(tree).insert(Growing { rate: 40.0 });
+        let mut cursor = app.world().resource::<Messages<TreeMature>>().get_cursor_current();
+        let mut announced = 0;
+        for _ in 0..30 {
+            app.update();
+            announced += cursor.read(app.world().resource::<Messages<TreeMature>>()).count();
+        }
+        assert_eq!(announced, 1);
+        let mature = app.world().get::<TreeShape>(tree).unwrap();
+        assert!(mature.height() > young.height() && mature.limbs.len() > young.limbs.len());
+        let full = crate::pipeline::build_tree(&params, f32::INFINITY);
+        assert_eq!(*mature, TreeShape::from_skeleton(&full.skeleton, &params, 0.04));
     }
 
     #[test]

@@ -65,6 +65,8 @@ use crate::lod::{LodDistances, LodSettings, build_lods};
 use crate::mesh::MeshData;
 use crate::params::TreeParams;
 use crate::pipeline::TreeMeshes;
+use crate::shape::TreeShape;
+use crate::skeleton::Skeleton;
 use crate::plugin::{leaf_material, material};
 use crate::shading::{FloraMaterial, FloraMaterialSupport, FloraWindBuffer, TextureLibrary, flora_material};
 
@@ -128,6 +130,12 @@ pub struct PoolVariant {
     pub height: f32,
     /// How far the crown reaches from the trunk axis, in metres.
     pub radius: f32,
+    /// The variant's gameplay shape, with [`TreeShape::DEFAULT_LIMB_RADIUS`]: what a
+    /// [`TreeShape`] on a [`PooledTree`] of this variant gets (with its own limb radius).
+    pub shape: TreeShape,
+    /// The variant's skeleton, at the pool's age: where its branches are, for gameplay (perches,
+    /// fruit, nests) or a shape of your own.
+    pub skeleton: Skeleton,
 }
 
 /// A tree placed from a [`TreePool`]. Static: it has the age the pool was built
@@ -150,6 +158,30 @@ pub struct PooledTree {
     pub pool: Handle<TreePool>,
     /// Which variant of the pool this tree is.
     pub variant: u32,
+}
+
+/// Marks a pooled tree whose [`TreeShape`] was filled from its variant.
+#[derive(Component)]
+pub(crate) struct PooledShapeFilled;
+
+/// Fill the [`TreeShape`] of every pooled tree that has one, once its pool exists. A tree's
+/// shape is its variant's skeleton with the shape's own limb radius; it is not refilled if the
+/// tree's [`PooledTree`] changes later.
+pub(crate) fn fill_pooled_shapes(
+    mut commands: Commands,
+    pools: Res<Assets<TreePool>>,
+    mut trees: Query<(Entity, &PooledTree, &mut TreeShape), Without<PooledShapeFilled>>,
+) {
+    for (entity, pooled, mut shape) in &mut trees {
+        let Some(pool) = pools.get(&pooled.pool) else { continue };
+        let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
+        *shape = if shape.limb_radius == TreeShape::DEFAULT_LIMB_RADIUS {
+            variant.shape.clone()
+        } else {
+            TreeShape::from_skeleton(&variant.skeleton, &pool.params, shape.limb_radius)
+        };
+        commands.entity(entity).insert(PooledShapeFilled);
+    }
 }
 
 /// Marks a [`PooledTree`] that has its children.
@@ -193,6 +225,7 @@ pub fn build_pool(
                 leaves(middle.foliage),
                 leaves(coarse.foliage),
             ];
+            let shape = TreeShape::from_skeleton(&fine.skeleton, params, TreeShape::DEFAULT_LIMB_RADIUS);
             PoolVariant {
                 lods: wood,
                 leaves,
@@ -200,6 +233,8 @@ pub fn build_pool(
                 impostor: None,
                 height,
                 radius,
+                shape,
+                skeleton: fine.skeleton,
             }
         })
         .collect();
@@ -608,6 +643,25 @@ mod tests {
         let (a, b) = (spawn(&mut app, 1), spawn(&mut app, 4));
         app.update();
         assert_eq!(drawn_by(&app, &[a]).0, drawn_by(&app, &[b]).0);
+    }
+
+    #[test]
+    fn a_pooled_trees_shape_is_its_variants_with_its_own_limb_radius() {
+        let mut app = app();
+        let pool = make_pool(&mut app, 2);
+        let spawn = |app: &mut App, variant: u32, shape: TreeShape| {
+            app.world_mut().spawn((PooledTree { pool: pool.clone(), variant }, shape)).id()
+        };
+        let a = spawn(&mut app, 1, TreeShape::default());
+        let b = spawn(&mut app, 1, TreeShape::with_limb_radius(f32::INFINITY));
+        app.update();
+        let pools = app.world().resource::<Assets<TreePool>>();
+        let built = pools.get(&pool).expect("the pool exists");
+        let variant = &built.variants[1];
+        assert_eq!(app.world().get::<TreeShape>(a), Some(&variant.shape));
+        let trunk_only = app.world().get::<TreeShape>(b).unwrap();
+        assert!(trunk_only.limbs.is_empty() && trunk_only.trunk == variant.shape.trunk);
+        assert!(variant.shape.height() > 0.0 && (variant.shape.height() - variant.height).abs() < 1.0);
     }
 
     #[test]
