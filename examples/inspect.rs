@@ -7,7 +7,7 @@
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]
-//!     [--fell <deg>]
+//!     [--fell <deg>] [--slope <deg>] [--on-centre]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -34,6 +34,13 @@
 //! `--fell <deg>` cuts the tree half a metre up (`FellTree`) and lets it fall toward that bearing
 //! (degrees from +x toward +z), fast; the photographs are taken once it lies still.
 //!
+//! `--slope <deg>` tilts the ground so it falls toward +x and makes it the `FloraGround`: the
+//! tree stands at its footing (`FloraGround::footing`), so the downhill side of its trunk meets
+//! the ground, or with `--on-centre` at the height under its centre, as a plain placement would
+//! put it; a felled tree lands on the slope. `--eye` is then the camera's height above the
+//! ground under it, and `--look` measures from the ground under the trunk, so `--on-centre`
+//! and the footing are photographed from the same place.
+//!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
 
@@ -49,8 +56,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FellTree, Felled, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree,
-    RenderStyle, TreeAge, TreePool, TreePreset, TreeShape, build_pool, build_tree,
+    FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings, PooledTree,
+    ProceduralTree, RenderStyle, TreeAge, TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -95,6 +102,10 @@ struct Args {
     season: FloraSeason,
     /// Fell the tree toward this bearing (degrees from +x toward +z) and photograph it lying.
     fell: Option<f32>,
+    /// The ground falls toward +x at this angle, degrees.
+    slope: f32,
+    /// Stand the tree at the ground's height under its centre, not at its footing.
+    on_centre: bool,
 }
 
 fn usage() -> ! {
@@ -103,7 +114,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]] [--fell <deg>]"
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]] [--fell <deg>] [--slope <deg>] [--on-centre]"
     );
     std::process::exit(2);
 }
@@ -138,6 +149,8 @@ fn parse_args() -> Args {
         colliders: false,
         season: FloraSeason::SUMMER,
         fell: None,
+        slope: 0.0,
+        on_centre: false,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -224,6 +237,8 @@ fn parse_args() -> Args {
                 args.season = FloraSeason { autumn, leaf_fall, snow };
             }
             "--fell" => args.fell = Some(value(&mut it)),
+            "--slope" => args.slope = value(&mut it),
+            "--on-centre" => args.on_centre = true,
             _ => usage(),
         }
     }
@@ -245,6 +260,9 @@ struct Shoot {
     /// Whether the scene (the pool's impostor, the tree's children) is ready.
     ready: bool,
     log: String,
+    /// The ground (flat at 0 unless `--slope`) and the height the tree stands at.
+    ground: FloraGround,
+    base: f32,
 }
 
 #[derive(Component)]
@@ -283,6 +301,8 @@ fn main() {
         in_flight: false,
         ready: false,
         log: String::from("frame\tdistance\tfov\n"),
+        ground: FloraGround::default(),
+        base: 0.0,
     })
     .add_systems(Startup, setup)
     .add_systems(Update, (drive, draw_colliders))
@@ -337,7 +357,7 @@ fn setup(
         },
         Transform::from_translation(shoot.args.sun).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    commands.spawn((
+    let mut ground = commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(4000.0, 4000.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.35, 0.45, 0.30),
@@ -345,6 +365,9 @@ fn setup(
             ..default()
         })),
     ));
+    if shoot.args.slope != 0.0 {
+        ground.insert(Transform::from_rotation(Quat::from_rotation_z(-shoot.args.slope.to_radians())));
+    }
     let msaa = if shoot.args.msaa { Msaa::Sample4 } else { Msaa::Off };
     commands.spawn((
         Camera3d::default(),
@@ -365,6 +388,18 @@ fn setup(
         .chain(&mature.foliage.positions)
         .fold(0.0f32, |h, p| h.max(p.y))
         .max(0.5);
+    // `--slope`: the ground falls toward +x, and the tree stands at its footing, or with
+    // `--on-centre` at the ground's height under its centre, as a plain placement would.
+    if shoot.args.slope != 0.0 {
+        let tan = shoot.args.slope.to_radians().tan();
+        shoot.ground = FloraGround::new(move |at: Vec2| -at.x * tan);
+        commands.insert_resource(shoot.ground.clone());
+    }
+    shoot.base = if shoot.args.on_centre {
+        shoot.ground.height(Vec2::ZERO)
+    } else {
+        shoot.ground.footing(Vec2::ZERO, params.base_radius())
+    };
     if shoot.args.empty {
         return;
     }
@@ -390,14 +425,16 @@ fn setup(
             }
             let pool = build_pool(&params, 1, shoot.args.age, &lod, &mut meshes);
             let pool = pools.add(pool);
-            let tree = commands.spawn((PooledTree { pool, variant: 0 }, Transform::default())).id();
+            let tree = commands.spawn((PooledTree { pool, variant: 0 }, Transform::from_xyz(0.0, shoot.base, 0.0))).id();
             if shoot.args.colliders {
                 commands.entity(tree).insert(TreeShape::default());
             }
             fell(&mut commands, tree, shoot.args.fell);
         }
         Mode::Tree => {
-            let tree = commands.spawn((ProceduralTree(params), TreeAge(shoot.args.age), Transform::default())).id();
+            let tree = commands
+                .spawn((ProceduralTree(params), TreeAge(shoot.args.age), Transform::from_xyz(0.0, shoot.base, 0.0)))
+                .id();
             if shoot.args.colliders {
                 commands.entity(tree).insert(TreeShape::default());
             }
@@ -473,8 +510,9 @@ fn drive(
 
     let (distance, fov) = pose(&shoot.args, shoot.height, shoot.frame);
     let yaw = shoot.args.yaw.to_radians();
-    let eye = Vec3::new(yaw.sin() * distance, shoot.args.eye, yaw.cos() * distance);
-    let aim = Vec3::new(0.0, shoot.height * shoot.args.look, 0.0);
+    let (x, z) = (yaw.sin() * distance, yaw.cos() * distance);
+    let eye = Vec3::new(x, shoot.ground.height(Vec2::new(x, z)) + shoot.args.eye, z);
+    let aim = Vec3::new(0.0, shoot.ground.height(Vec2::ZERO) + shoot.height * shoot.args.look, 0.0);
     *camera.0 = Transform::from_translation(eye).looking_at(aim, Vec3::Y);
     *camera.1 = Projection::Perspective(PerspectiveProjection {
         fov: fov.to_radians(),

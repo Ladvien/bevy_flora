@@ -63,7 +63,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.5 ms a frame (1080p, Apple M4 Pro).
+//! 7.7 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -71,6 +71,11 @@
 //! otherwise irregular (Poisson-disc sampling), species in groves with bending borders, every
 //! tree its own yaw, size and variant, and a density per spot for clearings and roads. It is
 //! pure CPU and deterministic per seed; see [`scatter`].
+//!
+//! On terrain, [`FloraGround`] is the height of your ground: [`ScatterPoint::transform_on`] (or
+//! [`FloraGround::footing`] with [`TreeParams::base_radius`]) stands a tree where its trunk meets
+//! a slope all round instead of floating on its downhill side, and as a resource it is what
+//! felled trees are cut above and land on; see [`ground`].
 //!
 //! # Leaf shading and wind
 //!
@@ -200,6 +205,7 @@ pub mod crown;
 pub mod felling;
 pub mod foliage;
 mod gpu;
+pub mod ground;
 pub mod growth;
 pub mod impostor;
 pub mod lod;
@@ -222,6 +228,7 @@ pub use crown::CrownShape;
 pub use felling::{FellTree, Felled, TreeLanded, TreeStump};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
+pub use ground::FloraGround;
 pub use growth::GrowthParams;
 pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
 pub use lod::{LodDistances, LodSettings, build_lods};
@@ -249,13 +256,14 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 /// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
 /// growth components, trees from assets, the presets and parameters, the wind, the season, the
-/// shakes, felling, the gameplay shape and the forest scatter.
+/// shakes, felling, the ground, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, FellTree, Felled, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth,
-        Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset,
-        RenderStyle, Scatter, ScatterPoint, TreeAge, TreeGenerated, TreeLanded, TreeMature, TreeParams, TreePool,
-        TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,
+        BarkParams, BarkScan, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams,
+        GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree,
+        ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, TreeAge, TreeGenerated, TreeLanded, TreeMature,
+        TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule,
+        build_pool,
     };
 }
 

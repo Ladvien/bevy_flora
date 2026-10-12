@@ -17,7 +17,8 @@
 //! let trees = forest.points_where(|at| if at.length() < 20.0 { 0.0 } else { 1.0 });
 //! assert!(trees.iter().all(|tree| tree.position.length() >= 20.0));
 //! // Each becomes a `PooledTree { pool: pools[tree.species].clone(), variant: tree.variant }`
-//! // with `tree.transform(ground_height_at(tree.position))`.
+//! // with `tree.transform(0.0)` on flat ground, or `tree.transform_on(&ground, &params)` on a
+//! // `FloraGround` (terrain).
 //! ```
 
 use std::f32::consts::{SQRT_2, TAU};
@@ -26,6 +27,8 @@ use bevy::math::{Quat, Rect, Vec2, Vec3};
 use bevy::reflect::Reflect;
 use bevy::transform::components::Transform;
 
+use crate::ground::FloraGround;
+use crate::params::TreeParams;
 use crate::rng::SeededRng;
 
 /// Candidates Bridson's algorithm tries around a point before it retires it.
@@ -129,12 +132,20 @@ pub struct ScatterPoint {
 }
 
 impl ScatterPoint {
-    /// Where the tree goes, standing on the ground at height `ground`: its position, yaw and
-    /// scale.
+    /// Where the tree goes, standing at height `ground`: its position, yaw and scale. On
+    /// sloping ground use [`transform_on`](Self::transform_on), which keeps the trunk's downhill
+    /// side from floating.
     pub fn transform(&self, ground: f32) -> Transform {
         Transform::from_xyz(self.position.x, ground, self.position.y)
             .with_rotation(Quat::from_rotation_y(self.yaw))
             .with_scale(Vec3::splat(self.scale))
+    }
+
+    /// Where a tree of `params` goes on `ground`: [`transform`](Self::transform) at the
+    /// [footing](FloraGround::footing) of its trunk, the lowest ground under its base at this
+    /// point's scale, so the trunk meets the ground all round on a slope.
+    pub fn transform_on(&self, ground: &FloraGround, params: &TreeParams) -> Transform {
+        self.transform(ground.footing(self.position, params.base_radius() * self.scale))
     }
 }
 
