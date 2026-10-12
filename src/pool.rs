@@ -66,7 +66,7 @@ use crate::mesh::MeshData;
 use crate::params::TreeParams;
 use crate::pipeline::TreeMeshes;
 use crate::plugin::{leaf_material, material};
-use crate::shading::{BarkLibrary, FloraMaterial, FloraMaterialSupport, FloraWindBuffer, Surface, flora_material};
+use crate::shading::{FloraMaterial, FloraMaterialSupport, FloraWindBuffer, TextureLibrary, flora_material};
 
 /// Trees whose children are created in one frame, at most: a hundred thousand
 /// trees get their entities over a few dozen frames instead of one long one.
@@ -303,7 +303,7 @@ fn make_pool_materials(
     wind: Option<&FloraWindBuffer>,
     flora: &mut Assets<FloraMaterial>,
     standard: &mut Assets<StandardMaterial>,
-    bark: &mut BarkLibrary,
+    textures: &mut TextureLibrary,
 ) {
     let unpainted: Vec<_> = pools
         .iter()
@@ -314,10 +314,9 @@ fn make_pool_materials(
         let Some(mut pool) = pools.get_mut(id) else { continue };
         let (wood, leaves) = (pool.params.trunk_color, pool.params.foliage.color);
         pool.materials = Some(if let Some(wind) = wind {
-            let wood_bark = bark.of(&pool.params);
             PoolMaterials::Flora {
-                wood: flora.add(flora_material(&Surface::wood(&pool.params, wood_bark), wind)),
-                leaves: flora.add(flora_material(&Surface::leaves(&pool.params), wind)),
+                wood: flora.add(flora_material(&textures.wood(&pool.params), wind)),
+                leaves: flora.add(flora_material(&textures.leaves(&pool.params), wind)),
             }
         } else {
             PoolMaterials::Standard {
@@ -341,12 +340,12 @@ pub(crate) fn spawn_pooled_trees(
     wind: Option<Res<FloraWindBuffer>>,
     mut flora: ResMut<Assets<FloraMaterial>>,
     mut standard: ResMut<Assets<StandardMaterial>>,
-    mut bark: BarkLibrary,
+    mut textures: TextureLibrary,
     trees: Query<(Entity, &PooledTree), Without<PooledTreeSpawned>>,
     mut warned: Local<bool>,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
-    make_pool_materials(&mut pools, wind, &mut flora, &mut standard, &mut bark);
+    make_pool_materials(&mut pools, wind, &mut flora, &mut standard, &mut textures);
     // A tree whose pool is not ready yet is skipped, not counted: it must not
     // keep trees of a ready pool from getting their children.
     let mut spawned = 0;

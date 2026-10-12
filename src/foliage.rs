@@ -8,6 +8,8 @@ use crate::mesh::MeshData;
 use crate::params::{FoliageParams, FoliagePlacement, LeafOrientation, LeafStyle, TrunkParams};
 use crate::rng::SeededRng;
 use crate::skeleton::{Node, NodeKind, Skeleton, trunk_depth};
+#[cfg(feature = "textures")]
+use crate::textures::leaves::LEAF_SETS;
 
 /// Separate random stream for leaf tints, so adding them does not change any
 /// existing draw (leaf positions, sizes and rotations stay as in 0.1).
@@ -306,7 +308,22 @@ pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
 pub(crate) fn foliage_mesh_with(
     points: &[LeafPoint],
     foliage: &FoliageParams,
+    firsts: Option<&mut Vec<u32>>,
+) -> MeshData {
+    build_foliage(points, foliage, firsts, false)
+}
+
+/// [`foliage_mesh`] for the coarse levels of detail: cards cut to a scanned leaf use its coarse
+/// outline (at most 8 points), so a distant leaf costs about what a procedural one does.
+pub(crate) fn foliage_mesh_coarse(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
+    build_foliage(points, foliage, None, true)
+}
+
+fn build_foliage(
+    points: &[LeafPoint],
+    foliage: &FoliageParams,
     mut firsts: Option<&mut Vec<u32>>,
+    coarse: bool,
 ) -> MeshData {
     let mut mesh = MeshData::default();
     if points.is_empty() {
@@ -320,11 +337,12 @@ pub(crate) fn foliage_mesh_with(
         if let Some(firsts) = firsts.as_deref_mut() {
             firsts.push(first as u32);
         }
+        let card = scanned_card(foliage, point, coarse);
         match foliage.style {
-            LeafStyle::CrossedPlanes => crossed_planes(&mut mesh, point),
-            LeafStyle::SingleQuad => single_quad(&mut mesh, point),
+            LeafStyle::CrossedPlanes => crossed_planes(&mut mesh, point, card.as_ref()),
+            LeafStyle::SingleQuad => single_quad(&mut mesh, point, card.as_ref()),
             LeafStyle::ClusterSphere => cluster_sphere(&mut mesh, point),
-            LeafStyle::StarBurst => star_burst(&mut mesh, point),
+            LeafStyle::StarBurst => star_burst(&mut mesh, point, card.as_ref()),
             LeafStyle::NeedleCluster => needle_cluster(&mut mesh, point),
         }
         let end = mesh.positions.len();
@@ -394,19 +412,19 @@ pub(crate) fn foliage_mesh_with(
 /// Two leaf cards at 90° sharing `up`. Their bases meet at the leaf point and
 /// the tips reach one `size` along `up`, so the leaf grows out of its stem
 /// instead of being threaded on it.
-fn crossed_planes(mesh: &mut MeshData, point: &LeafPoint) {
+fn crossed_planes(mesh: &mut MeshData, point: &LeafPoint, card: Option<&Card>) {
     let half = point.size * 0.5;
     let (right, up, forward) = build_basis(point.direction, point.rotation);
     let center = point.position + up * half;
-    add_double_sided_leaf(mesh, center, right * half, up * half);
-    add_double_sided_leaf(mesh, center, forward * half, up * half);
+    add_double_sided_leaf(mesh, center, right * half, up * half, card);
+    add_double_sided_leaf(mesh, center, forward * half, up * half, card);
 }
 
 /// One leaf card, base at the leaf point and tip one `size` along `up`.
-fn single_quad(mesh: &mut MeshData, point: &LeafPoint) {
+fn single_quad(mesh: &mut MeshData, point: &LeafPoint, card: Option<&Card>) {
     let half = point.size * 0.5;
     let (right, up, _) = build_basis(point.direction, point.rotation);
-    add_double_sided_leaf(mesh, point.position + up * half, right * half, up * half);
+    add_double_sided_leaf(mesh, point.position + up * half, right * half, up * half, card);
 }
 
 /// Octahedron.
@@ -431,13 +449,13 @@ fn cluster_sphere(mesh: &mut MeshData, point: &LeafPoint) {
 }
 
 /// Three quads at 60°.
-fn star_burst(mesh: &mut MeshData, point: &LeafPoint) {
+fn star_burst(mesh: &mut MeshData, point: &LeafPoint, card: Option<&Card>) {
     let half = point.size * 0.5;
     let (_, up, _) = build_basis(point.direction, point.rotation);
     for i in 0..3 {
         let angle = (i as f32 / 3.0) * TAU + point.rotation;
         let right = Vec3::new(angle.cos(), 0.0, angle.sin());
-        add_double_sided_leaf(mesh, point.position, right * half, up * half);
+        add_double_sided_leaf(mesh, point.position, right * half, up * half, card);
     }
 }
 
@@ -509,7 +527,7 @@ fn add_double_sided_quad(mesh: &mut MeshData, center: Vec3, half_right: Vec3, ha
 /// Pointed oval, base to tip, about half the card's area. Units are
 /// half-extents: x along `half_right`, y along `half_up`, base at y = -1, tip
 /// at y = 1. Counter-clockwise seen from the front (`half_right × half_up`).
-const LEAF_OUTLINE: [Vec2; 8] = [
+pub(crate) const LEAF_OUTLINE: [Vec2; 8] = [
     Vec2::new(0.0, -1.0),
     Vec2::new(0.55, -0.6),
     Vec2::new(0.8, -0.05),
@@ -520,11 +538,74 @@ const LEAF_OUTLINE: [Vec2; 8] = [
     Vec2::new(-0.55, -0.6),
 ];
 
-/// Leaf-shaped card spanned by `half_right`/`half_up` around `center`: a fan
-/// over [`LEAF_OUTLINE`], emitted twice with opposite windings; each side's
-/// normal is derived from its winding.
-fn add_double_sided_leaf(mesh: &mut MeshData, center: Vec3, half_right: Vec3, half_up: Vec3) {
+/// A scanned leaf's card: the leaf's real outline (card units, as [`LEAF_OUTLINE`]), its atlas
+/// coordinates, its triangulation and its width over length.
+#[cfg_attr(not(feature = "textures"), allow(dead_code))]
+struct Card {
+    aspect: f32,
+    outline: &'static [[f32; 2]],
+    uv: &'static [[f32; 2]],
+    triangles: &'static [u16],
+}
+
+/// Whether the leaf cards of `foliage` are cut to a scanned leaf's outline and wear its
+/// textures: a [`FoliageParams::scan`] is chosen, the crate has the scans (the `textures`
+/// feature) and the style is a leaf-shaped one.
+pub(crate) fn uses_scan(foliage: &FoliageParams) -> bool {
+    cfg!(feature = "textures")
+        && foliage.scan.is_some()
+        && matches!(foliage.style, LeafStyle::CrossedPlanes | LeafStyle::SingleQuad | LeafStyle::StarBurst)
+}
+
+/// The scanned leaf `point`'s cards are cut to: one of the four leaves of the scan, picked by a
+/// hash of the leaf's own random draws (its tint and hue), which never change as the tree ages,
+/// so a leaf keeps its shape as the tree grows and `GpuGrowth` draws the same leaf.
+#[cfg(feature = "textures")]
+fn scanned_card(foliage: &FoliageParams, point: &LeafPoint, coarse: bool) -> Option<Card> {
+    if !uses_scan(foliage) {
+        return None;
+    }
+    let hash = point.tint.to_bits().wrapping_mul(0x9E37_79B1) ^ point.hue.to_bits().wrapping_mul(0x85EB_CA6B);
+    let cell = ((hash ^ (hash >> 15)) % 4) as usize;
+    let leaf = &LEAF_SETS[foliage.scan? as usize].leaves[cell];
+    Some(if coarse {
+        Card { aspect: leaf.aspect, outline: leaf.coarse_outline, uv: leaf.coarse_uv, triangles: leaf.coarse_triangles }
+    } else {
+        Card { aspect: leaf.aspect, outline: leaf.outline, uv: leaf.uv, triangles: leaf.triangles }
+    })
+}
+
+#[cfg(not(feature = "textures"))]
+fn scanned_card(_foliage: &FoliageParams, _point: &LeafPoint, _coarse: bool) -> Option<Card> {
+    None
+}
+
+/// Leaf-shaped card spanned by `half_right`/`half_up` around `center`: a fan over
+/// [`LEAF_OUTLINE`], or, with a scanned `card`, the scan's outline (as wide as its width over
+/// length says) and triangulation, with the scan's atlas coordinates as UVs. Emitted twice with
+/// opposite windings; each side's normal is derived from its winding.
+fn add_double_sided_leaf(mesh: &mut MeshData, center: Vec3, half_right: Vec3, half_up: Vec3, card: Option<&Card>) {
     let normal = half_right.cross(half_up).normalize_or_zero();
+    if let Some(card) = card {
+        let half_right = half_right * card.aspect;
+        for (side_normal, front) in [(normal, true), (-normal, false)] {
+            let base = mesh.positions.len() as u32;
+            for (p, uv) in card.outline.iter().zip(card.uv) {
+                mesh.positions.push(center + half_right * p[0] + half_up * p[1]);
+                mesh.uvs.push(Vec2::from_array(*uv));
+            }
+            mesh.normals.extend(std::iter::repeat_n(side_normal, card.outline.len()));
+            for triangle in card.triangles.as_chunks::<3>().0 {
+                let [a, b, c] = triangle.map(|i| base + u32::from(i));
+                if front {
+                    mesh.indices.extend_from_slice(&[a, b, c]);
+                } else {
+                    mesh.indices.extend_from_slice(&[a, c, b]);
+                }
+            }
+        }
+        return;
+    }
     let n = LEAF_OUTLINE.len() as u32;
     for (side_normal, front) in [(normal, true), (-normal, false)] {
         let base = mesh.positions.len() as u32;
@@ -607,6 +688,77 @@ mod tests {
         }
     }
 
+    /// Per leaf, the number of vertices its cards have, of a mesh built with `foliage`.
+    fn vertices_per_leaf(points: &[LeafPoint], foliage: &FoliageParams) -> Vec<usize> {
+        let mut firsts = Vec::new();
+        let mesh = foliage_mesh_with(points, foliage, Some(&mut firsts));
+        let ends = firsts.iter().skip(1).copied().chain([mesh.positions.len() as u32]);
+        firsts.iter().zip(ends).map(|(&a, b)| (b - a) as usize).collect()
+    }
+
+    #[cfg(feature = "textures")]
+    #[test]
+    fn scanned_cards_use_the_scans_outline_atlas_coordinates_and_all_four_leaves() {
+        let (mut params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        params.foliage.scan = Some(crate::params::LeafScan::Oak);
+        let foliage = FoliageParams { normal_bend: 0.0, ..params.foliage.clone() };
+        assert!(uses_scan(&foliage));
+        let mesh = foliage_mesh(&points, &foliage);
+        assert_indices_valid(&mesh, "scanned oak");
+        // The procedural card is a fan of 9 vertices a side; a scanned one has its outline's.
+        let counts = vertices_per_leaf(&points, &foliage);
+        let outline_counts: std::collections::BTreeSet<usize> = crate::textures::leaves::LEAF_SETS
+            [crate::params::LeafScan::Oak as usize]
+            .leaves
+            .iter()
+            .map(|leaf| 2 * 2 * leaf.outline.len())
+            .collect();
+        assert!(counts.iter().all(|c| outline_counts.contains(c)), "leaf vertex counts {counts:?} vs {outline_counts:?}");
+        let used: std::collections::BTreeSet<usize> = counts.iter().copied().collect();
+        assert_eq!(used, outline_counts, "every one of the set's leaves is used");
+        // Atlas coordinates, not card coordinates: inside the atlas, and not the card's own.
+        assert!(mesh.uvs.iter().all(|uv| (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y)));
+        let procedural = foliage_mesh(&points, &FoliageParams { scan: None, ..foliage.clone() });
+        assert_ne!(mesh.uvs[0], procedural.uvs[0]);
+    }
+
+    #[cfg(feature = "textures")]
+    #[test]
+    fn a_leaf_keeps_its_scanned_shape_as_the_tree_ages() {
+        let (mut params, mature) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        params.foliage.scan = Some(crate::params::LeafScan::Maple);
+        let foliage = FoliageParams { normal_bend: 0.0, ..params.foliage.clone() };
+        let skeleton = generate_skeleton(&params).aged(6.0, &params.growth);
+        let young = collect_leaf_points(&skeleton, &foliage, &params.growth, &params.trunk, params.seed);
+        assert!(!young.is_empty() && young.len() < mature.len());
+        let by_tint: std::collections::HashMap<(u32, u32), usize> = mature
+            .iter()
+            .zip(vertices_per_leaf(&mature, &foliage))
+            .map(|(p, n)| ((p.tint.to_bits(), p.hue.to_bits()), n))
+            .collect();
+        for (p, n) in young.iter().zip(vertices_per_leaf(&young, &foliage)) {
+            assert_eq!(by_tint.get(&(p.tint.to_bits(), p.hue.to_bits())), Some(&n), "a leaf changed shape with age");
+        }
+    }
+
+    #[test]
+    fn only_leaf_shaped_styles_use_a_scan() {
+        let mut foliage = FoliageParams { scan: Some(crate::params::LeafScan::Birch), ..FoliageParams::default() };
+        for (style, uses) in [
+            (LeafStyle::CrossedPlanes, true),
+            (LeafStyle::SingleQuad, true),
+            (LeafStyle::StarBurst, true),
+            (LeafStyle::ClusterSphere, false),
+            (LeafStyle::NeedleCluster, false),
+        ] {
+            foliage.style = style;
+            assert_eq!(uses_scan(&foliage), uses && cfg!(feature = "textures"), "{style:?}");
+        }
+        foliage.style = LeafStyle::CrossedPlanes;
+        foliage.scan = None;
+        assert!(!uses_scan(&foliage));
+    }
+
     #[test]
     fn leaf_vertex_counts() {
         let p = point();
@@ -669,6 +821,9 @@ mod tests {
 
     fn oak_leaf_points(placement: FoliagePlacement, age: f32) -> (TreeParams, Vec<LeafPoint>) {
         let mut params = TreePreset::Oak.params();
+        // The tests that read it count vertices per leaf: every procedural card has the same
+        // number, a scanned one has the count of its outline.
+        params.foliage.scan = None;
         params.foliage.placement = placement;
         let skeleton = generate_skeleton(&params).aged(age, &params.growth);
         let points = collect_leaf_points(&skeleton, &params.foliage, &params.growth, &params.trunk, params.seed);

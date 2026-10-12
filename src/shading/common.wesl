@@ -42,6 +42,12 @@ struct FloraUniform {
 @if(FLORA_DETAIL)
 @group(constants::MATERIAL_BIND_GROUP) @binding(105) var detail_sampler: sampler;
 
+// The image of leaf veins (`FLORA_VENATION`, `FloraKey::venation`) and its own sampler.
+@if(FLORA_VENATION)
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var venation: texture_2d<f32>;
+@if(FLORA_VENATION)
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var venation_sampler: sampler;
+
 // The weather, the same for every tree (`FloraWindBuffer`, `wind_vectors` in shading/mod.rs):
 //   0: wind direction x, direction z, strength, speed
 //   1: bend, flutter, gust strength, turbulence
@@ -204,27 +210,15 @@ fn leaf_gloss_toward_light(V: vec3<f32>) -> f32 {
 
 // The surface of a leaf card, in place: veins, hue of the underside, gloss, crown occlusion.
 // `uv`: the card's own (0..1 across and from base to tip), `shade`: x is 1 on the upper side,
-// y is how much of the sky the leaf sees.
+// y is how much of the sky the leaf sees. The veins are the image of `FLORA_VENATION` (grown by
+// space colonisation, `venation.rs`), as strong as `flora.leaf.z` says; a card cut to a scanned
+// leaf has its veins in the scan, and a material with no image draws none.
 fn leaf_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, shade: vec2<f32>) {
-    // Derivatives before any branch.
-    let x = abs(uv.x - 0.5) * 2.0;
-    let y = uv.y;
-    let aa = max(fwidth(x), fwidth(y));
-
     var color = (*p).material.base_color.rgb;
-    if flora.leaf.z > 0.0 {
-        // Midrib, thicker at the base, and side veins running up toward the edge; both fade
-        // out where they are finer than a pixel.
-        let mid_w = mix(0.08, 0.02, y);
-        let midrib = 1.0 - smoothstep(mid_w, mid_w + aa, x);
-        let t = fract(y * 5.0 - x * 1.6);
-        let along = min(t, 1.0 - t);
-        let side = (1.0 - smoothstep(0.04, 0.04 + 5.0 * aa, along))
-            * smoothstep(0.1, 0.2, x)
-            * (1.0 - smoothstep(0.8, 0.95, x));
-        let vein = max(midrib, 0.6 * side) * flora.leaf.z * saturate(1.0 - 20.0 * aa);
-        color = mix(color, color * vec3<f32>(1.35, 1.3, 0.75), vein) * mix(0.92, 1.05, y);
-    }
+@if(FLORA_VENATION)
+    let vein = textureSample(venation, venation_sampler, uv).r * flora.leaf.z;
+@if(FLORA_VENATION)
+    color = mix(color, color * vec3<f32>(1.35, 1.3, 0.75), vein) * mix(0.92, 1.05, uv.y);
 
     // The lower side is paler and less saturated.
     let upper = shade.x > 0.5;
@@ -271,18 +265,18 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(t * inv_max, b * inv_max, n);
 }
 
-// The bark of a piece of wood, in place: the scan's colour (a ratio to its average, which the
-// material's base colour has divided out, so the tree keeps its colour) and its normal map, both
-// faded in with the wood's radius: smooth below `flora.bark.x` metres, the whole scan above
-// `flora.bark.y`. `uv`: the mesh's, in tiles of the scan; `radius`: the vertex's, in metres.
+// A scan's colour and normal map on a surface, in place, faded in by `fade` (0..1). The colour
+// is a ratio to the scan's average, which the material's base colour has divided out so the
+// surface keeps its colour: with no fade the surface is `plain` (the scan's average for bark)
+// times the base colour, with all of it the scan's own colour. `uv`: the mesh's, in tiles of
+// the scan (bark) or the atlas coordinates of a scanned leaf.
 @if(FLORA_DETAIL)
-fn bark_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, radius: f32) {
+fn detail_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, fade: f32, plain: vec3<f32>) {
     // Derivatives and samples before any branch.
     let n = (*p).N;
     let frame = cotangent_frame(n, (*p).world_position.xyz, uv);
     let albedo = textureSample(detail_color, detail_sampler, uv).rgb;
     let tangent_normal = textureSample(detail_normal, detail_sampler, uv).xyz * 2.0 - 1.0;
-    let m = smoothstep(flora.bark.x, max(flora.bark.y, flora.bark.x + 1.0e-4), radius);
     // The map is OpenGL's (green points up the image) and v runs down it, so B is flipped.
     let bumped = frame * vec3<f32>(tangent_normal.x, -tangent_normal.y, tangent_normal.z);
     let bumped_length = length(bumped);
@@ -290,9 +284,22 @@ fn bark_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, radius: f32) {
     // The relief fades out toward the silhouette: there the bumped normal turns away from the
     // camera and the light, and the crevices turn to black speckle.
     let facing = smoothstep(0.05, 0.4, dot(n, (*p).V));
-    (*p).N = normalize(mix(n, perturbed, m * facing));
+    (*p).N = normalize(mix(n, perturbed, fade * facing));
     let base = (*p).material.base_color;
-    // The base colour is the preset's over the scan's average, so smooth wood is the average
-    // and the whole scan is its own colour.
-    (*p).material.base_color = vec4<f32>(base.rgb * mix(flora.bark_mean.rgb, albedo, m), base.a);
+    (*p).material.base_color = vec4<f32>(base.rgb * mix(plain, albedo, fade), base.a);
+}
+
+// The bark of a piece of wood, in place, faded in with the wood's radius: smooth below
+// `flora.bark.x` metres, the whole scan above `flora.bark.y`. `uv`: the mesh's, in tiles of the
+// scan; `radius`: the vertex's, in metres.
+@if(FLORA_DETAIL)
+fn bark_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, radius: f32) {
+    let fade = smoothstep(flora.bark.x, max(flora.bark.y, flora.bark.x + 1.0e-4), radius);
+    detail_surface(p, uv, fade, flora.bark_mean.rgb);
+}
+
+// A leaf card cut to a scanned leaf wears the scan whole.
+@if(FLORA_DETAIL)
+fn leaf_detail(p: ptr<function, PbrInput>, uv: vec2<f32>) {
+    detail_surface(p, uv, 1.0, vec3<f32>(1.0));
 }

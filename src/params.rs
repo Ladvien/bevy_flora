@@ -310,6 +310,41 @@ impl Default for MeshParams {
     }
 }
 
+/// A bundled, CC0-licensed leaf scan: four real leaves photographed flat, as one atlas of colour
+/// and normal maps with each leaf's outline, so [`FoliageParams::scan`] can cut leaf cards to
+/// the shape of a real leaf and paint them with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum LeafScan {
+    /// Lobed oak leaves (ambientCG `LeafSet016`).
+    Oak,
+    /// Long, narrow willow leaves (ambientCG `LeafSet013`).
+    Willow,
+    /// Birch leaves (ambientCG `LeafSet014`).
+    Birch,
+    /// Broad evergreen leaves for the bonsai (ambientCG `LeafSet022`).
+    Bonsai,
+    /// Maple leaves (ambientCG `LeafSet010`).
+    Maple,
+    /// Rounded poplar leaves (ambientCG `LeafSet024`).
+    Poplar,
+    /// Small yellow Japanese maple leaves (ambientCG `LeafSet021`).
+    JapaneseMaple,
+}
+
+impl LeafScan {
+    /// Every scan, in the order of the generated outline table.
+    pub const ALL: [LeafScan; 7] = [
+        LeafScan::Oak,
+        LeafScan::Willow,
+        LeafScan::Birch,
+        LeafScan::Bonsai,
+        LeafScan::Maple,
+        LeafScan::Poplar,
+        LeafScan::JapaneseMaple,
+    ];
+}
+
 /// Leaf placement and geometry.
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -355,6 +390,12 @@ pub struct FoliageParams {
     pub color: Color,
     /// How leaves take light: gloss, veins, the light that comes through them.
     pub shading: LeafShading,
+    /// A bundled leaf scan whose real outline the leaf cards are cut to and whose colour and
+    /// normal map they wear, or `None` for the procedural leaf with veins grown by space
+    /// colonisation ([`LeafShading::veins`]). Only the leaf-shaped styles ([`LeafStyle::CrossedPlanes`],
+    /// [`LeafStyle::SingleQuad`], [`LeafStyle::StarBurst`]) use it. Without the crate's `textures`
+    /// feature every scan is absent.
+    pub scan: Option<LeafScan>,
 }
 
 impl Default for FoliageParams {
@@ -379,6 +420,7 @@ impl Default for FoliageParams {
             occlusion: 0.6,
             color: Color::srgb(0.133, 0.545, 0.133),
             shading: LeafShading::default(),
+            scan: None,
         }
     }
 }

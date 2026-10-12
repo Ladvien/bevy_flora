@@ -12,7 +12,7 @@
 
 use bevy::math::Vec3;
 
-use crate::foliage::{LeafPoint, collect_leaf_points, foliage_mesh};
+use crate::foliage::{LeafPoint, collect_leaf_points, foliage_mesh_coarse};
 use crate::mesh::MeshData;
 use crate::mesh::branch::{Coarseness, skeleton_mesh_coarse};
 use crate::params::TreeParams;
@@ -219,7 +219,7 @@ impl Source<'_> {
         if kept.is_empty() {
             MeshData::default()
         } else {
-            foliage_mesh(&kept, &self.params.foliage)
+            foliage_mesh_coarse(&kept, &self.params.foliage)
         }
     }
 

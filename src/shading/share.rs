@@ -12,7 +12,7 @@ use bevy::ecs::prelude::*;
 use bevy::math::Vec4;
 
 use super::{FloraMaterial, FloraUniform, FloraWindBuffer, Surface, flora_material};
-use crate::params::BarkScan;
+use crate::params::{BarkScan, LeafScan};
 
 /// Most entries the cache holds before it drops those whose material no tree uses any more.
 const MIN_PRUNE_AT: usize = 64;
@@ -31,6 +31,8 @@ struct Look {
     bark_radii: [u32; 4],
     bark_mean: [u32; 4],
     bark: Option<BarkScan>,
+    leaf_scan: Option<LeafScan>,
+    venation: bool,
 }
 
 fn bits(v: Vec4) -> [u32; 4] {
@@ -50,6 +52,8 @@ impl Look {
             bark_radii: bits(bark),
             bark_mean: bits(bark_mean),
             bark: surface.bark.as_ref().map(|bark| bark.scan),
+            leaf_scan: surface.leaf_scan.as_ref().map(|scan| scan.scan),
+            venation: surface.venation.is_some(),
         }
     }
 }
