@@ -12,7 +12,7 @@ use crate::skeleton::{Node, NodeKind, Skeleton};
 
 /// Timing of growth, in age units ("years").
 #[derive(Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct GrowthParams {
     /// Age at which trunk-attached growth reaches the parametric target.
     pub maturity_age: f32,

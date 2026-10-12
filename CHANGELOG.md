@@ -5,6 +5,50 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.15.0] - 2026-10-12
+
+Trees from files. `TreeParams` is an asset, a tree can be drawn from a handle to one, and with
+the new `ron` feature trees load from `.tree.ron` files that rebuild them when saved. Nothing is
+drawn differently. The minor bump is for the feature and for what the `serde` feature now accepts
+(see Changed).
+
+### Added
+
+- **`ProceduralTreeAsset(Handle<TreeParams>)`** (in the prelude): the plugin inserts the
+  entity's `ProceduralTree` once the asset has loaded and replaces it whenever the asset changes,
+  so every tree that shares the handle follows an edit, from code, an inspector or a file. Until
+  the asset has loaded the entity draws nothing; a change that leaves the parameters equal
+  rebuilds nothing.
+- `TreeParams` derives `Asset`; the plugin registers `Assets<TreeParams>` and its reflection
+  (`register_asset_reflect`), whichever order the plugins were added in.
+- **The `ron` feature**: `TreeParamsLoader` loads `.tree.ron` files, `TreeParams::to_ron` writes
+  any tree as one (every field, pretty-printed) and `TreeParams::from_ron` reads one;
+  `TreeFileError` says what went wrong, with the line and column and, for a misspelt field, the
+  fields that exist. With Bevy's `file_watcher`, saving a file rebuilds its trees while the game
+  runs, and a file that fails to load keeps the last good tree.
+- Example `tree_file` (`--features ron`): a tree from `examples/assets/trees/maple.tree.ron`
+  that rebuilds on save, with the load state or error on screen; `--export <preset>` prints a
+  preset as a tree file, `--screenshot` saves the tree. The README shows the maple file before and
+  after three edits (`docs/tree_file.jpg`).
+
+### Changed
+
+- With the `serde` feature every parameter struct is `#[serde(default, deny_unknown_fields)]`: a
+  field left out takes its default (so files written before a field existed keep loading) where
+  it used to be an error, and a field the crate does not know is an error where it used to be
+  ignored.
+- The `bevy` dev-dependency enables `file_watcher`, for the example.
+
+### Measured
+
+- **Look.** The 382 gallery scenarios render as 0.14.0's (mean difference 0.000 of 255) and the
+  four README clips are frame-identical. Every preset survives `to_ron` and `from_ron` unchanged
+  (a test), and renders from its exported file as it does from code (oak, maple, spruce and
+  willow looked at).
+- **Hot reload** (a throwaway probe with the file watcher, Apple M4 Pro): a saved edit reached
+  `ProceduralTree` 0.44 s after the save; a save with a misspelt field left the tree as it was,
+  with the load state saying why; saving the fix rebuilt it 0.35 s later.
+
 ## [0.14.0] - 2026-10-12
 
 Trees that react. A new resource, `TreeShakes`, swings the trees near a hit, a passing character
@@ -1089,6 +1133,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.15.0]: https://github.com/Ladvien/bevy_flora/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Ladvien/bevy_flora/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Ladvien/bevy_flora/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Ladvien/bevy_flora/compare/v0.11.0...v0.12.0
