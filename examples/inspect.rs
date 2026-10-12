@@ -7,7 +7,7 @@
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]
-//!     [--fell <deg>] [--slope <deg>] [--on-centre]
+//!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -32,7 +32,8 @@
 //! of view stays `--fov` and the tree shrinks as it would in a game.
 //!
 //! `--fell <deg>` cuts the tree half a metre up (`FellTree`) and lets it fall toward that bearing
-//! (degrees from +x toward +z), fast; the photographs are taken once it lies still.
+//! (degrees from +x toward +z), fast; the photographs are taken once it lies still. `--buck <m>`
+//! then cuts its trunk into logs `m` metres long (`BuckTree`), photographed once they lie there.
 //!
 //! `--slope <deg>` tilts the ground so it falls toward +x and makes it the `FloraGround`: the
 //! tree stands at its footing (`FloraGround::footing`), so the downhill side of its trunk meets
@@ -56,8 +57,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings, PooledTree,
-    ProceduralTree, RenderStyle, TreeAge, TreePool, TreePreset, TreeShape, build_pool, build_tree,
+    BuckTree, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings,
+    PooledTree, ProceduralTree, RenderStyle, TreeAge, TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -102,6 +103,8 @@ struct Args {
     season: FloraSeason,
     /// Fell the tree toward this bearing (degrees from +x toward +z) and photograph it lying.
     fell: Option<f32>,
+    /// With `--fell`, cut the trunk into logs this long once it lies still.
+    buck: Option<f32>,
     /// The ground falls toward +x at this angle, degrees.
     slope: f32,
     /// Stand the tree at the ground's height under its centre, not at its footing.
@@ -114,7 +117,8 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]] [--fell <deg>] [--slope <deg>] [--on-centre]"
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
+         [--on-centre]"
     );
     std::process::exit(2);
 }
@@ -149,6 +153,7 @@ fn parse_args() -> Args {
         colliders: false,
         season: FloraSeason::SUMMER,
         fell: None,
+        buck: None,
         slope: 0.0,
         on_centre: false,
     };
@@ -237,6 +242,7 @@ fn parse_args() -> Args {
                 args.season = FloraSeason { autumn, leaf_fall, snow };
             }
             "--fell" => args.fell = Some(value(&mut it)),
+            "--buck" => args.buck = Some(value(&mut it)),
             "--slope" => args.slope = value(&mut it),
             "--on-centre" => args.on_centre = true,
             _ => usage(),
@@ -429,7 +435,7 @@ fn setup(
             if shoot.args.colliders {
                 commands.entity(tree).insert(TreeShape::default());
             }
-            fell(&mut commands, tree, shoot.args.fell);
+            fell(&mut commands, tree, &shoot.args);
         }
         Mode::Tree => {
             let tree = commands
@@ -438,17 +444,21 @@ fn setup(
             if shoot.args.colliders {
                 commands.entity(tree).insert(TreeShape::default());
             }
-            fell(&mut commands, tree, shoot.args.fell);
+            fell(&mut commands, tree, &shoot.args);
         }
     }
 }
 
 /// With `--fell`: cut the tree and let it fall toward the bearing (degrees from +x toward +z),
-/// fast; the photographs wait until it lies still.
-fn fell(commands: &mut Commands, tree: Entity, bearing: Option<f32>) {
-    if let Some(degrees) = bearing {
+/// fast, and with `--buck` cut its trunk into logs that long; the photographs wait until it
+/// lies still, or its logs do.
+fn fell(commands: &mut Commands, tree: Entity, args: &Args) {
+    if let Some(degrees) = args.fell {
         let (sin, cos) = degrees.to_radians().sin_cos();
         commands.entity(tree).insert(FellTree { direction: Vec2::new(cos, sin), speed: 4.0, ..default() });
+        if let Some(log_length) = args.buck {
+            commands.entity(tree).insert(BuckTree { log_length, ..default() });
+        }
     }
 }
 
@@ -476,6 +486,7 @@ fn drive(
     trees: Query<(), Unfinished>,
     felling: Query<&Felled>,
     cutting: Query<(), With<FellTree>>,
+    bucking: Query<(), With<BuckTree>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if !shoot.ready {
@@ -486,7 +497,8 @@ fn drive(
             shoot.wait -= 1;
             return;
         }
-        if !baked || !trees.is_empty() || !felling.iter().all(|felled| felled.at_rest) || !cutting.is_empty() {
+        let lying = felling.iter().all(|felled| felled.at_rest) && cutting.is_empty() && bucking.is_empty();
+        if !baked || !trees.is_empty() || !lying {
             return;
         }
         shoot.ready = true;

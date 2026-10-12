@@ -13,8 +13,8 @@
 //!
 //! Once it lands a felled tree stops swaying in the wind (its leaves still flutter). It is no
 //! longer rebuilt when its [`ProceduralTree`] or [`TreeAge`] changes, and keeps its entity:
-//! despawn it, or swap it for logs, once it has landed. Its [`TreeShape`](crate::TreeShape)
-//! turns with it but is not cut.
+//! despawn it, or insert [`BuckTree`] to cut its trunk into [`TreeLog`]s lying on the ground,
+//! once it has landed. Its [`TreeShape`](crate::TreeShape) turns with it but is not cut.
 
 use bevy::asset::{Assets, Handle};
 use bevy::camera::visibility::Visibility;
@@ -31,8 +31,11 @@ use crate::gpu::GpuGrowth;
 use crate::ground::FloraGround;
 use crate::mesh::MeshData;
 use crate::mesh::cut::cut;
-use crate::pipeline::build_aged;
+use crate::mesh::branch::bark_tile;
+use crate::mesh::trunk::{trunk_mesh_with, trunk_pieces};
+use crate::pipeline::{aged_skeleton, build_aged};
 use crate::plugin::{Growing, Paint, ProceduralTree, TreeAge, TreeRender, paint_child};
+use crate::shape::WoodCapsule;
 use crate::pool::{PooledShapeFilled, PooledTree, PooledTreeSpawned, TreePool};
 use crate::shading::{FloraMaterial, FloraWindBuffer, SharedFlora, TextureLibrary, TreeShake, TreeShakes};
 use crate::params::TreeParams;
@@ -94,6 +97,72 @@ pub struct TreeLanded {
     pub at: Vec3,
 }
 
+/// Buck a felled tree: cut its trunk into logs. Insert it on a tree that is being felled or has
+/// been ([`FellTree`], [`Felled`]); once it lies still the plugin replaces it with [`TreeLog`]
+/// entities lying on the ground in a row from the stump, the way it fell (on the
+/// [`FloraGround`] if there is one), sends [`TreeBucked`], and despawns the tree with its crown.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct BuckTree {
+    /// The length of each log, metres. The trunk above the last whole log stays with the crown.
+    pub log_length: f32,
+    /// The thinnest a log's top end may be, metres: the trunk above it is too thin for logs.
+    pub min_radius: f32,
+}
+
+impl Default for BuckTree {
+    fn default() -> Self {
+        Self { log_length: 2.0, min_radius: 0.08 }
+    }
+}
+
+/// A log bucked from a felled tree's trunk: bark around it and end grain at both ends, lying on
+/// the ground. Its children are the wood and the two end faces.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct TreeLog {
+    /// The stump of the tree it was cut from.
+    pub stump: Entity,
+    /// 0 for the butt log, counting up the trunk.
+    pub index: u32,
+    /// The log as a capsule in its own space, from the butt end to the top end, with the butt
+    /// end's radius: a collider for it (`WoodCapsule::to_primitive`).
+    #[reflect(ignore)]
+    pub capsule: WoodCapsule,
+}
+
+/// Sent the frame a felled tree is bucked: its entity has been despawned and its logs spawned.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct TreeBucked {
+    /// The tree, now despawned.
+    pub tree: Entity,
+    /// Its stump.
+    pub stump: Entity,
+    /// Its logs, butt first; empty when the trunk above the cut is shorter than a log.
+    pub logs: Vec<Entity>,
+}
+
+/// The material of every cut face, stumps, felled trees and logs: the end-grain picture, made
+/// the first time a tree is cut.
+#[derive(Resource, Default)]
+pub(crate) struct CutFace(Option<Handle<StandardMaterial>>);
+
+impl CutFace {
+    fn get(&mut self, textures: &mut TextureLibrary, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+        self.0
+            .get_or_insert_with(|| {
+                let grain = textures.end_grain();
+                materials.add(StandardMaterial {
+                    base_color: if grain.is_some() { bevy::color::Color::WHITE } else { END_GRAIN_COLOR },
+                    base_color_texture: grain,
+                    perceptual_roughness: 0.85,
+                    ..Default::default()
+                })
+            })
+            .clone()
+    }
+}
+
 /// How a felled tree moves, in its own (local) space.
 #[derive(Clone, Debug, Default)]
 struct Fall {
@@ -136,6 +205,9 @@ const CONTACT_RADIUS: f32 = 0.04;
 /// The furthest a felled tree turns, from upright: on flat ground its trunk meets the ground
 /// before 105°; down a steep slope it can lie along it, well past 90°.
 const REST_LIMIT: f32 = 150.0 * std::f32::consts::PI / 180.0;
+/// The gap between bucked logs laid in a row, and between the first and the stump, metres:
+/// enough that the row reads as separate logs, and their end grain shows between them.
+const LOG_GAP: f32 = 0.15;
 
 /// Start felling every tree with a [`FellTree`] that can be cut: turn a pooled tree into its
 /// `ProceduralTree`, move a tree off the GPU growth path, then cut, spawn the stump and set up
@@ -151,7 +223,7 @@ pub(crate) fn start_felling(
     wind: Option<Res<FloraWindBuffer>>,
     pools: Option<Res<Assets<TreePool>>>,
     ground: Option<Res<FloraGround>>,
-    mut cut_face: Local<Option<Handle<StandardMaterial>>>,
+    mut cut_face: ResMut<CutFace>,
     trees: Query<(
         Entity,
         &FellTree,
@@ -202,17 +274,7 @@ pub(crate) fn start_felling(
         let cut_y = (uphill + fell.cut_height / scale).clamp(0.05 / scale, tree.0.trunk.height * 0.5);
         let above = cut(&built.trunk, cut_y, true);
         let below = cut(&built.trunk, cut_y, false);
-        let face = cut_face
-            .get_or_insert_with(|| {
-                let grain = textures.end_grain();
-                materials.add(StandardMaterial {
-                    base_color: if grain.is_some() { bevy::color::Color::WHITE } else { END_GRAIN_COLOR },
-                    base_color_texture: grain,
-                    perceptual_roughness: 0.85,
-                    ..Default::default()
-                })
-            })
-            .clone();
+        let face = cut_face.get(&mut textures, &mut materials);
 
         // The stump: the wood below the cut and its face, where the tree stands.
         let stump = commands.spawn((*transform, Visibility::Inherited, TreeStump { tree: entity })).id();
@@ -339,6 +401,103 @@ pub(crate) fn drive_felling(
 fn pivot(fall: &Fall, angle: f32) -> Transform {
     let turn = Quat::from_axis_angle(fall.axis, angle);
     Transform::from_translation(fall.hinge - turn * fall.hinge).with_rotation(turn)
+}
+
+/// Buck every felled tree with a [`BuckTree`] once it lies still: cut its trunk into logs, lay
+/// them on the ground in a row from the stump, the way it fell, and clear the tree.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(crate) fn buck_trees(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut textures: TextureLibrary,
+    mut cut_face: ResMut<CutFace>,
+    ground: Option<Res<FloraGround>>,
+    mut bucked: MessageWriter<TreeBucked>,
+    trees: Query<(Entity, &BuckTree, &Felled, &Transform, &ProceduralTree, Option<&TreeAge>, &TreeRender)>,
+    flora_wood: Query<&MeshMaterial3d<FloraMaterial>>,
+    plain_wood: Query<&MeshMaterial3d<StandardMaterial>>,
+) {
+    for (entity, buck, felled, lying, tree, age, render) in &trees {
+        if !felled.at_rest {
+            continue;
+        }
+        let fall = &felled.fall;
+        let params = &tree.0;
+        // The trunk alone, as the tree had it: the same rings and bark.
+        let skeleton = aged_skeleton(&render.full, params, age.map_or(f32::INFINITY, |age| age.0));
+        let node = &skeleton.nodes[0];
+        let pieces = trunk_pieces(&params.trunk, node);
+        let trunk = trunk_mesh_with(&params.trunk, node, params.seed, pieces, bark_tile(params));
+        let top = trunk.positions.iter().map(|p| p.y).fold(0.0, f32::max);
+        let face = cut_face.get(&mut textures, &mut materials);
+        let scale = fall.base.scale.y.max(1.0e-4);
+        // The ground's height at a point, and how much higher than its radius a log's axis lies
+        // there (1 on flat ground, more on a slope).
+        let rest = |p: Vec2| match ground.as_deref() {
+            None => (fall.base.translation.y, 1.0),
+            Some(ground) => (ground.height(p), 1.0 / ground.normal(p).y.max(0.2)),
+        };
+        // In a row from the stump's front edge, the way the tree fell.
+        let up = lying.rotation * Vec3::Y;
+        let along = Vec2::new(up.x, up.z).normalize_or(Vec2::X);
+        let mut at = fall.base.transform_point(fall.hinge).xz() + along * LOG_GAP;
+        let length = buck.log_length.max(0.1);
+        let mut logs = Vec::new();
+        let mut y0 = fall.hinge.y;
+        while y0 + length / scale <= top {
+            let y1 = y0 + length / scale;
+            let lower = cut(&trunk, y0, true);
+            let piece = cut(&lower.kept, y1, false);
+            let (Some((c0, r0)), Some((c1, r1))) = (log_end(&lower.outlines), log_end(&piece.outlines)) else { break };
+            if r1 * scale < buck.min_radius {
+                break;
+            }
+            // Its ends on the ground, a log's length apart along it.
+            let (g0, lift0) = rest(at);
+            let rise = rest(at + along * length).0 - g0;
+            let far = at + along * (length * length / (length * length + rise * rise).sqrt());
+            let (g1, lift1) = rest(far);
+            let e0 = Vec3::new(at.x, g0 + r0 * scale * lift0, at.y);
+            let e1 = Vec3::new(far.x, g1 + r1 * scale * lift1, far.y);
+            let axis = (fall.base.rotation * (c1 - c0)).normalize_or(Vec3::Y);
+            let rotation = Quat::from_rotation_arc(axis, (e1 - e0).normalize_or(axis)) * fall.base.rotation;
+            let place = Transform { translation: e0 - rotation * (c0 * scale), rotation, scale: fall.base.scale };
+
+            let capsule = WoodCapsule { a: c0, b: c1, radius: r0 };
+            let log = commands
+                .spawn((place, Visibility::Inherited, TreeLog { stump: felled.stump, index: logs.len() as u32, capsule }))
+                .id();
+            let mut wood = commands.spawn((Mesh3d(meshes.add(piece.kept.into_bevy_mesh())), ChildOf(log)));
+            if let Ok(material) = flora_wood.get(render.trunk) {
+                wood.insert(material.clone());
+            } else if let Ok(material) = plain_wood.get(render.trunk) {
+                wood.insert(material.clone());
+            }
+            let mut ends = lower.faces;
+            ends.extend(&piece.faces);
+            if !ends.is_empty() {
+                commands.spawn((Mesh3d(meshes.add(ends.into_bevy_mesh())), MeshMaterial3d(face.clone()), ChildOf(log)));
+            }
+            logs.push(log);
+            // The next starts a gap past where this one ends (its taper turns it a little, so not
+            // quite at `far`).
+            at = place.transform_point(c1).xz() + along * LOG_GAP;
+            y0 = y1;
+        }
+        commands.entity(entity).despawn();
+        bucked.write(TreeBucked { tree: entity, stump: felled.stump, logs });
+    }
+}
+
+/// The centre of a log's end and the radius it rests on (the trunk's outline at a cut: its
+/// centre, and its mean radius to the middle of its sides, so a polygonal log neither floats
+/// on its corners nor sinks by more than them).
+fn log_end(outlines: &[Vec<Vec3>]) -> Option<(Vec3, f32)> {
+    let trunk = outlines.iter().max_by_key(|o| o.len()).filter(|o| o.len() >= 3)?;
+    let centre = trunk.iter().copied().sum::<Vec3>() / trunk.len() as f32;
+    let radius = trunk.iter().map(|p| p.distance(centre)).sum::<f32>() / trunk.len() as f32;
+    Some((centre, radius * (std::f32::consts::PI / trunk.len() as f32).cos()))
 }
 
 /// `direction` (world x, z) in the tree's own horizontal plane, unit length.
@@ -495,12 +654,16 @@ pub(crate) fn end_grain_image() -> Image {
     image
 }
 
-/// Messages and reflection; the systems are in the plugin's chain.
+/// Messages, reflection and the cut faces' material; the systems are in the plugin's chain.
 pub(crate) fn build(app: &mut bevy::app::App) {
     app.add_message::<TreeLanded>()
+        .add_message::<TreeBucked>()
+        .init_resource::<CutFace>()
         .register_type::<FellTree>()
         .register_type::<Felled>()
-        .register_type::<TreeStump>();
+        .register_type::<TreeStump>()
+        .register_type::<BuckTree>()
+        .register_type::<TreeLog>();
 }
 
 #[cfg(test)]
@@ -687,6 +850,79 @@ mod tests {
                     felled.at_rest,
                     felled.angle.to_degrees()
                 );
+            }
+        }
+    }
+
+    /// Fell a tree of `params` standing at `at` toward `direction` and buck it into logs of the
+    /// default length; the `TreeBucked` message.
+    fn fell_and_buck(app: &mut bevy::app::App, params: &TreeParams, at: Vec3, direction: Vec2) -> TreeBucked {
+        use bevy::ecs::message::Messages;
+        let tree = app.world_mut().spawn((ProceduralTree(params.clone()), Transform::from_translation(at))).id();
+        app.update();
+        let fell = FellTree { direction, speed: 4.0, ..Default::default() };
+        app.world_mut().entity_mut(tree).insert((fell, BuckTree::default()));
+        let mut cursor = app.world().resource::<Messages<TreeBucked>>().get_cursor_current();
+        for _ in 0..900 {
+            app.update();
+            let bucked: Vec<TreeBucked> = cursor.read(app.world().resource::<Messages<TreeBucked>>()).cloned().collect();
+            if let Some(bucked) = bucked.into_iter().next() {
+                assert_eq!(bucked.tree, tree);
+                assert!(app.world().get_entity(tree).is_err(), "the bucked tree is still there");
+                return bucked;
+            }
+        }
+        panic!("the tree was never bucked");
+    }
+
+    #[test]
+    fn a_bucked_tree_becomes_logs_lying_on_the_ground_in_a_row_from_its_stump() {
+        let params = TreePreset::Oak.params();
+        // Flat, and falling 0.3 m a metre toward +x (17°).
+        for slope in [None, Some(FloraGround::new(|at: Vec2| 1.0 - 0.3 * at.x))] {
+            let ground = slope.clone().unwrap_or_default();
+            for direction in [Vec2::X, Vec2::NEG_X] {
+                let mut app = app();
+                if let Some(slope) = &slope {
+                    app.insert_resource(slope.clone());
+                }
+                let at = Vec3::new(0.0, ground.footing(Vec2::ZERO, params.base_radius()), 0.0);
+                let bucked = fell_and_buck(&mut app, &params, at, direction);
+                let what = format!("slope {}, toward {direction}", slope.is_some());
+                assert!(bucked.logs.len() >= 2, "{what}: {} logs", bucked.logs.len());
+                let lift = |p: Vec3| 1.0 / ground.normal(p.xz()).y;
+                let mut reached = 0.0;
+                for (index, &entity) in bucked.logs.iter().enumerate() {
+                    let log = *app.world().get::<TreeLog>(entity).unwrap();
+                    assert_eq!((log.index, log.stump), (index as u32, bucked.stump));
+                    let place = app.world().get::<Transform>(entity).unwrap();
+                    let (a, b) = (place.transform_point(log.capsule.a), place.transform_point(log.capsule.b));
+                    assert!((a.distance(b) - 2.0).abs() < 0.04, "{what}: log {index} is {} m long", a.distance(b));
+                    // Its butt end lies on the ground; its thinner top end too, a little lower.
+                    let butt = a.y - ground.height(a.xz()) - log.capsule.radius * lift(a);
+                    let top = b.y - ground.height(b.xz());
+                    assert!(butt.abs() < 0.03, "{what}: log {index}'s butt end is {butt} m off the ground");
+                    assert!(top > 0.0 && top < log.capsule.radius * lift(b) + 0.03, "{what}: its top end {top} m up");
+                    // In a row from the stump, the way the tree fell, apart.
+                    let (from, to) = (a.xz().dot(direction), b.xz().dot(direction));
+                    assert!(from > reached + 0.02 && to > from, "{what}: log {index} from {from} to {to}, after {reached}");
+                    reached = to;
+                    let pieces = app.world().get::<Children>(entity).map_or(0, |c| c.len());
+                    assert_eq!(pieces, 2, "{what}: a log is its wood and its end faces");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_preset_can_be_bucked() {
+        for preset in TreePreset::ALL {
+            let mut app = app();
+            let bucked = fell_and_buck(&mut app, &preset.params(), Vec3::ZERO, Vec2::Y);
+            for &entity in &bucked.logs {
+                let log = app.world().get::<TreeLog>(entity).unwrap();
+                let length = log.capsule.a.distance(log.capsule.b);
+                assert!((length - 2.0).abs() < 0.04 && log.capsule.radius >= 0.08, "{preset:?}: {log:?}");
             }
         }
     }
