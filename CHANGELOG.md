@@ -5,6 +5,50 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.13.0] - 2026-10-12
+
+Snow. `FloraSeason` gains `snow`, laid on every tree in the fragment stage, and
+`FloraSeason::of_year` now snows on the bare trees in winter. Summer draws what 0.12.0 drew. A
+struct literal of `FloraSeason` needs the new field (`..FloraSeason::SUMMER` covers it), hence the
+minor bump.
+
+### Added
+
+- **`FloraSeason::snow`** (0..1) and **`FloraSeason::SNOW`** (bare deciduous trees, every tree
+  under snow). Snow settles first on what faces straight up and, the more of it there is, on
+  steeper faces: the tops of branches and limbs, and on leaf and needle cards the side the camera
+  sees when that side faces up, so a tier of needles is white from above and green from below,
+  scaled by how much of the sky the leaf sees, with a faint dusting on every exposed needle. A
+  leaf under snow lets no light through. Pools' levels of detail, `GpuGrowth` and the three looks
+  take it alike; impostors take it by their baked normals and sky share.
+- `FloraSeason::of_year` snows from 0.88 to 0.92 of the year (the last leaves are falling) and
+  melts from 0.98, before the leaves come back; the year test now also holds that snow lies only
+  on trees that have shed 90% of their leaves and never jumps.
+- Examples: `--season <autumn>,<leaf fall>[,<snow>]` in `inspect` and `forest` (whose ground
+  whitens with it), a `snow` stage in the gallery's season scenarios (382 in all), the seasons
+  clip spends a quarter of its frames in the snow and whitens its ground, `showcase` shows the
+  snow in its HUD, and the README has a winter forest (`docs/snow.jpg`).
+
+### Changed
+
+- API: `FloraSeason` has a third field, `snow`.
+
+### Measured
+
+- **Look.** The 377 scenarios of 0.12.0 render as they did (mean difference 0.000 of 255; a few
+  pixels of a few clip frames move by one level, the shader compiler's rounding); CPU against
+  `--gpu` as before. Snow was tuned by eye on spruce, pine, redwood, oak and maple at 12 m from
+  below and from 9 m up, on pooled and scattered forests from the air and at eye level, toon
+  included: the snow first followed the crown-bent leaf normal, which whitened the top of a
+  conifer and nothing below; then a dusting of a fifth of the snow on every needle, which turned
+  a spruce seen from below grey-olive (mixing in linear light triples a dark needle's albedo;
+  0.03 is a hint); and snow on needle cards deep in the crown, lit only by the little light that
+  gets in, rendered charcoal, so it now needs at least a third of the sky (all of it from 0.85).
+  A scout read the five snow scenarios against their winter ones and two forests.
+- **Cost** (medians of three interleaved runs, Apple M4 Pro, 1080p, offscreen): 100 000 pooled
+  oaks 7.31 ms in 0.12.0, 7.39 ms now, 7.38 ms under snow; 1 000 individual oaks 23.5 and 23.7
+  ms; 1 000 spruces 38.3 ms in summer and under snow.
+
 ## [0.12.0] - 2026-10-12
 
 Planting forests. A new `scatter` module says where a forest's trees stand, so a game no longer
@@ -1003,6 +1047,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.13.0]: https://github.com/Ladvien/bevy_flora/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Ladvien/bevy_flora/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Ladvien/bevy_flora/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Ladvien/bevy_flora/compare/v0.9.1...v0.10.0

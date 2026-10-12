@@ -14,21 +14,21 @@
 
 *`cargo run --release --example capture_growth -- --grove`: a grove of oak, two maples, two birches, a pine, a cypress, a willow and a Japanese maple, each at its own age, with a gust front crossing it in the last seconds. Every tree is a `ProceduralTree` with its own seed.*
 
-![The same grove fully grown through a year: the leaves turn red, orange and gold, fall until the broadleaf trees stand bare beside the green pine and cypress, and come back green](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/seasons.gif)
+![The same grove fully grown through a year: the leaves turn red, orange and gold and fall until the broadleaf trees stand bare beside the green pine and cypress, snow settles on every tree and melts, and the leaves come back green](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/seasons.gif)
 
-*`cargo run --release --example capture_growth -- --seasons`: the grove from late summer through autumn, leaf fall and winter into spring, driven by `FloraSeason::of_year`. The deciduous presets carry an autumn colour; the pine and the cypress are evergreen.*
+*`cargo run --release --example capture_growth -- --seasons`: the grove from late summer through autumn, leaf fall, snow and winter into spring, driven by `FloraSeason::of_year`. The deciduous presets carry an autumn colour; the pine and the cypress are evergreen.*
 
 ## Compatibility
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.12 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.13 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.12"
+bevy_flora = "0.13"
 ```
 
 | feature | default | what it does |
@@ -276,19 +276,20 @@ fn toon_oak() -> bevy_flora::TreeParams {
 
 ### Seasons
 
-`FloraSeason` is a global resource like `FloraWind`: how far the leaves have turned (`autumn`, 0 summer green to 1 every leaf in its autumn colour) and how many have fallen (`leaf_fall`, 0 to 1, bare). The deciduous presets (oak, willow, birch, bonsai, maple, poplar, baobab and Japanese maple) carry an autumn colour, `FoliageParams::autumn`; the evergreens have `None` and ignore the season. Leaves turn one at a time, each at its own moment, and fall in the order they turned. A fallen leaf is dropped in the vertex shader, so it leaves the shadows with it, and a leaf keeps its moment as the tree grows, on `GpuGrowth`, and on a pool's levels of detail; an impostor turns in patches of a few texels and thins its crown's coverage. The season shares the wind's buffer, so changing it every frame writes 96 bytes in place and touches no material: a year costs nothing per tree.
+`FloraSeason` is a global resource like `FloraWind`: how far the leaves have turned (`autumn`, 0 summer green to 1 every leaf in its autumn colour), how many have fallen (`leaf_fall`, 0 to 1, bare) and how much snow lies on the trees (`snow`, 0 to 1). The deciduous presets (oak, willow, birch, bonsai, maple, poplar, baobab and Japanese maple) carry an autumn colour, `FoliageParams::autumn`; the evergreens have `None` and keep their needles. Leaves turn one at a time, each at its own moment, and fall in the order they turned. A fallen leaf is dropped in the vertex shader, so it leaves the shadows with it, and a leaf keeps its moment as the tree grows, on `GpuGrowth`, and on a pool's levels of detail; an impostor turns in patches of a few texels and thins its crown's coverage. Snow settles on every tree, first on what faces straight up and, as more falls, on steeper faces: the tops of branches, and on leaf and needle cards the side the camera sees when that side faces up (a tier of needles is white from above and green from below), as much as the leaf sees of the sky, with a light dusting on every exposed needle so a snowy conifer reads as snowy from below too. Impostors take it by their baked normals. The season shares the wind's buffer, so changing it every frame writes 96 bytes in place and touches no material: a year costs nothing per tree.
 
 ```rust,no_run
 use bevy::prelude::*;
 use bevy_flora::prelude::*;
 
 // A year every two minutes: green until 0.55 of the way through, turning to 0.75, falling from
-// 0.7 to 0.9, bare through the winter and in leaf again by 0.05.
+// 0.7 to 0.9, snowing from 0.88 to 0.92, melting from 0.98 and in leaf again by 0.05.
 fn seasons(time: Res<Time>, mut season: ResMut<FloraSeason>) {
     *season = FloraSeason::of_year(time.elapsed_secs() / 120.0);
 }
 
-// Or set it outright: `FloraSeason::AUTUMN` is every leaf turned, `WINTER` bare trees.
+// Or set it outright: `FloraSeason::AUTUMN` is every leaf turned, `WINTER` bare trees and `SNOW`
+// bare trees and every tree under snow.
 fn first_frost(mut season: ResMut<FloraSeason>) {
     *season = FloraSeason::AUTUMN;
 }
@@ -300,6 +301,12 @@ fn golden_oak() -> TreeParams {
     params
 }
 ```
+
+A scattered winter forest under `FloraSeason::SNOW`: the spruces and pines keep their needles with snow on the tiers that face up, the oaks and birches stand bare with snow along their branches (the white ground is the example's, not the crate's):
+
+![A winter forest: dark spruces and pines with snow on the upper sides of their branch tiers, bare oaks and pale birches, on white ground](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/snow.jpg)
+
+*`cargo run --release --example forest -- --trees 3000 --spacing 7 --scatter spruce:3,pine:2,birch:2,oak:1 --grove 50 --clearing 25 --season 1,1,1 --eye 25,9,-75 --at 0,6,-20 --fov 50 --wind 0 --deterministic --screenshot snow.png`*
 
 ### Gameplay: colliders, growth events, the prelude
 
@@ -367,7 +374,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Bark.** Trunks and branches wear one of 14 bundled CC0 bark scans (colour and normal map; `TreeParams::bark`, `BarkScan`), laid out in metres on the mature tree so a growing tree's bark never slides, smooth on young wood and fissured as a branch thickens (`BarkParams`), and averaging the preset colour, so far trees, impostors and the plain-material fallback keep their colour. Compiled in by the default `textures` feature.
 - **Leaf scans and grown veins.** Seven presets cut their leaf cards to the real outline of a bundled CC0 leaf scan and wear its colour and normal map (`FoliageParams::scan`, `LeafScan`); every other leaf-shaped card has veins grown by space colonisation (`venation`), drawn by the leaf shader from one small shared image.
 - **Looks.** `TreeParams::style` draws a tree as `Natural`, `Painterly` (leaf normals point out of each clump's own centre: rounded masses) or `Toon` (banded light and an ink rim); impostors and pools follow.
-- **Seasons.** `FloraSeason` turns deciduous trees to their autumn colour (`FoliageParams::autumn`) and sheds their leaves one by one, shadows, pools, impostors and `GpuGrowth` included, at no cost per tree; `FloraSeason::of_year` drives a whole year from one number.
+- **Seasons.** `FloraSeason` turns deciduous trees to their autumn colour (`FoliageParams::autumn`), sheds their leaves one by one and lays snow on every tree, shadows, pools, impostors and `GpuGrowth` included, at no cost per tree; `FloraSeason::of_year` drives a whole year from one number.
 - **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
 - **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.4 ms a frame, leaf shading, wind and seasons included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 24 ms a frame), but each keeps its own meshes, so use a pool beyond that.
 - **Planting forests.** `Scatter` says where the trees stand: trunks at least a spacing apart and otherwise irregular (Poisson disc), species in groves with bending borders, each tree its own yaw, size and variant, and a density per spot for roads and clearings; deterministic per seed.
@@ -377,11 +384,11 @@ assert!(tree.skeleton.nodes.len() > 1);
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU, `C` draws the gameplay shape, `Y` runs the year (`FloraSeason::of_year`, 40 s a year). |
-| `gallery` | Renders 377 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, four deciduous presets and the pine turning, turned, half bare and bare) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
+| `gallery` | Renders 382 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, four deciduous presets and the pine turning, turned, half bare, bare and under snow) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
-| `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>`, which `forest` takes too). The clock is fixed, so runs repeat. |
+| `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>[,<snow>]`, which `forest` takes too). The clock is fixed, so runs repeat. |
 | `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, or with `--seasons` the same grove fully grown through a year (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
-| `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--season <autumn>,<leaf fall>` sets the season; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
+| `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--season <autumn>,<leaf fall>[,<snow>]` sets the season; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
 
 ```sh
 cargo run --release --example showcase
