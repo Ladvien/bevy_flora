@@ -30,7 +30,7 @@ cargo run --release --example tree_file --features ron,file_watcher [-- --export
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems
 - `src/shape.rs`: `TreeShape`, the gameplay capsules and crown box (opt-in component kept up to date by the plugin)
-- `src/felling.rs`: `FellTree`, `Felled`, `TreeStump`, `TreeLanded`: the cut, the fall about the hinge, the landing; `src/mesh/cut.rs`: cutting a mesh at a height and closing it with end-grain faces
+- `src/felling.rs`: `FellTree`, `Felled`, `TreeStump`, `TreeLanded`, `BuckTree`, `TreeLog`, `TreeBucked`: the cut, the fall about the hinge, the landing, bucking the trunk into logs; `src/mesh/cut.rs`: cutting a mesh at a height and closing it with end-grain faces
 - `src/tree_asset.rs`: `TreeParams` as an asset, `ProceduralTreeAsset` (a tree from a handle), and with the `ron` feature the `.tree.ron` loader and `to_ron`/`from_ron`
 - `src/venation.rs`: leaf veins by space colonisation (pure CPU), rasterised into the image `FloraTextures` shares
 - `src/shading/` (`FloraWind`, `FloraSeason`, `TreeShakes`, `FloraMaterial`, leaf look, wind, shakes and seasons in `common.wesl`/`vertex.wesl`/`prepass.wesl`/`fragment.wesl`; `share.rs`: `SharedFlora`, materials shared by trees with equal looks; `textures.rs`: `FloraTextures`, the bark images and their mean colours)

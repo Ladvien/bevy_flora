@@ -163,7 +163,8 @@
 //!
 //! Insert [`FellTree`] on a tree and it is cut: a [`TreeStump`] stays, and the tree falls about
 //! the hinge of the cut, lands on its limbs ([`TreeLanded`]) and lies still ([`Felled`]). Pooled
-//! and GPU-grown trees can be felled too; the [`felling`] module has the details.
+//! and GPU-grown trees can be felled too, and [`BuckTree`] then cuts a felled tree's trunk into
+//! [`TreeLog`]s lying on the ground; the [`felling`] module has the details.
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;
@@ -225,7 +226,7 @@ pub mod tree_asset;
 pub mod venation;
 
 pub use crown::CrownShape;
-pub use felling::{FellTree, Felled, TreeLanded, TreeStump};
+pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeStump};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
@@ -259,11 +260,11 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 /// shakes, felling, the ground, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams,
-        GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree,
-        ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, TreeAge, TreeGenerated, TreeLanded, TreeMature,
-        TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule,
-        build_pool,
+        BarkParams, BarkScan, BuckTree, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind,
+        FoliageParams, GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree,
+        ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, TreeAge, TreeBucked, TreeGenerated, TreeLanded,
+        TreeLog, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
+        WindResponse, WoodCapsule, build_pool,
     };
 }
 

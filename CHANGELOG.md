@@ -5,6 +5,46 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.19.0] - 2026-10-12
+
+Bucking. A felled tree's trunk can be cut into logs that lie on the ground, ready to become
+pickups or colliders. Nothing is drawn differently until a tree is bucked; every change is an
+addition.
+
+### Added
+
+- **`BuckTree { log_length, min_radius }`** (in the prelude): insert it on a felled tree, with
+  its `FellTree` or later, and once the tree lies still the plugin cuts its trunk into logs
+  `log_length` long (2 m by default), up to where the trunk gets thinner than `min_radius`
+  (8 cm). The logs lie on the ground in a row from the stump, 15 cm apart, the way the tree fell,
+  each with the trunk's bark and end grain at both ends, on the `FloraGround` if there is one;
+  the tree's entity, crown included, is despawned and the stump stays.
+- **`TreeLog { stump, index, capsule }`**, a component on each log: `index` counts up the trunk
+  from the butt, and `capsule` is a `WoodCapsule` in the log's own space for its collider
+  (`WoodCapsule::to_primitive`).
+- **`TreeBucked { tree, stump, logs }`**, a message sent the frame a tree is bucked, with its
+  logs butt first.
+- `inspect --buck <m>` (with `--fell`: the photographs wait for the logs), and `B` in `showcase`
+  (buck the felled tree; any key then plants a new one).
+- README: bucking in "Felling", with an example that fells a tree away from the player, bucks it,
+  and gives each new log a collider; `docs/logs.jpg`.
+
+### Measured
+
+- **Look.** The 399 gallery scenarios and the five README clips render as 0.18.0's do (mean
+  difference 0.000 of 255). Bucked trees were looked at: an oak as a `ProceduralTree` and pooled,
+  from the side and close up at a log's end, lit and in shade (the sapwood band, heartwood, pith
+  and checks on the eight-sided section); the row with 5 cm and 15 cm between the logs (5 cm read
+  as a crack in one trunk, so the logs lie 15 cm apart); an oak on a 20° slope (its logs down the
+  hillside, their shadows meeting them); a maple, spruce, birch and redwood. The unit tests buck
+  an oak on flat ground and on a 17° slope, falling both ways (every log 2 m long, its butt end
+  on the ground and its top end above it, in order from the stump with a gap, its wood and its
+  end faces), and every preset.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, 1080p, interleaved with the
+  0.18.0 binary, two runs each): 100 000 pooled oaks 7.8 and 7.7 ms a frame against 7.5 and
+  7.8, 1 000 `ProceduralTree` oaks 24.2 ms on both; with no tree being bucked the new system
+  matches nothing.
+
 ## [0.18.0] - 2026-10-12
 
 Terrain. Trees stand on hills without their trunks floating over the slope, and felled trees
@@ -1286,6 +1326,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.19.0]: https://github.com/Ladvien/bevy_flora/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Ladvien/bevy_flora/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Ladvien/bevy_flora/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Ladvien/bevy_flora/compare/v0.15.0...v0.16.0

@@ -5,15 +5,15 @@
 //! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
 //! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`),
 //! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back, `H` hit the tree (`TreeShakes`),
-//! `F` fell it (`FellTree`; the next key brings a new tree).
+//! `F` fell it (`FellTree`), then `B` buck it into logs (`BuckTree`); any other key brings a new tree.
 
 use std::f32::consts::PI;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy_flora::{
-    FellTree, Felled, FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated,
-    TreePreset, TreeShake, TreeShakes, TreeShape,
+    BuckTree, FellTree, Felled, FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge,
+    TreeGenerated, TreeLog, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
 };
 
 #[derive(Resource)]
@@ -61,7 +61,10 @@ fn main() {
         })
         .insert_resource(Showcase { preset: 0, seed: 42, year: 0.3, year_running: false })
         .add_systems(Startup, setup)
-        .add_systems(Update, (handle_keys, advance_year, frame_tree, orbit_camera, update_hud, draw_shape).chain())
+        .add_systems(
+            Update,
+            (handle_keys, replant, advance_year, frame_tree, orbit_camera, update_hud, draw_shape).chain(),
+        )
         .run();
 }
 
@@ -131,8 +134,13 @@ fn handle_keys(
 ) {
     let (entity, mut tree, mut age, growing, gpu, shaped, felled) = tree.into_inner();
     if let Some(felled) = felled {
-        // A felled tree is left as it lies; the next key brings a new one, standing.
-        if keys.get_just_pressed().next().is_some() {
+        // A felled tree lies as it fell: `B` bucks it into logs once it is still, and any other
+        // key brings a new one, standing.
+        if keys.just_pressed(KeyCode::KeyB) {
+            if felled.at_rest {
+                commands.entity(entity).insert(BuckTree::default());
+            }
+        } else if keys.get_just_pressed().next().is_some() {
             commands.entity(felled.stump).despawn();
             commands.entity(entity).despawn();
             let mut params = showcase.preset().params();
@@ -207,6 +215,28 @@ fn handle_keys(
     }
 }
 
+/// What a bucked tree leaves: its logs and its stump.
+type Leftovers = Or<(With<TreeLog>, With<TreeStump>)>;
+
+/// Once the tree has been bucked there is none: any key clears the logs and the stump and
+/// plants a new one.
+fn replant(
+    keys: Res<ButtonInput<KeyCode>>,
+    showcase: Res<Showcase>,
+    mut commands: Commands,
+    trees: Query<(), With<ProceduralTree>>,
+    leftovers: Query<Entity, Leftovers>,
+) {
+    if trees.is_empty() && keys.get_just_pressed().next().is_some() {
+        for entity in &leftovers {
+            commands.entity(entity).despawn();
+        }
+        let mut params = showcase.preset().params();
+        params.seed = showcase.seed;
+        commands.spawn((ProceduralTree(params), TreeAge(f32::INFINITY)));
+    }
+}
+
 /// While the year runs, move it on and set the season from it.
 fn advance_year(time: Res<Time>, mut showcase: ResMut<Showcase>, mut season: ResMut<FloraSeason>) {
     if showcase.year_running {
@@ -247,9 +277,14 @@ fn orbit_camera(
 fn update_hud(
     showcase: Res<Showcase>,
     season: Res<FloraSeason>,
-    tree: Single<(&ProceduralTree, &TreeAge, Option<&Growing>, Has<GpuGrowth>, Option<&TreeShape>)>,
+    tree: Option<Single<(&ProceduralTree, &TreeAge, Option<&Growing>, Has<GpuGrowth>, Option<&TreeShape>)>>,
+    logs: Query<(), With<TreeLog>>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
+    let Some(tree) = tree else {
+        hud.0 = format!("the tree lies bucked into {} logs\n\nany key: plant a new one", logs.iter().count());
+        return;
+    };
     let (tree, age, growing, gpu, shape) = tree.into_inner();
     let maturity = tree.0.growth.maturity_age;
     let age_text = if age.0.is_finite() {
@@ -272,7 +307,7 @@ fn update_hud(
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
          Space: toggle growing   R: restart   M: mature   G: rebuild\n\
          U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape\n\
-         Y: run the year (or stop it)   H: hit the tree   F: fell it (any key: a new one)",
+         Y: run the year (or stop it)   H: hit the tree   F: fell it, then B: buck it into logs (any key: a new one)",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),
