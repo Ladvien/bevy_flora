@@ -17,6 +17,9 @@
 //! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`, encoded like the
 //! grove): the deciduous trees turn their autumn colours and shed their leaves, snow settles on
 //! every tree and melts, and the leaves come out again, while the pine and the cypress stay green.
+//! `--shake` records it fully grown from a still camera, knocked with `TreeShakes`
+//! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on a birch, then a blast that
+//! swings every tree.
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -41,13 +44,18 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
     FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams,
-    TreePreset, build_tree,
+    TreePreset, TreeShake, TreeShakes, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
 const FPS: f32 = 24.0;
 /// Frames in a clip: eight seconds.
 const TOTAL_FRAMES: u32 = 192;
+/// The shake clip's knocks: (frame, the grove tree hit, or `None` for a blast at the grove's
+/// middle, radius, strength, duration): an axe on the oak (stiffer than the birch, sway 0.8
+/// against 1.4, so a harder knock), one on a birch, then a blast that swings every tree.
+const SHAKES: [(u32, Option<usize>, f32, f32, f32); 3] =
+    [(12, Some(0), 1.0, 3.0, 3.0), (64, Some(2), 1.0, 2.5, 2.5), (112, None, 30.0, 3.0, 3.5)];
 /// Frames rendered before the first capture so meshes and shadows exist.
 const WARMUP_FRAMES: u32 = 10;
 /// Frames between setting an age and capturing it (mesh upload, shadows).
@@ -95,6 +103,8 @@ enum Scene {
     Grove,
     /// The grove, fully grown, through autumn, leaf fall, winter and spring (`FloraSeason`).
     Seasons,
+    /// The grove, fully grown, in a light wind, knocked: one tree, another, then all of it.
+    Shake,
 }
 
 /// A tree of the grove: species, seed, where it stands (in units of the grove's spacing, x and
@@ -157,6 +167,10 @@ struct Capture {
     wait: u32,
     in_flight: bool,
     gusted: bool,
+    /// Where the trees stand, in spawn order (the grove's order).
+    trees: Vec<Vec3>,
+    /// How many of `SHAKES` have been sent.
+    shaken: usize,
 }
 
 #[derive(Component)]
@@ -164,7 +178,7 @@ struct OrbitCam;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons] [--gpu]"
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake] [--gpu]"
     );
     std::process::exit(2);
 }
@@ -172,8 +186,8 @@ fn usage() -> ! {
 fn main() {
     let mut out = None;
     let mut preset = None;
-    let mut grove = false;
-    let mut seasons = false;
+    // The grove clips: "grove", "seasons" or "shake"; none is the single growing tree.
+    let mut clip: Option<&'static str> = None;
     let mut gpu = false;
     let mut style = RenderStyle::Natural;
     let mut args = std::env::args().skip(1);
@@ -181,8 +195,16 @@ fn main() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
-            "--grove" => grove = true,
-            "--seasons" => seasons = true,
+            "--grove" | "--seasons" | "--shake" => {
+                if clip.is_some() {
+                    usage();
+                }
+                clip = Some(match arg.as_str() {
+                    "--grove" => "grove",
+                    "--seasons" => "seasons",
+                    _ => "shake",
+                });
+            }
             "--preset" => {
                 let name = args.next().unwrap_or_else(|| usage());
                 preset = Some(
@@ -203,26 +225,21 @@ fn main() {
             _ => usage(),
         }
     }
-    if (grove || seasons) && (preset.is_some() || style != RenderStyle::Natural) || (grove && seasons) {
+    if clip.is_some() && (preset.is_some() || style != RenderStyle::Natural) {
         usage();
     }
-    let out = out.unwrap_or_else(|| {
-        PathBuf::from(match (grove, seasons) {
-            (true, _) => "target/capture/grove",
-            (_, true) => "target/capture/seasons",
-            _ => "target/capture/growth",
-        })
-    });
+    let out = out.unwrap_or_else(|| PathBuf::from(format!("target/capture/{}", clip.unwrap_or("growth"))));
     fs::create_dir_all(&out).expect("create output directory");
 
-    let scene = if grove {
-        Scene::Grove
-    } else if seasons {
-        Scene::Seasons
-    } else {
-        let mut params = preset.unwrap_or(TreePreset::Maple).params();
-        params.style = style;
-        Scene::Tree(Box::new(params))
+    let scene = match clip {
+        Some("grove") => Scene::Grove,
+        Some("seasons") => Scene::Seasons,
+        Some(_) => Scene::Shake,
+        None => {
+            let mut params = preset.unwrap_or(TreePreset::Maple).params();
+            params.style = style;
+            Scene::Tree(Box::new(params))
+        }
     };
     let size = if matches!(scene, Scene::Tree(_)) { UVec2::new(800, 600) } else { UVec2::new(1280, 720) };
     let (distance, focus) = frame_scene(&scene, size);
@@ -246,7 +263,13 @@ fn main() {
             brightness: 300.0,
             ..default()
         })
-        .insert_resource(FloraWind { strength: 0.5, direction: wind, speed: 1.4, ..default() })
+        // A light wind in the shake clip, so the knocks are what moves the trees.
+        .insert_resource(FloraWind {
+            strength: if matches!(scene, Scene::Shake) { 0.15 } else { 0.5 },
+            direction: wind,
+            speed: 1.4,
+            ..default()
+        })
         // Time stands still until `drive` steps it, once per captured frame.
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO))
         .insert_resource(Capture {
@@ -262,6 +285,8 @@ fn main() {
             wait: WARMUP_FRAMES,
             in_flight: false,
             gusted: false,
+            trees: Vec::new(),
+            shaken: 0,
         })
         .insert_resource(UseGpu(gpu))
         .add_systems(Startup, setup)
@@ -290,7 +315,7 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let radius = (0.5 * (max - min).length()).max(0.5);
             (radius / (FOV * 0.5).sin() * 0.8, Vec3::new(0.0, 0.5 * (min.y + max.y), 0.0))
         }
-        Scene::Grove | Scene::Seasons => {
+        Scene::Grove | Scene::Seasons | Scene::Shake => {
             let placed = grove(Vec3::ZERO);
             let (min, max) = placed
                 .iter()
@@ -379,8 +404,11 @@ fn setup(
         ),
         Scene::Grove => (GROVE_SEEDLING, grove(Vec3::ZERO)),
         // Every tree mature from the first frame: the seasons are the clip.
-        Scene::Seasons => (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect()),
+        Scene::Seasons | Scene::Shake => {
+            (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect())
+        }
     };
+    capture.trees = trees.iter().map(|&(_, at, ..)| at).collect();
     for (params, at, start, frames) in trees {
         let mature_at = build_tree(&params, f32::INFINITY).mature_at;
         let tree = commands
@@ -398,7 +426,7 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),
-        orbit(&capture, 0.0),
+        orbit(&capture, if matches!(capture.scene, Scene::Shake) { 0.5 } else { 0.0 }),
         OrbitCam,
     ));
 }
@@ -426,6 +454,7 @@ fn drive(
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut shakes: ResMut<TreeShakes>,
 ) {
     // The clock stands still, except for the one step the frame below asks for.
     *strategy = TimeUpdateStrategy::ManualDuration(Duration::ZERO);
@@ -452,7 +481,9 @@ fn drive(
             age.0 = next;
         }
     }
-    **camera = orbit(&capture, frame as f32 / (TOTAL_FRAMES - 1) as f32);
+    // The shake clip holds the camera still, so the trees' swing is the only motion.
+    let t = if matches!(capture.scene, Scene::Shake) { 0.5 } else { frame as f32 / (TOTAL_FRAMES - 1) as f32 };
+    **camera = orbit(&capture, t);
     if matches!(capture.scene, Scene::Seasons) {
         // From late summer through autumn, leaf fall and the snow into the next summer.
         let t = frame as f32 / (TOTAL_FRAMES - 1) as f32;
@@ -463,6 +494,20 @@ fn drive(
                 ground.base_color = ground_colour(next.snow);
             }
         }
+    }
+    // The shake clip's knocks, each once, at its frame.
+    while let Some(&(at_frame, tree, radius, strength, duration)) = SHAKES.get(capture.shaken) {
+        if !matches!(capture.scene, Scene::Shake) || frame < at_frame {
+            break;
+        }
+        capture.shaken += 1;
+        let (at, direction) = match tree {
+            // An axe on one trunk, swinging it across the view.
+            Some(i) => (capture.trees[i].xz(), Vec2::new(-1.0, 1.0)),
+            // A blast at the grove's middle: every tree swings away from it.
+            None => (capture.focus.xz(), Vec2::ZERO),
+        };
+        shakes.shake(TreeShake { at, radius, strength, direction, duration, ..default() }, &time);
     }
     if matches!(capture.scene, Scene::Grove) && frame >= GUST_FRAME && !capture.gusted {
         capture.gusted = true;

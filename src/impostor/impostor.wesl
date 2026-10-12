@@ -16,7 +16,7 @@ import bevy_pbr::render::{
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 };
 import package::shading::common::{
-    flora, flora_wind, wind_bend, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
+    flora, flora_wind, wind_bend, shake_at, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
     snow_on, snow_shelter, LEAF_FROST,
 };
 
@@ -66,8 +66,8 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let view_index = floor(yaw / TAU * views + 0.5);
     let tile = view_index - views * floor(view_index / views);
 
-    // The tree sways with the wind like its meshes do.
-    let bent = wind_bend(world_position, vertex.position.y, origin, scale_y, globals.time);
+    // The tree sways with the wind, and swings when shaken, like its meshes do.
+    let bent = wind_bend(world_position, vertex.position.y, origin, scale_y, globals.time, shake_at(origin, globals.time));
     out.world_position = vec4<f32>(bent, 1.0);
     out.position = position_world_to_clip(bent);
     // The tree's own +Z in the world (its yaw): what the baked normals are relative to.

@@ -8,7 +8,7 @@ import bevy_pbr::{
 };
 import bevy_render::globals::Globals;
 import package::gpu::growth_common::{GrowthAttrs, grown_position, leaf_growth_scale};
-import package::shading::common::{flutter_offset, wind_bend};
+import package::shading::common::{flutter_offset, shake_at, wind_bend};
 
 @if(FLORA_LEAF)
 import package::shading::common::{leaf_has_fallen, FALLEN_LEAF_CLIP};
@@ -29,13 +29,14 @@ fn vertex(
     let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
 
     let origin = world_from_local[3].xyz;
+    let shake = shake_at(origin, globals.time);
     var local = grown_position(growth_attrs);
 @if(FLORA_LEAF)
-    local = local + flutter_offset(sway, origin, globals.time) * leaf_growth_scale(growth_attrs);
+    local = local + flutter_offset(sway, origin, globals.time, shake) * leaf_growth_scale(growth_attrs);
 
     let world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local, 1.0));
     out.world_position = vec4<f32>(
-        wind_bend(world.xyz, local.y, origin, length(world_from_local[1].xyz), globals.time),
+        wind_bend(world.xyz, local.y, origin, length(world_from_local[1].xyz), globals.time, shake),
         1.0
     );
     out.position = position_world_to_clip(out.world_position.xyz);

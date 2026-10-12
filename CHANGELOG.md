@@ -5,6 +5,48 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.14.0] - 2026-10-12
+
+Trees that react. A new resource, `TreeShakes`, swings the trees near a hit, a passing character
+or a blast. While no shake is under way every tree draws what 0.13.0 drew. The API only grows (two
+types, in the prelude); the minor bump is for the feature.
+
+### Added
+
+- **`TreeShake`** and **`TreeShakes`** (in the prelude): `TreeShakes::shake(TreeShake { at,
+  radius, strength, direction, duration }, &time)` swings every tree whose trunk stands within
+  `radius` metres of `at`, the nearest the most, first away from `at` (or along `direction`), then
+  back and forth, dying away over `duration` seconds, while its leaves rustle. Each tree swings at
+  its own pace, taller trees slower, and bends as it does in the wind, on every way a tree is
+  drawn: `ProceduralTree`, `GpuGrowth`, pooled trees' levels of detail and their impostors, and
+  the shadows. Up to eight run at once; another takes the place of the one that ends soonest. A
+  shake is drawn, not simulated: `TreeShape` colliders stay where they are.
+- Examples: `showcase` hits the tree with `H`; `capture_growth --shake` records the new README
+  clip, `docs/shake.gif` (an axe on the oak, one on a birch, a blast); `forest --shake-animate`
+  knocks the trees every sixth frame, so every shake slot is busy, for timing.
+
+### Changed
+
+- The shared wind buffer (`FloraWindBuffer`) holds 23 `vec4`, up from 6: the shakes ride in it,
+  so a shake writes a few hundred bytes and touches no material, and a header with the time the
+  last shake ends lets the shaders skip the shakes while none is under way. The plugin drops a
+  shake once it has died away (`TreeShakes::iter` lists the ones under way).
+
+### Measured
+
+- **Look.** With no shake the 382 gallery scenarios render as 0.13.0's (mean difference 0.000 of
+  255). The shake clip is frame-identical on the CPU and `--gpu` paths. Its hits and blast were
+  looked at in strips of consecutive frames and in motion masks: each hit moves its own tree and
+  that tree's shadow, the blast every tree, trunk bases stay put, and a trunk tracked through the
+  blast swings smoothly and settles. In a pooled forest the impostor band swings with the meshes.
+  The clip's oak hit needed a strength of 3 to read at the clip's scale (the oak's sway is 0.8).
+- **Cost** (medians of interleaved runs, Apple M4 Pro, 1080p, offscreen): 100 000 pooled oaks
+  7.36 ms in 0.13.0, 7.40 to 7.45 ms now with no shake, 7.48 ms with all eight shakes busy every
+  frame; 1 000 individual oaks 23.7 ms in 0.13.0, 24.2 ms now (+2%, the header check in every
+  vertex), 26.8 ms with all eight busy over the whole forest; 1 000 spruces 38.4 and 39.3 ms. The
+  shaders work out a tree's shakes once per vertex: calling it from both the bend and the leaf
+  flutter cost 28.9 ms with all eight busy.
+
 ## [0.13.0] - 2026-10-12
 
 Snow. `FloraSeason` gains `snow`, laid on every tree in the fragment stage, and
@@ -1047,6 +1089,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.14.0]: https://github.com/Ladvien/bevy_flora/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Ladvien/bevy_flora/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Ladvien/bevy_flora/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Ladvien/bevy_flora/compare/v0.10.0...v0.11.0
