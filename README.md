@@ -18,20 +18,21 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.6 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.7 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.6"
+bevy_flora = "0.7"
 ```
 
 | feature | default | what it does |
 |---|---|---|
+| `textures` | yes | The bundled CC0 bark scans (about 3.2 MB of JPEG compiled into the crate). Without it every scan is absent and wood is plain colour |
 | `serde` | — | `Serialize` / `Deserialize` on every parameter type, so trees can be authored in RON or JSON |
 
-The library depends on `bevy` with default features off (`std`, `bevy_asset`, `bevy_color`, `bevy_log`, `bevy_mesh`, `bevy_pbr`), so it adds no windowing or audio to a build.
+The library depends on `bevy` with default features off (`std`, `bevy_asset`, `bevy_color`, `bevy_log`, `bevy_mesh`, `bevy_pbr`, and `jpeg` to decode the bundled textures), so it adds no windowing or audio to a build.
 
 ## Quickstart
 
@@ -136,6 +137,8 @@ Measured for 0.6.1 with `cargo run --release --example forest -- --offscreen` (1
 | 20 000 | not run | 18.7 ms | 3.4 ms |
 | 100 000 | not run | 64.7 ms | 7.3 ms |
 
+Bark (0.7.0) leaves these figures where they were: on a loaded machine, interleaved runs of 0.6.2 and 0.7.0 drew 100 000 pooled oaks in 7.41 and 7.45 ms (see the `CHANGELOG`); the table above was not re-measured.
+
 The pool's trees are static: they have the age the pool was built at, and growing trees stay `ProceduralTree` (with `GpuGrowth`), which suits the few that are close. Impostors are baked once per variant by a few frames of offscreen rendering, so a tree appears when that is done, and they need `FloraPlugin` added after `DefaultPlugins` (before it, with no renderer, or on a device without storage buffers in the vertex stage such as WebGL2, the coarsest level is drawn at every distance and one warning says so). They are baked unlit, as a colour and a surface picture, and shaded by the scene's own lights every frame: they follow the time of day, glow with the sun behind them and sway with the wind. They cast no shadows, and they show one of eight views, at one elevation. With MSAA an impostor keeps the gaps of its crown: each pixel draws the share of its samples the baked tree covers, so a far crown is as airy, and as light, as the leaves it stands for. Level 2 and the impostors replace thin twigs and most leaves, so a forest seen from above or close up should keep its near trees at level 0.
 
 ### Leaf shading and wind
@@ -167,6 +170,29 @@ fn stiff_willow() -> bevy_flora::TreeParams {
 
 Changing `FloraWind` writes one small shared buffer (`FloraWindBuffer`) and touches no material, so you can animate it every frame (a storm that builds, a wind that turns): a pooled forest of 20 000 trees takes 3.3 ms a frame with the wind changing every frame, where 0.5 took 212 ms (Apple M4 Pro). Launching a gust front writes the same buffer. Wind writes no motion vectors, and branches do not sway on their own: the whole tree bends and the leaves flutter. Leaf shading and wind need storage buffers in the vertex stage; on a device without them (WebGL2) trees are drawn with plain materials and one warning says so.
 
+### Bark
+
+Trunks and branches wear a bundled CC0 bark scan (a colour map and a normal map, 512 px wide, about 3.2 MB for all 14). Each preset picks the scan of its species (`TreeParams::bark`); `BarkParams` sets how it follows the wood's growth. The scan is laid out in metres on the *mature* tree, so a growing tree's bark never slides; wood thinner than `smooth_below` is smooth, and by `fissured_above` it shows the whole scan, so a young branch gains relief as it thickens. The scan's average colour is divided out of the material's base colour, so a textured tree keeps its preset colour, and far trees, impostors and the plain `StandardMaterial` fallback look as they always did.
+
+```rust,no_run
+use bevy_flora::{BarkParams, BarkScan, TreePreset};
+
+fn gnarled_oak() -> bevy_flora::TreeParams {
+    let mut params = TreePreset::Oak.params();
+    // Fissured sooner than the preset: smooth under 1 cm of radius, the whole scan from 8 cm.
+    params.bark = BarkParams { scan: Some(BarkScan::Brown), smooth_below: 0.01, fissured_above: 0.08 };
+    params
+}
+
+fn plain_pine() -> bevy_flora::TreeParams {
+    let mut params = TreePreset::Pine.params();
+    params.bark.scan = None; // flat colour, as before 0.7
+    params
+}
+```
+
+The textures are compiled in by the default `textures` feature (about 3.2 MB of JPEG); with `default-features = false` every scan is absent and wood is plain colour. Their sources and licences (all CC0 1.0, no attribution required) are in [`src/textures/CREDITS.md`](src/textures/CREDITS.md).
+
 ### Without the plugin
 
 `build_tree` is a pure function from parameters and age to CPU meshes and the aged skeleton, so you can bake trees offline, feed your own renderer, or build colliders from the skeleton:
@@ -190,6 +216,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Closed wood.** Branches meet the trunk through flared collars and root segments, forks taper into their halves, and trunk tops end in a flat cap, a cone or a leader branch. Optional pipe-model radii, radius-adaptive ring counts and volume-preserving (Taubin) smoothing that keeps seams, branch ends and twig seats in place.
 - **Leaves**: five styles (crossed planes, single quad, cluster sphere, star burst, needle cluster), three placements (terminal branches, all branches, tip clusters) and four orientations. Leaf cards are leaf-shaped (cut into the geometry, so there is no alpha-mask `discard`) and grow out of their twigs, crowns shade as one soft volume through crown-bent normals (`normal_bend`), and each leaf gets its own brightness (`color_variation`), hue (`hue_variation`) and share of the sky (`occlusion`), all baked into the mesh. The plugin draws trees with `FloraMaterial`, a `StandardMaterial` with a leaf shader: a darker, glossier upper side, a paler matte lower side, veins, and light through a leaf lit from behind (`LeafShading`); facing the sun, the gloss gives way to that glow, so a backlit crown stays green instead of mirroring the sun white. The meshes also draw with a plain `StandardMaterial`, without those.
 - **Wind.** `FloraWind` bends every tree and flutters its leaves in the vertex shader, shadows and impostors included, with a travelling `GustFront`, and each species answers in its own way (`TreeParams::wind`).
+- **Bark.** Trunks and branches wear one of 14 bundled CC0 bark scans (colour and normal map; `TreeParams::bark`, `BarkScan`), laid out in metres on the mature tree so a growing tree's bark never slides, smooth on young wood and fissured as a branch thickens (`BarkParams`), and averaging the preset colour, so far trees, impostors and the plain-material fallback keep their colour. Compiled in by the default `textures` feature.
 - **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.3 ms a frame, leaf shading and wind included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 22 ms a frame), but each keeps its own meshes, so use a pool beyond that.
 
 ## Examples
