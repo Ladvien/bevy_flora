@@ -1,9 +1,9 @@
 //! Trunk mesher: tapered, wobbling, twisted cylinder with root flares and caps.
 
-use bevy::math::Vec3;
+use bevy::math::{Vec2, Vec3};
 
 use super::MeshData;
-use super::rings::{RingBasis, connect_rings, emit_cap, emit_ring};
+use super::rings::{RingBasis, RingUv, connect_rings, emit_cap, emit_ring, mature_size, u_tiles_around};
 use crate::params::{TrunkParams, TrunkTermination};
 use crate::skeleton::{Node, trunk_radius_at, trunk_wobble};
 
@@ -44,15 +44,27 @@ pub(crate) fn trunk_pieces(trunk: &TrunkParams, node: &Node) -> TrunkPieces {
 /// node.progress`, so radius, wobble and twist match the branch origins
 /// computed on the full trunk; radii are scaled by `node.radius_progress`.
 /// Returns an empty mesh when `node.progress <= 0`.
-pub fn trunk_mesh(trunk: &TrunkParams, node: &Node, seed: i32) -> MeshData {
-    trunk_mesh_with(trunk, node, seed, trunk_pieces(trunk, node))
+///
+/// `tile` is the bark scan's size in metres ([`BarkScan::tile_size`](crate::params::BarkScan::tile_size), `Vec2::ONE` without a
+/// scan). The texture coordinates are anchored to the *mature* trunk: ring `k` is at
+/// `v = k / (rings - 1) * trunk.height / tile.y` whatever the age, and `u` runs
+/// `round(2π · base radius / tile.x)` tiles around, so the bark of a growing trunk never slides
+/// and the CPU's aged mesh agrees with the mature mesh GPU growth shrinks.
+pub fn trunk_mesh(trunk: &TrunkParams, node: &Node, seed: i32, tile: Vec2) -> MeshData {
+    trunk_mesh_with(trunk, node, seed, trunk_pieces(trunk, node), tile)
 }
 
 /// [`trunk_mesh`] with the optional `pieces` given. Vertex order: the rings
 /// (`segments + 1` vertices each, bottom to top), the tip cone's apex ring if
 /// any, the bottom cap (centre, then `segments + 1` rim vertices), the top cap
 /// likewise if any.
-pub(crate) fn trunk_mesh_with(trunk: &TrunkParams, node: &Node, seed: i32, pieces: TrunkPieces) -> MeshData {
+pub(crate) fn trunk_mesh_with(
+    trunk: &TrunkParams,
+    node: &Node,
+    seed: i32,
+    pieces: TrunkPieces,
+    tile: Vec2,
+) -> MeshData {
     let mut mesh = MeshData::default();
     if node.progress <= 0.0 {
         return mesh;
@@ -62,14 +74,20 @@ pub(crate) fn trunk_mesh_with(trunk: &TrunkParams, node: &Node, seed: i32, piece
     let rings = trunk_ring_count(trunk);
     let profile = Profile::new(trunk, seed);
     let rp = node.radius_progress;
+    let u_tiles = u_tiles_around(trunk_radius_at(trunk, 0.0), tile.x);
+    // A cap lays its disc out at the bark's real size: its mature radius in tiles.
+    let cap_uv = |mature_radius: f32| Vec2::new(mature_radius / tile.x, mature_radius / tile.y);
 
     let mut prev_ring = None;
     for k in 0..rings {
-        let t = (k as f32 / (rings - 1) as f32) * node.progress;
+        // The ring's place in the mature trunk, which fixes its texture coordinate.
+        let along = k as f32 / (rings - 1) as f32;
+        let t = along * node.progress;
         let radius = trunk_radius_at(trunk, t);
         let root_blend = profile.root_blend_at(t * trunk.height);
         let twist = (t * trunk.twist).to_radians();
-        let ring = emit_ring(&mut mesh, profile.center_at(t), TRUNK_BASIS, segments, twist, t, |_, angle| {
+        let uv = RingUv { v: along * trunk.height / tile.y, u_tiles };
+        let ring = emit_ring(&mut mesh, profile.center_at(t), TRUNK_BASIS, segments, twist, uv, |_, angle| {
             (radius + profile.bulge(angle - twist, root_blend)) * rp
         });
         if let Some(prev) = prev_ring {
@@ -82,15 +100,17 @@ pub(crate) fn trunk_mesh_with(trunk: &TrunkParams, node: &Node, seed: i32, piece
     if pieces.cone
         && let Some(top_ring) = prev_ring
     {
-        let apex = profile.center_at(1.0) + Vec3::Y * trunk_cone_lift(trunk, node);
+        let lift = trunk_cone_lift(trunk, node);
+        let apex = profile.center_at(1.0) + Vec3::Y * lift;
         let twist = trunk.twist.to_radians();
-        let tip = emit_ring(&mut mesh, apex, TRUNK_BASIS, segments, twist, 1.0, |_, _| 0.0);
+        let uv = RingUv { v: (trunk.height + mature_size(lift, rp)) / tile.y, u_tiles };
+        let tip = emit_ring(&mut mesh, apex, TRUNK_BASIS, segments, twist, uv, |_, _| 0.0);
         connect_rings(&mut mesh, top_ring, tip, segments);
     }
 
     // Bottom cap matches ring 0 (full root bulge).
     let bottom_blend = profile.root_blend_at(0.0);
-    emit_cap(&mut mesh, Vec3::ZERO, TRUNK_BASIS, segments, 0.0, Vec3::NEG_Y, |_, angle| {
+    emit_cap(&mut mesh, Vec3::ZERO, TRUNK_BASIS, segments, 0.0, Vec3::NEG_Y, cap_uv(profile.base_radius), |_, angle| {
         (profile.base_radius + profile.bulge(angle, bottom_blend)) * rp
     });
 
@@ -101,7 +121,7 @@ pub(crate) fn trunk_mesh_with(trunk: &TrunkParams, node: &Node, seed: i32, piece
         let radius = trunk_radius_at(trunk, t_top);
         let root_blend = profile.root_blend_at(t_top * trunk.height);
         let twist = (t_top * trunk.twist).to_radians();
-        emit_cap(&mut mesh, profile.center_at(t_top), TRUNK_BASIS, segments, twist, Vec3::Y, |_, angle| {
+        emit_cap(&mut mesh, profile.center_at(t_top), TRUNK_BASIS, segments, twist, Vec3::Y, cap_uv(radius), |_, angle| {
             (radius + profile.bulge(angle - twist, root_blend)) * rp
         });
     }
@@ -223,7 +243,7 @@ mod tests {
         for preset in TreePreset::ALL {
             let params = preset.params();
             let skeleton = generate_skeleton(&params);
-            let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed);
+            let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed, Vec2::ONE);
             assert!(!mesh.is_empty());
             assert_indices_valid(&mesh, preset.name());
             assert_faces_outward(&mesh, preset.name());
@@ -237,7 +257,7 @@ mod tests {
         let aged = skeleton.aged(1.0, &params.growth);
         let node = &aged.nodes[0];
         assert!(node.progress > 0.0 && node.progress < 1.0);
-        let mesh = trunk_mesh(&params.trunk, node, params.seed);
+        let mesh = trunk_mesh(&params.trunk, node, params.seed, Vec2::ONE);
         assert_indices_valid(&mesh, "growing pine");
         assert_faces_outward(&mesh, "growing pine");
         let top = mesh.positions.iter().map(|p| p.y).fold(0.0, f32::max);
@@ -249,7 +269,7 @@ mod tests {
         let params = TreePreset::Oak.params();
         let skeleton = generate_skeleton(&params);
         let aged = skeleton.aged(0.0, &params.growth);
-        let mesh = trunk_mesh(&params.trunk, &aged.nodes[0], params.seed);
+        let mesh = trunk_mesh(&params.trunk, &aged.nodes[0], params.seed, Vec2::ONE);
         assert!(mesh.is_empty());
         assert!(mesh.positions.is_empty());
     }
@@ -258,7 +278,7 @@ mod tests {
     fn indices_in_range() {
         let params = TreePreset::Baobab.params(); // root flares
         let skeleton = generate_skeleton(&params);
-        let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed);
+        let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed, Vec2::ONE);
         assert_indices_valid(&mesh, "baobab");
         let max = *mesh.indices.iter().max().unwrap() as usize;
         assert!(max < mesh.positions.len());
@@ -274,7 +294,7 @@ mod tests {
                 params.trunk.termination = termination;
                 params.trunk.taper = taper;
                 let skeleton = generate_skeleton(&params);
-                let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed);
+                let mesh = trunk_mesh(&params.trunk, &skeleton.nodes[0], params.seed, Vec2::ONE);
                 let key = |i: u32| (mesh.positions[i as usize] * 1.0e4).round().as_ivec3().to_array();
                 let mut uses = std::collections::HashMap::new();
                 for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {

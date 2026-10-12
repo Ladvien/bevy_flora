@@ -7,18 +7,19 @@
 use std::collections::HashMap;
 
 use bevy::asset::{AssetId, Assets, Handle};
-use bevy::color::{Color, ColorToComponents};
+use bevy::color::ColorToComponents;
 use bevy::ecs::prelude::*;
 use bevy::math::Vec4;
 
-use super::{FloraMaterial, FloraUniform, FloraWindBuffer, flora_material};
+use super::{FloraMaterial, FloraUniform, FloraWindBuffer, Surface, flora_material};
+use crate::params::BarkScan;
 
 /// Most entries the cache holds before it drops those whose material no tree uses any more.
 const MIN_PRUNE_AT: usize = 64;
 
-/// What makes two flora materials interchangeable: the colour, whether it is leaves, and the
-/// per-species fields of the uniform (the wind is not part of a material: every material reads
-/// it from the shared buffer). Floats are compared by bits.
+/// What makes two flora materials interchangeable: the colour, whether it is leaves, the
+/// per-species fields of the uniform and the bark scan (the wind is not part of a material:
+/// every material reads it from the shared buffer). Floats are compared by bits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Look {
     color: [u32; 4],
@@ -27,6 +28,9 @@ struct Look {
     response: [u32; 4],
     leaf_look: [u32; 4],
     tint: [u32; 4],
+    bark_radii: [u32; 4],
+    bark_mean: [u32; 4],
+    bark: Option<BarkScan>,
 }
 
 fn bits(v: Vec4) -> [u32; 4] {
@@ -34,14 +38,18 @@ fn bits(v: Vec4) -> [u32; 4] {
 }
 
 impl Look {
-    fn new(color: Color, uniform: &FloraUniform, leaf: bool) -> Self {
+    fn new(surface: &Surface) -> Self {
+        let FloraUniform { tree, response, leaf, tint, bark, bark_mean } = surface.uniform;
         Self {
-            color: color.to_linear().to_f32_array().map(f32::to_bits),
-            leaf,
-            tree: bits(uniform.tree),
-            response: bits(uniform.response),
-            leaf_look: bits(uniform.leaf),
-            tint: bits(uniform.tint),
+            color: surface.color.to_linear().to_f32_array().map(f32::to_bits),
+            leaf: surface.leaf,
+            tree: bits(tree),
+            response: bits(response),
+            leaf_look: bits(leaf),
+            tint: bits(tint),
+            bark_radii: bits(bark),
+            bark_mean: bits(bark_mean),
+            bark: surface.bark.as_ref().map(|bark| bark.scan),
         }
     }
 }
@@ -55,17 +63,15 @@ pub struct SharedFlora {
 }
 
 impl SharedFlora {
-    /// A strong handle to the material with this look, made with `uniform` and a handle to the
-    /// shared `wind` when no live one exists.
+    /// A strong handle to the material with this `surface`, made with a handle to the shared
+    /// `wind` when no live one exists.
     pub(crate) fn resolve(
         &mut self,
         assets: &mut Assets<FloraMaterial>,
-        color: Color,
-        uniform: FloraUniform,
-        leaf: bool,
+        surface: &Surface,
         wind: &FloraWindBuffer,
     ) -> Handle<FloraMaterial> {
-        let look = Look::new(color, &uniform, leaf);
+        let look = Look::new(surface);
         if let Some(id) = self.materials.get(&look)
             && let Some(strong) = assets.get_strong_handle(*id)
         {
@@ -75,7 +81,7 @@ impl SharedFlora {
             self.materials.retain(|_, id| assets.contains(*id));
             self.prune_at = self.materials.len() * 2;
         }
-        let strong = assets.add(flora_material(color, uniform, leaf, wind));
+        let strong = assets.add(flora_material(surface, wind));
         self.materials.insert(look, strong.id());
         strong
     }

@@ -28,8 +28,9 @@ use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
 use bevy::material::OpaqueRendererMethod;
+use bevy::image::Image;
 use bevy::math::{Vec2, Vec4};
-use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
     MaterialPlugin, PbrPlugin, StandardMaterial,
@@ -50,6 +51,9 @@ use crate::params::{LeafStyle, TreeParams};
 
 mod share;
 pub use share::SharedFlora;
+
+mod textures;
+pub use textures::{BarkLibrary, BarkTexture, FloraTextures};
 
 /// A gust that sweeps across the world: a band of stronger wind, `width` metres deep, moving
 /// along `direction` at `speed`. Launch it with [`FloraWind::launch_gust`].
@@ -159,6 +163,12 @@ pub struct FloraUniform {
     pub leaf: Vec4,
     /// Linear rgb that light takes on passing through a leaf; w is 0.
     pub tint: Vec4,
+    /// (radius below which wood is smooth, radius above which it shows the whole scan, 0, 0) in
+    /// metres: [`BarkParams`](crate::BarkParams). Zero for materials without bark.
+    pub bark: Vec4,
+    /// The bark scan's average colour, linear rgb, 0: what smooth wood is multiplied by, since
+    /// the material's base colour is the preset's over it. Zero for materials without bark.
+    pub bark_mean: Vec4,
 }
 
 impl FloraUniform {
@@ -183,6 +193,8 @@ impl FloraUniform {
                 s.underside.clamp(0.0, 1.0),
             ),
             tint: Vec4::new(tint.red, tint.green, tint.blue, 0.0),
+            bark: Vec4::ZERO,
+            bark_mean: Vec4::ZERO,
         }
     }
 
@@ -226,6 +238,8 @@ pub(crate) fn wind_vectors(wind: &FloraWind) -> [Vec4; 5] {
 pub struct FloraKey {
     /// Leaves: see [`FloraExtension::leaf`].
     pub leaf: bool,
+    /// Detail textures (bark): see [`FloraExtension::detail_color`]. True when both maps are set.
+    pub detail: bool,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -243,11 +257,20 @@ pub struct FloraExtension {
     /// Leaves get the leaf surface, the light through the leaf and the flutter (their mesh must
     /// carry the attributes [`foliage_mesh`](crate::foliage::foliage_mesh) bakes); wood only bends.
     pub leaf: bool,
+    /// The colour map of the surface's detail (bark), multiplied into the base colour, or `None`
+    /// for none: see [`BarkParams`](crate::BarkParams). Bound with the normal map and
+    /// [`FloraUniform::bark`].
+    #[texture(103)]
+    #[sampler(105)]
+    pub detail_color: Option<Handle<Image>>,
+    /// The normal map of the surface's detail (tangent space, OpenGL convention).
+    #[texture(104)]
+    pub detail_normal: Option<Handle<Image>>,
 }
 
 impl From<&FloraExtension> for FloraKey {
     fn from(extension: &FloraExtension) -> Self {
-        Self { leaf: extension.leaf }
+        Self { leaf: extension.leaf, detail: extension.detail_color.is_some() && extension.detail_normal.is_some() }
     }
 }
 
@@ -274,18 +297,27 @@ impl MaterialExtension for FloraExtension {
         layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        specialize_flora(descriptor, layout, key.bind_group_data.leaf)
+        specialize_flora(descriptor, layout, key.bind_group_data)
     }
 }
 
 /// Make the pipeline of a leaf material read the leaf mesh's flutter attribute and turn on the
-/// leaf branches of the shaders. Wood needs nothing.
+/// leaf branches of the shaders, and that of a material with detail textures sample them. Plain
+/// wood needs nothing. Detail needs the mesh's two texture coordinate sets (bark is laid out in
+/// the first, fades in with the second); a mesh without them is drawn without it.
 pub(crate) fn specialize_flora(
     descriptor: &mut RenderPipelineDescriptor,
     layout: &MeshVertexBufferLayoutRef,
-    leaf: bool,
+    key: FloraKey,
 ) -> Result<(), SpecializedMeshPipelineError> {
-    if !leaf {
+    if key.detail
+        && layout.0.contains(Mesh::ATTRIBUTE_UV_0.id)
+        && layout.0.contains(Mesh::ATTRIBUTE_UV_1.id)
+        && let Some(fragment) = descriptor.fragment.as_mut()
+    {
+        fragment.shader_defs.push("FLORA_DETAIL".into());
+    }
+    if !key.leaf {
         return Ok(());
     }
     descriptor.vertex.shader_defs.push("FLORA_LEAF".into());
@@ -310,13 +342,56 @@ pub(crate) fn flora_base(color: Color) -> StandardMaterial {
     }
 }
 
-pub(crate) fn flora_material(
-    color: Color,
-    flora: FloraUniform,
-    leaf: bool,
-    wind: &FloraWindBuffer,
-) -> FloraMaterial {
-    FloraMaterial { base: flora_base(color), extension: FloraExtension { flora, wind: wind.0.clone(), leaf } }
+/// What a flora material is made of, besides the wind: its base colour, the uniform the shaders
+/// read, whether it is for leaves, and the bark it wears. Two trees with equal surfaces share a
+/// material ([`SharedFlora`]).
+#[derive(Clone, Debug)]
+pub(crate) struct Surface {
+    /// The material's base colour: for scanned wood the preset colour over the scan's average.
+    pub color: Color,
+    /// What the flora shaders read.
+    pub uniform: FloraUniform,
+    /// Leaves rather than wood.
+    pub leaf: bool,
+    /// The bark scan wood wears, with its images.
+    pub bark: Option<BarkTexture>,
+}
+
+impl Surface {
+    /// The wood of a tree with `params`, wearing `bark` when it is given.
+    pub(crate) fn wood(params: &TreeParams, bark: Option<BarkTexture>) -> Self {
+        let mut uniform = FloraUniform::new(params).wood();
+        if let Some(bark) = &bark {
+            uniform.bark = Vec4::new(params.bark.smooth_below, params.bark.fissured_above, 0.0, 0.0);
+            uniform.bark_mean = Vec4::new(bark.mean.red, bark.mean.green, bark.mean.blue, 0.0);
+        }
+        let color = bark.as_ref().map_or(params.trunk_color, |bark| bark.base_color(params.trunk_color));
+        Self { color, uniform, leaf: false, bark }
+    }
+
+    /// The leaves of a tree with `params`.
+    pub(crate) fn leaves(params: &TreeParams) -> Self {
+        Self { color: params.foliage.color, uniform: FloraUniform::new(params), leaf: true, bark: None }
+    }
+
+    /// The colour and normal maps the material binds, if it has them.
+    pub(crate) fn detail(&self) -> (Option<Handle<Image>>, Option<Handle<Image>>) {
+        (self.bark.as_ref().map(|bark| bark.color.clone()), self.bark.as_ref().map(|bark| bark.normal.clone()))
+    }
+}
+
+pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> FloraMaterial {
+    let (detail_color, detail_normal) = surface.detail();
+    FloraMaterial {
+        base: flora_base(surface.color),
+        extension: FloraExtension {
+            flora: surface.uniform,
+            wind: wind.0.clone(),
+            leaf: surface.leaf,
+            detail_color,
+            detail_normal,
+        },
+    }
 }
 
 /// Whether [`FloraMaterial`] can be drawn: the plugin was added after the renderer's plugins
@@ -398,7 +473,11 @@ pub(crate) fn sync_wind(
 /// this registers nothing that needs them; [`finish`] covers the asset types, and trees are drawn
 /// with plain materials.
 pub(crate) fn build(app: &mut App) {
-    app.init_resource::<FloraWind>().init_resource::<SharedFlora>().register_type::<FloraWind>().register_type::<GustFront>();
+    app.init_resource::<FloraWind>()
+        .init_resource::<SharedFlora>()
+        .init_resource::<FloraTextures>()
+        .register_type::<FloraWind>()
+        .register_type::<GustFront>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         add_shaders(app);
         app.add_plugins(MaterialPlugin::<FloraMaterial>::default()).insert_resource(FloraSupportPending);

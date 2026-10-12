@@ -2,6 +2,7 @@
 
 use bevy::app::App;
 use bevy::asset::{Asset, Handle};
+use bevy::image::Image;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, StandardMaterial};
 use bevy::reflect::Reflect;
@@ -10,7 +11,7 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 use super::{ATTRIBUTE_GROWTH_AXIS, ATTRIBUTE_GROWTH_ID, ATTRIBUTE_GROWTH_OFFSET};
-use crate::shading::{FloraKey, FloraUniform, specialize_flora};
+use crate::shading::{FloraKey, FloraUniform, FloraWindBuffer, Surface, flora_base, specialize_flora};
 
 /// [`StandardMaterial`] with the vertex stage of a tree that grows on the GPU, and the leaf
 /// shading and wind of [`FloraMaterial`](crate::FloraMaterial). The wood and leaves of a tree
@@ -36,11 +37,40 @@ pub struct GrowthExtension {
     /// Leaves get the leaf surface, the light through the leaf and the flutter; wood only bends.
     /// See [`FloraExtension::leaf`](crate::FloraExtension::leaf).
     pub leaf: bool,
+    /// The colour map of the surface's detail (bark); see
+    /// [`FloraExtension::detail_color`](crate::FloraExtension::detail_color).
+    #[texture(103)]
+    #[sampler(105)]
+    pub detail_color: Option<Handle<Image>>,
+    /// The normal map of the surface's detail; see
+    /// [`FloraExtension::detail_normal`](crate::FloraExtension::detail_normal).
+    #[texture(104)]
+    pub detail_normal: Option<Handle<Image>>,
 }
 
 impl From<&GrowthExtension> for FloraKey {
     fn from(extension: &GrowthExtension) -> Self {
-        Self { leaf: extension.leaf }
+        Self { leaf: extension.leaf, detail: extension.detail_color.is_some() && extension.detail_normal.is_some() }
+    }
+}
+
+/// The material of a growing tree's wood or leaves: `surface` on the tree's node buffer.
+pub(crate) fn growth_material(
+    nodes: &Handle<ShaderBuffer>,
+    surface: &Surface,
+    wind: &FloraWindBuffer,
+) -> GrowthMaterial {
+    let (detail_color, detail_normal) = surface.detail();
+    GrowthMaterial {
+        base: flora_base(surface.color),
+        extension: GrowthExtension {
+            nodes: nodes.clone(),
+            flora: surface.uniform,
+            wind: wind.0.clone(),
+            leaf: surface.leaf,
+            detail_color,
+            detail_normal,
+        },
     }
 }
 
@@ -74,7 +104,7 @@ impl MaterialExtension for GrowthExtension {
         ])?;
         descriptor.vertex.buffers[0].attributes.extend(growth.attributes);
         // A leaf's flutter attribute goes after them (location 11).
-        specialize_flora(descriptor, layout, key.bind_group_data.leaf)
+        specialize_flora(descriptor, layout, key.bind_group_data)
     }
 }
 

@@ -1,13 +1,56 @@
 //! Branch tube mesher, trunk collars, the pipe-radius model, and the whole-skeleton wood mesh.
 
-use bevy::math::Vec3;
+use bevy::math::{Vec2, Vec3};
 
 use super::MeshData;
-use super::rings::{RingBasis, connect_rings, emit_cap, emit_ring};
+use super::rings::{RingBasis, RingUv, connect_rings, emit_cap, emit_ring, mature_size, u_tiles_around};
 use super::smoothing::laplacian_smooth;
 use super::trunk::{TrunkPieces, trunk_mesh_with, trunk_pieces};
-use crate::params::TreeParams;
+use crate::params::{BarkScan, TreeParams};
 use crate::skeleton::{Node, NodeKind, Skeleton};
+
+/// The bark scan's tile size in metres for `params`: that of its scan, `1 x 1` without one.
+pub(crate) fn bark_tile(params: &TreeParams) -> Vec2 {
+    params.bark.scan.map_or(Vec2::ONE, BarkScan::tile_size)
+}
+
+/// Where a node's wood sits in its bark scan's tile space. Lengths and radii are the *mature*
+/// ones (the aged values over their progress), so a growing node's texture coordinates never
+/// change and the aged mesh agrees with the mature mesh GPU growth shrinks.
+#[derive(Clone, Copy, Debug)]
+struct BarkLayout {
+    /// Size of the scan's tile in metres.
+    tile: Vec2,
+    /// Whole tiles around every ring of the node.
+    u_tiles: f32,
+    /// How grown the node's radius is.
+    radius_progress: f32,
+}
+
+impl BarkLayout {
+    /// The layout of `node`'s wood.
+    fn new(node: &Node, tile: Vec2) -> Self {
+        let radius_progress = node.radius_progress;
+        let u_tiles = u_tiles_around(mature_size(node.base_radius, radius_progress), tile.x);
+        Self { tile, u_tiles, radius_progress }
+    }
+
+    /// The layout of fully grown wood of `radius` metres.
+    fn fully_grown(radius: f32, tile: Vec2) -> Self {
+        Self { tile, u_tiles: u_tiles_around(radius, tile.x), radius_progress: 1.0 }
+    }
+
+    /// A ring `along` metres (of the fully grown wood) from the start of the node's wood.
+    fn ring(self, along: f32) -> RingUv {
+        RingUv { v: along / self.tile.y, u_tiles: self.u_tiles }
+    }
+
+    /// How far a cap of (aged) `radius` reaches from the middle of its disc, in tiles.
+    fn cap(self, radius: f32) -> Vec2 {
+        let mature = mature_size(radius, self.radius_progress);
+        Vec2::new(mature / self.tile.x, mature / self.tile.y)
+    }
+}
 
 /// Wood at or below this height is the trunk's base on the ground.
 const GROUND_EPSILON: f32 = 1.0e-4;
@@ -25,9 +68,9 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 /// coincides with the base ring of a tube or collar starting at `base` along
 /// `axis`. Extends that wood back into the trunk; empty when `root` is not
 /// behind `base` along `axis`.
-pub fn root_segment(root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
+pub fn root_segment(root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f32, tile: Vec2) -> MeshData {
     let mut mesh = MeshData::default();
-    append_root_segment(&mut mesh, root, base, axis, segments, radius);
+    append_root_segment(&mut mesh, root, base, axis, segments, radius, BarkLayout::fully_grown(radius, tile));
     mesh
 }
 
@@ -38,21 +81,29 @@ pub(crate) fn root_segment_emitted(root: Vec3, base: Vec3, axis: Vec3) -> bool {
 }
 
 /// [`root_segment`], appended to `mesh`.
-fn append_root_segment(mesh: &mut MeshData, root: Vec3, base: Vec3, axis: Vec3, segments: u32, radius: f32) {
+fn append_root_segment(
+    mesh: &mut MeshData,
+    root: Vec3,
+    base: Vec3,
+    axis: Vec3,
+    segments: u32,
+    radius: f32,
+    layout: BarkLayout,
+) {
     if root_segment_emitted(root, base, axis) {
         let basis = RingBasis::from_axis(axis);
         let segments = segments.max(3);
-        let a = emit_ring(mesh, root, basis, segments, 0.0, 0.0, |_, _| radius);
-        let b = emit_ring(mesh, base, basis, segments, 0.0, 0.0, |_, _| radius);
+        let a = emit_ring(mesh, root, basis, segments, 0.0, layout.ring(0.0), |_, _| radius);
+        let b = emit_ring(mesh, base, basis, segments, 0.0, layout.ring(0.0), |_, _| radius);
         connect_rings(mesh, a, b, segments);
     }
 }
 
 /// Tapered tube along `node`'s (possibly bent) axis with optional twist,
 /// capped at the tip.
-pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32) -> MeshData {
+pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32, tile: Vec2) -> MeshData {
     let mut mesh = MeshData::default();
-    append_tube(&mut mesh, node, radial_segments, twist_deg, u32::MAX);
+    append_tube(&mut mesh, node, radial_segments, twist_deg, u32::MAX, tile);
     mesh
 }
 
@@ -65,11 +116,13 @@ pub(crate) fn tube_rings(node: &Node, twist_deg: f32) -> u32 {
 /// [`tube_mesh`], appended to `mesh`. A tube with more than `max_rings` rings
 /// keeps `max_rings` of them, spread along the axis and including both ends, so
 /// every ring still lies on the full-resolution axis.
-fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg: f32, max_rings: u32) {
+fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg: f32, max_rings: u32, tile: Vec2) {
     let segments = radial_segments.max(3);
     let full = tube_rings(node, twist_deg);
     let rings = full.min(max_rings.max(2));
     let axis = node.axis(full);
+    let layout = BarkLayout::new(node, tile);
+    let mature_length = mature_size(node.length, node.progress);
 
     let mut prev_ring = None;
     for k in 0..rings {
@@ -80,7 +133,7 @@ fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg
         let radius = lerp(node.base_radius, node.tip_radius, t);
         let twist = (t * twist_deg).to_radians();
         let basis = RingBasis::from_axis(dir);
-        let ring = emit_ring(mesh, center, basis, segments, twist, t, |_, _| radius);
+        let ring = emit_ring(mesh, center, basis, segments, twist, layout.ring(t * mature_length), |_, _| radius);
         if let Some(prev) = prev_ring {
             connect_rings(mesh, prev, ring, segments);
         }
@@ -95,6 +148,7 @@ fn append_tube(mesh: &mut MeshData, node: &Node, radial_segments: u32, twist_deg
         segments,
         twist_deg.to_radians(),
         end_dir,
+        layout.cap(node.tip_radius),
         |_, _| node.tip_radius,
     );
 }
@@ -110,9 +164,9 @@ const COLLAR_FLARE: f32 = 1.3;
 /// Flared cone blending primary `node` into the trunk surface. It ends half
 /// a `collar_length` along the branch (at most at its tip) with the tube's
 /// own radius there, so it never stands proud of a tapering branch.
-pub fn collar_mesh(node: &Node, collar_length: f32, radial_segments: u32) -> MeshData {
+pub fn collar_mesh(node: &Node, collar_length: f32, radial_segments: u32, tile: Vec2) -> MeshData {
     let mut mesh = MeshData::default();
-    append_collar(&mut mesh, node, collar_length, radial_segments);
+    append_collar(&mut mesh, node, collar_length, radial_segments, tile);
     mesh
 }
 
@@ -141,11 +195,16 @@ pub(crate) fn collar_geometry(node: &Node, collar_length: f32) -> CollarGeometry
 }
 
 /// [`collar_mesh`], appended to `mesh`.
-fn append_collar(mesh: &mut MeshData, node: &Node, collar_length: f32, radial_segments: u32) {
+fn append_collar(mesh: &mut MeshData, node: &Node, collar_length: f32, radial_segments: u32, tile: Vec2) {
     let segments = radial_segments.max(3);
     let rings = 3u32;
     let basis = RingBasis::from_axis(node.direction);
     let collar = collar_geometry(node, collar_length);
+    // Where the collar's ends lie along the fully grown branch, so its bark carries on the
+    // tube's (the same `u_tiles`, and `v` by distance along the branch).
+    let layout = BarkLayout::new(node, tile);
+    let mature_collar = mature_size(collar_length, node.radius_progress);
+    let (from, to) = (-0.1 * mature_collar, (0.5 * mature_collar).min(mature_size(node.length, node.progress)));
 
     let mut prev_ring = None;
     for k in 0..rings {
@@ -153,7 +212,7 @@ fn append_collar(mesh: &mut MeshData, node: &Node, collar_length: f32, radial_se
         let center = collar.start.lerp(collar.end, t);
         let smooth_t = t * t * (3.0 - 2.0 * t);
         let radius = lerp(collar.start_radius, collar.end_radius, smooth_t);
-        let ring = emit_ring(mesh, center, basis, segments, 0.0, t, |_, _| radius);
+        let ring = emit_ring(mesh, center, basis, segments, 0.0, layout.ring(lerp(from, to, t)), |_, _| radius);
         if let Some(prev) = prev_ring {
             connect_rings(mesh, prev, ring, segments);
         }
@@ -258,14 +317,22 @@ pub(crate) fn primary_root(node: &Node) -> Option<Vec3> {
 /// collar's and nothing shows a flat cut. With `flat_end` a steep branch is
 /// closed with a flat disc instead of the rounded end: a few triangles, for the
 /// coarse levels of detail, where the knot is too small to see.
-fn append_primary_base(mesh: &mut MeshData, node: &Node, at: Vec3, radius: f32, segments: u32, flat_end: bool) {
+fn append_primary_base(
+    mesh: &mut MeshData,
+    node: &Node,
+    at: Vec3,
+    radius: f32,
+    segments: u32,
+    flat_end: bool,
+    layout: BarkLayout,
+) {
     match primary_root(node) {
-        Some(root) => append_root_segment(mesh, root, at, node.direction, segments, radius),
+        Some(root) => append_root_segment(mesh, root, at, node.direction, segments, radius, layout),
         None if flat_end => {
             let basis = RingBasis::from_axis(node.direction);
-            emit_cap(mesh, at, basis, segments.max(3), 0.0, -node.direction, |_, _| radius);
+            emit_cap(mesh, at, basis, segments.max(3), 0.0, -node.direction, layout.cap(radius), |_, _| radius);
         }
-        None => append_root_dome(mesh, at, node.direction, segments, radius),
+        None => append_root_dome(mesh, at, node.direction, segments, radius, layout),
     }
 }
 
@@ -275,7 +342,7 @@ fn append_primary_base(mesh: &mut MeshData, node: &Node, at: Vec3, radius: f32, 
 /// (`segments` sides) coincides with the tube's base ring; the four rings
 /// behind it have twice the sides, so the knot is rounder than the (often
 /// hexagonal) tube it ends. About a hemisphere.
-fn append_root_dome(mesh: &mut MeshData, base: Vec3, axis: Vec3, segments: u32, radius: f32) {
+fn append_root_dome(mesh: &mut MeshData, base: Vec3, axis: Vec3, segments: u32, radius: f32, layout: BarkLayout) {
     let basis = RingBasis::from_axis(axis);
     let segments = segments.max(3);
     let round = segments * 2;
@@ -283,14 +350,14 @@ fn append_root_dome(mesh: &mut MeshData, base: Vec3, axis: Vec3, segments: u32, 
     let ring_at = |mesh: &mut MeshData, latitude: f32, sides: u32| -> u32 {
         let (sin, cos) = latitude.to_radians().sin_cos();
         let first = mesh.positions.len();
-        let ring = emit_ring(mesh, base - axis * (radius * sin), basis, sides, 0.0, 0.0, |_, _| radius * cos);
+        let ring = emit_ring(mesh, base - axis * (radius * sin), basis, sides, 0.0, layout.ring(0.0), |_, _| radius * cos);
         for normal in &mut mesh.normals[first..] {
             *normal = (*normal * cos - axis * sin).normalize_or_zero();
         }
         ring
     };
     let (sin, cos) = latitudes[0].to_radians().sin_cos();
-    emit_cap(mesh, base - axis * (radius * sin), basis, round, 0.0, -axis, |_, _| radius * cos);
+    emit_cap(mesh, base - axis * (radius * sin), basis, round, 0.0, -axis, layout.cap(radius), |_, _| radius * cos);
     let mut back = None;
     for latitude in latitudes {
         let ring = ring_at(mesh, latitude, round);
@@ -411,7 +478,8 @@ fn skeleton_mesh_inner(
     coarse: Option<Coarseness>,
 ) -> MeshData {
     let b = &params.branches;
-    let mut mesh = trunk_mesh_with(&params.trunk, &skeleton.nodes[0], params.seed, trunk);
+    let tile = bark_tile(params);
+    let mut mesh = trunk_mesh_with(&params.trunk, &skeleton.nodes[0], params.seed, trunk, tile);
     let recording = spans.is_some();
     record(
         &mut spans,
@@ -433,7 +501,15 @@ fn skeleton_mesh_inner(
         };
         if node.kind == NodeKind::Primary {
             let first = roots.positions.len();
-            append_primary_base(&mut roots, node, node.start, node.base_radius, segments, coarse.is_some());
+            append_primary_base(
+                &mut roots,
+                node,
+                node.start,
+                node.base_radius,
+                segments,
+                coarse.is_some(),
+                BarkLayout::new(node, tile),
+            );
             if recording {
                 root_spans.push(base_span(index, node, false, first, roots.positions.len(), segments));
             }
@@ -442,7 +518,7 @@ fn skeleton_mesh_inner(
                 // Same sides as the tube it wraps.
                 let collar_segments = segments;
                 let first = mesh.positions.len();
-                append_collar(&mut mesh, node, collar_length, collar_segments);
+                append_collar(&mut mesh, node, collar_length, collar_segments, tile);
                 record(
                     &mut spans,
                     WoodSpan {
@@ -461,6 +537,7 @@ fn skeleton_mesh_inner(
                     node.base_radius * COLLAR_FLARE,
                     collar_segments,
                     coarse.is_some(),
+                    BarkLayout::new(node, tile),
                 );
                 if recording {
                     root_spans.push(base_span(index, node, true, first, roots.positions.len(), collar_segments));
@@ -468,7 +545,7 @@ fn skeleton_mesh_inner(
             }
         }
         let first = mesh.positions.len();
-        append_tube(&mut mesh, node, segments, b.twist, coarse.map_or(u32::MAX, |c| c.rings));
+        append_tube(&mut mesh, node, segments, b.twist, coarse.map_or(u32::MAX, |c| c.rings), tile);
         record(
             &mut spans,
             WoodSpan {
@@ -575,14 +652,41 @@ mod tests {
 
     fn primary_base(node: &Node, at: Vec3, radius: f32, segments: u32) -> MeshData {
         let mut mesh = MeshData::default();
-        append_primary_base(&mut mesh, node, at, radius, segments, false);
+        append_primary_base(&mut mesh, node, at, radius, segments, false, BarkLayout::new(node, Vec2::ONE));
         mesh
     }
 
     fn root_dome(base: Vec3, axis: Vec3, segments: u32, radius: f32) -> MeshData {
         let mut mesh = MeshData::default();
-        append_root_dome(&mut mesh, base, axis, segments, radius);
+        append_root_dome(&mut mesh, base, axis, segments, radius, BarkLayout::fully_grown(radius, Vec2::ONE));
         mesh
+    }
+
+    #[test]
+    fn bark_coordinates_are_metric_whole_tiles_around_and_anchored_to_the_mature_node() {
+        let params = TreePreset::Oak.params();
+        let tile = BarkScan::Oak.tile_size();
+        let full = generate_skeleton(&params);
+        let aged = full.aged(3.0, &params.growth);
+        let segments = 6usize;
+        let mut checked = 0;
+        for node in aged.nodes.iter().skip(1).filter(|n| n.kind == NodeKind::Primary && n.progress > 0.05) {
+            let mature = &full.nodes[node.id as usize];
+            let mesh = tube_mesh(node, segments as u32, params.branches.twist, tile);
+            let rings = tube_rings(node, params.branches.twist) as usize;
+            let u_tiles = u_tiles_around(mature.base_radius, tile.x);
+            for ring in 0..rings {
+                let vertices = &mesh.uvs[ring * (segments + 1)..][..segments + 1];
+                // Metres of the fully grown branch over the tile's length, whatever the age.
+                let v = ring as f32 / (rings - 1) as f32 * mature.length / tile.y;
+                assert!(vertices.iter().all(|uv| (uv.y - v).abs() < 1e-3), "node {} ring {ring}", node.id);
+                // Whole tiles around, so the seam is invisible.
+                assert_eq!((vertices[0].x, vertices[segments].x), (0.0, u_tiles), "node {} ring {ring}", node.id);
+            }
+            assert!(u_tiles >= 1.0 && u_tiles.fract() == 0.0);
+            checked += 1;
+        }
+        assert!(checked > 5, "only {checked} primaries were aged enough to check");
     }
 
     #[test]
@@ -607,10 +711,10 @@ mod tests {
             .find(|n| n.kind == NodeKind::Primary)
             .unwrap();
         assert!(node.bend > 0.0);
-        let tube = tube_mesh(node, 6, 45.0);
+        let tube = tube_mesh(node, 6, 45.0, Vec2::ONE);
         assert_indices_valid(&tube, "tube");
         assert_faces_outward(&tube, "tube");
-        let collar = collar_mesh(node, 0.3, 5);
+        let collar = collar_mesh(node, 0.3, 5, Vec2::ONE);
         assert_indices_valid(&collar, "collar");
         assert_faces_outward(&collar, "collar");
         let root = primary_base(node, node.start, node.base_radius, 6);
@@ -631,7 +735,7 @@ mod tests {
                 }
                 let skeleton = generate_skeleton(&params);
                 for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary && n.length > 1e-4) {
-                    let collar = collar_mesh(node, node.base_radius * params.mesh.collar_length, 6);
+                    let collar = collar_mesh(node, node.base_radius * params.mesh.collar_length, 6, Vec2::ONE);
                     let end_ring = &collar.positions[collar.positions.len() - 7..];
                     let axis: Vec<Vec3> = node.axis(node.axis_points()).into_iter().map(|(c, _)| c).collect();
                     for &p in end_ring {
@@ -685,7 +789,7 @@ mod tests {
             let params = preset.params();
             let skeleton = generate_skeleton(&params);
             for node in skeleton.nodes.iter().filter(|n| n.kind == NodeKind::Primary) {
-                let mut wood = tube_mesh(node, 4, params.branches.twist);
+                let mut wood = tube_mesh(node, 4, params.branches.twist, Vec2::ONE);
                 wood.extend(&primary_base(node, node.start, node.base_radius, 4));
                 assert_faces_outward(&wood, preset.name());
                 for p in open_boundary_vertices(&wood) {
@@ -710,7 +814,7 @@ mod tests {
                     continue;
                 }
                 steep += 1;
-                let mut wood = tube_mesh(node, 6, params.branches.twist);
+                let mut wood = tube_mesh(node, 6, params.branches.twist, Vec2::ONE);
                 wood.extend(&primary_base(node, node.start, node.base_radius, 6));
                 assert_faces_outward(&wood, preset.name());
                 assert!(

@@ -5,6 +5,7 @@
 //! `TreeParams` values.
 
 use bevy::color::Color;
+use bevy::math::Vec2;
 use bevy::reflect::Reflect;
 
 pub use crate::crown::CrownShape;
@@ -439,6 +440,103 @@ impl Default for WindResponse {
     }
 }
 
+/// A bundled, CC0-licensed bark scan (colour and normal map) trunks and branches can wear: see
+/// [`BarkParams`]. Without the crate's `textures` feature every scan is absent and wood is plain
+/// colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum BarkScan {
+    /// Deeply furrowed oak (Poly Haven `jolcham_oak_bark_01`).
+    Oak,
+    /// Plated pine (Poly Haven `pine_bark`).
+    Pine,
+    /// Rough willow (Poly Haven `bark_willow`).
+    Willow,
+    /// Pale birch (ambientCG `Bark004`).
+    Birch,
+    /// Ringed palm (Poly Haven `palm_bark`).
+    Palm,
+    /// Stringy Japanese cedar (Poly Haven `japanese_cedar_bark`).
+    Cedar,
+    /// Japanese zelkova (Poly Haven `japanese_zelkova_bark`).
+    Zelkova,
+    /// Trident maple (Poly Haven `trident_maple_bark`).
+    Maple,
+    /// Knotted pine (Poly Haven `knotted_pine_bark`).
+    KnottedPine,
+    /// Cherry (Poly Haven `sakura_bark`).
+    Sakura,
+    /// A palm tree's fibrous bark (Poly Haven `palm_tree_bark`).
+    PalmTree,
+    /// Chinese hackberry (Poly Haven `chinese_hackberry_bark`).
+    Hackberry,
+    /// Brown weathered bark (Poly Haven `bark_brown_02`).
+    Brown,
+    /// Dawn redwood (Poly Haven `metasequoia_bark`).
+    Metasequoia,
+}
+
+impl BarkScan {
+    /// Every scan.
+    pub const ALL: [BarkScan; 14] = [
+        BarkScan::Oak,
+        BarkScan::Pine,
+        BarkScan::Willow,
+        BarkScan::Birch,
+        BarkScan::Palm,
+        BarkScan::Cedar,
+        BarkScan::Zelkova,
+        BarkScan::Maple,
+        BarkScan::KnottedPine,
+        BarkScan::Sakura,
+        BarkScan::PalmTree,
+        BarkScan::Hackberry,
+        BarkScan::Brown,
+        BarkScan::Metasequoia,
+    ];
+
+    /// The real size of the scan's tile in metres (across, along): the wood's texture
+    /// coordinates are in tiles, so bark features keep their real-world size on any branch.
+    pub fn tile_size(self) -> Vec2 {
+        match self {
+            BarkScan::Oak | BarkScan::Cedar => Vec2::new(1.0, 2.0),
+            BarkScan::Pine => Vec2::new(2.0, 2.0),
+            BarkScan::Willow | BarkScan::Birch | BarkScan::Brown => Vec2::ONE,
+            BarkScan::Palm => Vec2::splat(1.86),
+            BarkScan::Zelkova | BarkScan::Maple => Vec2::splat(1.8),
+            BarkScan::Hackberry => Vec2::new(1.8, 3.6),
+            BarkScan::KnottedPine => Vec2::splat(1.7),
+            BarkScan::Sakura => Vec2::splat(1.6),
+            BarkScan::PalmTree => Vec2::new(1.3, 2.6),
+            BarkScan::Metasequoia => Vec2::splat(1.94),
+        }
+    }
+}
+
+/// The bark a tree's wood wears, and how it follows the wood's growth.
+///
+/// The scan is laid out in metres, anchored to the *mature* tree, so a growing tree's bark does
+/// not slide as it lengthens and thickens. Young wood is smooth (the scan's average colour, no
+/// relief); as a branch's radius passes `smooth_below` the fissures fade in, and above
+/// `fissured_above` the whole scan shows. The scan's average colour is divided out of the
+/// wood's base colour, so a textured tree has the same colour as an untextured one from afar.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BarkParams {
+    /// The scan to wear, or `None` for plain colour.
+    pub scan: Option<BarkScan>,
+    /// Wood thinner than this radius, in metres, is smooth.
+    pub smooth_below: f32,
+    /// Wood thicker than this radius, in metres, shows the full scan (smoothstep in between).
+    pub fissured_above: f32,
+}
+
+impl Default for BarkParams {
+    fn default() -> Self {
+        Self { scan: None, smooth_below: 0.03, fissured_above: 0.15 }
+    }
+}
+
 /// Complete description of a tree.
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -461,6 +559,8 @@ pub struct TreeParams {
     pub wind: WindResponse,
     /// Trunk and branch color.
     pub trunk_color: Color,
+    /// Surface detail of the wood: a bundled bark scan that fades in as a branch thickens.
+    pub bark: BarkParams,
 }
 
 impl Default for TreeParams {
@@ -475,6 +575,7 @@ impl Default for TreeParams {
             growth: GrowthParams::default(),
             wind: WindResponse::default(),
             trunk_color: Color::srgb(0.545, 0.271, 0.075),
+            bark: BarkParams::default(),
         }
     }
 }

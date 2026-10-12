@@ -15,6 +15,9 @@ import bevy_pbr::{
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
+@if(FLORA_DETAIL && !FLORA_LEAF)
+import package::shading::common::bark_surface;
+
 @if(FLORA_LEAF)
 import package::shading::common::{leaf_surface, leaf_transmission};
 
@@ -35,6 +38,9 @@ fn fragment(
         pbr_input.material.alpha_cutoff,
         pbr_input.material.base_color
     );
+
+@if(FLORA_DETAIL && !FLORA_LEAF)
+    bark_surface(&pbr_input, in.uv, in.uv_b.x);
 
 @if(FLORA_LEAF)
     leaf_surface(&pbr_input, in.uv, in.uv_b);

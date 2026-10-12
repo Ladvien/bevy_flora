@@ -7,7 +7,7 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::render::renderer::RenderDevice;
 use bevy::render::storage::ShaderBuffer;
 
-use super::material::{GrowthExtension, GrowthMaterial};
+use super::material::{GrowthMaterial, growth_material};
 use super::mesh::build_growth_data;
 use super::state::GrowthState;
 use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
@@ -16,7 +16,7 @@ use crate::plugin::{
     Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, build_in_batches,
     replace_mesh,
 };
-use crate::shading::{FloraUniform, FloraWindBuffer, flora_base};
+use crate::shading::{BarkLibrary, FloraWindBuffer, Surface};
 use crate::skeleton::generate_skeleton;
 
 /// What a tree that grows on the GPU draws with.
@@ -106,19 +106,20 @@ fn state_buffer(state: &GrowthState) -> ShaderBuffer {
     ShaderBuffer::from(data)
 }
 
-/// Bring a material's base colour and flora uniform up to date, marking it modified only when
-/// one differs.
-fn sync_growth(
-    materials: &mut Assets<GrowthMaterial>,
-    handle: &Handle<GrowthMaterial>,
-    color: bevy::color::Color,
-    flora: FloraUniform,
-) {
+/// Bring a material's base colour, flora uniform and detail textures up to date, marking it
+/// modified only when one differs.
+fn sync_growth(materials: &mut Assets<GrowthMaterial>, handle: &Handle<GrowthMaterial>, surface: &Surface) {
+    let (detail_color, detail_normal) = surface.detail();
     if let Some(mut material) = materials.get_mut(handle)
-        && (material.base.base_color != color || material.extension.flora != flora)
+        && (material.base.base_color != surface.color
+            || material.extension.flora != surface.uniform
+            || material.extension.detail_color != detail_color
+            || material.extension.detail_normal != detail_normal)
     {
-        material.base.base_color = color;
-        material.extension.flora = flora;
+        material.base.base_color = surface.color;
+        material.extension.flora = surface.uniform;
+        material.extension.detail_color = detail_color;
+        material.extension.detail_normal = detail_normal;
     }
 }
 
@@ -131,6 +132,7 @@ pub(crate) fn rebuild_gpu_trees(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     support: Res<GpuGrowthSupport>,
     wind: Res<FloraWindBuffer>,
+    mut bark: BarkLibrary,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
@@ -194,9 +196,9 @@ pub(crate) fn rebuild_gpu_trees(
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
                 }
-                let uniform = FloraUniform::new(params);
-                sync_growth(&mut materials, &paint.trunk, params.trunk_color, uniform.wood());
-                sync_growth(&mut materials, &paint.foliage, params.foliage.color, uniform);
+                let wood_bark = bark.of(params);
+                sync_growth(&mut materials, &paint.trunk, &Surface::wood(params, wood_bark));
+                sync_growth(&mut materials, &paint.foliage, &Surface::leaves(params));
                 match (&mut render.foliage, leaves) {
                     (Some((child, handle)), Some(leaves)) => {
                         replace_mesh(&mut commands, &mut meshes, *child, handle, leaves);
@@ -226,15 +228,8 @@ pub(crate) fn rebuild_gpu_trees(
                 progress = state.trunk_progress;
                 let nodes = buffers.add(state_buffer(&state));
 
-                let uniform = FloraUniform::new(params);
-                let trunk_material = materials.add(GrowthMaterial {
-                    base: flora_base(params.trunk_color),
-                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform.wood(), wind: wind.0.clone(), leaf: false },
-                });
-                let foliage_material = materials.add(GrowthMaterial {
-                    base: flora_base(params.foliage.color),
-                    extension: GrowthExtension { nodes: nodes.clone(), flora: uniform, wind: wind.0.clone(), leaf: true },
-                });
+                let trunk_material = materials.add(growth_material(&nodes, &Surface::wood(params, bark.of(params)), &wind));
+                let foliage_material = materials.add(growth_material(&nodes, &Surface::leaves(params), &wind));
                 let trunk_mesh = meshes.add(wood);
                 let trunk = commands
                     .spawn((

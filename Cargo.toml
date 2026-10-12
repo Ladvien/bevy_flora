@@ -1,11 +1,11 @@
 [package]
 name = "bevy_flora"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 # Bevy 0.20's own crates declare 1.97.1, and this crate cannot compile without
 # them, so claiming less would be a floor nothing can stand on.
 rust-version = "1.97.1"
-description = "Parametric, stylized procedural trees for Bevy that grow over time: 15 presets, bent and forking branches, leaf styles, deterministic per seed."
+description = "Parametric, stylized procedural trees for Bevy that grow over time: 15 presets, bent and forking branches, CC0 bark scans, leaf styles, deterministic per seed."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Ladvien/bevy_flora"
 documentation = "https://docs.rs/bevy_flora"
@@ -16,8 +16,8 @@ authors = ["C. Thomas Brittain <cthomasbrittain@hotmail.com>"]
 keywords = ["bevy", "procedural", "tree", "vegetation", "gamedev"]
 categories = ["game-development", "graphics", "rendering"]
 # The package is the library and its examples. `qa/` (the visual QA log),
-# `slop/` (old design notes), `docs/` (README media, served from GitHub) and the
-# agent guide stay in the repository only.
+# `slop/` (old design notes), `docs/` (README media, served from GitHub), `tools/`
+# (the texture preparation script) and the agent guide stay in the repository only.
 include = [
     "src/**/*",
     "examples/**/*",
@@ -33,11 +33,14 @@ include = [
 all-features = true
 
 [dependencies]
-bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset", "bevy_color", "bevy_log", "bevy_mesh", "bevy_pbr"] }
+bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset", "bevy_color", "bevy_log", "bevy_mesh", "bevy_pbr", "jpeg"] }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]
-default = []
+default = ["textures"]
+# The bundled CC0 bark scans (and, later, leaf scans): about 3 MB of JPEG compiled into the
+# crate. Without it every scan is absent and wood and leaves are plain colour.
+textures = []
 serde = ["dep:serde"]
 
 [dev-dependencies]

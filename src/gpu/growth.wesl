@@ -8,7 +8,7 @@ import bevy_pbr::render::{
     view_transformations::position_world_to_clip,
     mesh_view_bindings::globals,
 };
-import package::gpu::growth_common::{GrowthAttrs, grown_position, leaf_growth_scale};
+import package::gpu::growth_common::{GrowthAttrs, grown_position, grown_wood_radius, leaf_growth_scale};
 import package::shading::common::{flutter_offset, wind_bend};
 
 @vertex
@@ -46,6 +46,11 @@ fn vertex(
 
 @if(VERTEX_UVS_B)
     out.uv_b = vertex.uv_b;
+
+    // Wood's second UV carries the vertex's radius (the bark fades in with it): the mesh holds the
+    // mature one, so the growing radius replaces it.
+@if(VERTEX_UVS_B && !FLORA_LEAF)
+    out.uv_b = vec2<f32>(grown_wood_radius(growth_attrs), vertex.uv_b.y);
 
 @if(VERTEX_COLORS)
     out.color = vertex.color;

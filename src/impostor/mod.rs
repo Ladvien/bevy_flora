@@ -52,7 +52,7 @@ pub const IMPOSTOR_VIEWS: u32 = 8;
 /// Width and height of one baked view, in pixels.
 pub(crate) const TILE_PIXELS: u32 = 256;
 /// Levels of the atlas's mip chain; the smallest has tiles of 8 pixels.
-const MIP_LEVELS: u32 = 6;
+pub(crate) const MIP_LEVELS: u32 = 6;
 /// How far above the horizon the baking camera looks, in degrees.
 const ELEVATION_DEGREES: f32 = 10.0;
 /// Margin around the tree in a view, as a share of its size on each side.
@@ -231,7 +231,7 @@ pub(crate) fn with_mip_chain(base: &[u8], width: u32, height: u32) -> Vec<u8> {
     chain
 }
 
-fn srgb_to_linear(byte: u8) -> f32 {
+pub(crate) fn srgb_to_linear(byte: u8) -> f32 {
     let c = f32::from(byte) / 255.0;
     if c <= 0.04045 {
         c / 12.92
