@@ -29,7 +29,7 @@ bevy_flora = "0.9"
 
 | feature | default | what it does |
 |---|---|---|
-| `textures` | yes | The bundled CC0 bark and leaf scans (about 3.7 MB of JPEG compiled into the crate). Without it every scan is absent: wood is plain colour and leaves keep their procedural outline |
+| `textures` | yes | The bundled CC0 bark and leaf scans (about 3.6 MB of JPEG compiled into the crate). Without it every scan is absent: wood is plain colour and leaves keep their procedural outline |
 | `serde` | — | `Serialize` / `Deserialize` on every parameter type, so trees can be authored in RON or JSON |
 
 The library depends on `bevy` with default features off (`std`, `bevy_asset`, `bevy_color`, `bevy_log`, `bevy_mesh`, `bevy_pbr`, and `jpeg` to decode the bundled textures), so it adds no windowing or audio to a build.
@@ -172,7 +172,7 @@ Changing `FloraWind` writes one small shared buffer (`FloraWindBuffer`) and touc
 
 ### Bark
 
-Trunks and branches wear a bundled CC0 bark scan (a colour map and a normal map, 512 px wide, about 3.2 MB for all 14). Each preset picks the scan of its species (`TreeParams::bark`); `BarkParams` sets how it follows the wood's growth. The scan is laid out in metres on the *mature* tree, so a growing tree's bark never slides; wood thinner than `smooth_below` is smooth, and by `fissured_above` it shows the whole scan, so a young branch gains relief as it thickens. The scan's average colour is divided out of the material's base colour, so a textured tree keeps its preset colour, and far trees, impostors and the plain `StandardMaterial` fallback look as they always did.
+Trunks and branches wear a bundled CC0 bark scan (a colour map and a normal map, 512 px wide, about 3.1 MB for all 14). Each preset picks the scan of its species (`TreeParams::bark`); `BarkParams` sets how it follows the wood's growth. The scan is laid out in metres on the *mature* tree, so a growing tree's bark never slides; wood thinner than `smooth_below` is smooth, and by `fissured_above` it shows the whole scan, so a young branch gains relief as it thickens. The scan's average colour is divided out of the material's base colour, so a textured tree keeps its preset colour, and far trees, impostors and the plain `StandardMaterial` fallback look as they always did.
 
 ```rust,no_run
 use bevy_flora::{BarkParams, BarkScan, TreePreset};
@@ -191,7 +191,7 @@ fn plain_pine() -> bevy_flora::TreeParams {
 }
 ```
 
-The textures are compiled in by the default `textures` feature (about 3.7 MB of JPEG for the bark and the leaf scans); with `default-features = false` every scan is absent, wood is plain colour and leaves keep their procedural outline. Their sources and licences (all CC0 1.0, no attribution required) are in [`src/textures/CREDITS.md`](src/textures/CREDITS.md).
+The textures are compiled in by the default `textures` feature (about 3.6 MB of JPEG for the bark and the leaf scans); with `default-features = false` every scan is absent, wood is plain colour and leaves keep their procedural outline. Their sources and licences (all CC0 1.0, no attribution required) are in [`src/textures/CREDITS.md`](src/textures/CREDITS.md).
 
 ### Leaves: real outlines and grown veins
 

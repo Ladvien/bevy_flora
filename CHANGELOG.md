@@ -5,6 +5,43 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.9.1] - 2026-10-12
+
+The birch looks like a birch. The scan 0.7.0 gave it (ambientCG `Bark004`) was scaly, pine-like
+bark, and the preset's fade radii (0.10 / 0.40 m) kept the slim trunk smooth anyway, so the birch
+was a plain pale pole. It now wears TextureCan's `wood_0027` (CC0 1.0): white papery bark with
+dark horizontal lenticels and branch scars, on a 0.6 m tile, and the fade radii most presets use
+(0.03 / 0.15 m). No API change.
+
+### Changed
+
+- `BarkScan::Birch` is TextureCan's `wood_0027` (a procedural Substance Designer material, colour
+  and normal map at 512 px) on a 0.6 x 0.6 m tile; it was ambientCG `Bark004` on 1 x 1 m.
+  `tools/prepare_textures.py` gains a TextureCan source (it reads the 1K zip's link, which carries a
+  hash, off the asset's page) and `src/textures/CREDITS.md` has the row. The bark set is 3.15 MB
+  (3.2) and the bundled textures 3.6 MB in all.
+- The birch preset's `bark` radii go from `smooth_below` 0.10 / `fissured_above` 0.40 to 0.03 /
+  0.15 m: with the old ones no scan would have shown on the trunk (QA proposal D-058).
+- Nothing else changes. Of the 357 gallery scenarios, 12 (the mature and older birches, plain and
+  styled) differ from 0.9.0's, by 0.39 to 0.49 of 255 on average; every other one by under 0.001.
+
+### Measured
+
+Apple M4 Pro, release builds, against 0.9.0 built from the same source tree.
+
+- **Colour.** The region mean colour of the birch at 22 m and at 60 m differs from 0.9.0's by 0.01
+  and 0.00 levels of 255; the trunk's own pixels are 2.7% darker (bump-mapped lenticels take a
+  little light).
+- **CPU against GPU growth** (`gallery` and `gallery --gpu`, `compare_gallery`): over all 357
+  scenarios the mean difference is 0.073 of 255, the worst a toon maple at age 5 at 1.31, as in
+  0.9.0. No `stats.tsv` flag, no warning or error in either log.
+- **Growth.** A 192-frame growth clip of the birch on both paths: the largest frame-to-frame step
+  is at most 1.10 times its neighbours' (limit 2), so the bark thickens in place.
+- **Levels of detail and impostors** (`lod_fidelity.sh`, the birch, two bearings, 12 distances):
+  the impostor's error against level 0 is 0.074 (region mean colour, of 255; 0.071 in 0.9.0).
+- **Cost.** Only the image bytes changed (same sizes, same decode), so frame times were not
+  re-measured.
+
 ## [0.9.0] - 2026-10-12
 
 Looks. `TreeParams::style` (`RenderStyle`) draws a tree natural (what 0.8.0 draws, pixel for
@@ -830,6 +867,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.9.1]: https://github.com/Ladvien/bevy_flora/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Ladvien/bevy_flora/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Ladvien/bevy_flora/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Ladvien/bevy_flora/compare/v0.6.2...v0.7.0

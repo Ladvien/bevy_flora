@@ -10,7 +10,7 @@ originals, produced by `tools/prepare_textures.py`.
 | bark/oak_color.jpg, bark/oak_normal.jpg | jolcham_oak_bark_01 (Poly Haven) | Charlotte Baglioni | <https://polyhaven.com/a/jolcham_oak_bark_01> | CC0 1.0 | 1.0 x 2.0 |
 | bark/pine_color.jpg, bark/pine_normal.jpg | pine_bark (Poly Haven) | Dimitrios Savva | <https://polyhaven.com/a/pine_bark> | CC0 1.0 | 2.0 x 2.0 |
 | bark/willow_color.jpg, bark/willow_normal.jpg | bark_willow (Poly Haven) | Dario Barresi, Dimitrios Savva | <https://polyhaven.com/a/bark_willow> | CC0 1.0 | 1.0 x 1.0 |
-| bark/birch_color.jpg, bark/birch_normal.jpg | Bark004 (ambientCG) | ambientCG | <https://ambientcg.com/a/Bark004> | CC0 1.0 | 1.0 x 1.0 |
+| bark/birch_color.jpg, bark/birch_normal.jpg | wood_0027 (TextureCan) | TextureCan | <https://www.texturecan.com/details/221/> | CC0 1.0 | 0.6 x 0.6 |
 | bark/palm_color.jpg, bark/palm_normal.jpg | palm_bark (Poly Haven) | Charlotte Baglioni | <https://polyhaven.com/a/palm_bark> | CC0 1.0 | 1.86 x 1.86 |
 | bark/cedar_color.jpg, bark/cedar_normal.jpg | japanese_cedar_bark (Poly Haven) | Charlotte Baglioni | <https://polyhaven.com/a/japanese_cedar_bark> | CC0 1.0 | 1.0 x 2.0 |
 | bark/zelkova_color.jpg, bark/zelkova_normal.jpg | japanese_zelkova_bark (Poly Haven) | Charlotte Baglioni | <https://polyhaven.com/a/japanese_zelkova_bark> | CC0 1.0 | 1.8 x 1.8 |
