@@ -18,6 +18,7 @@ import argparse
 import io
 import json
 import math
+import re
 import ssl
 import sys
 import time
@@ -50,13 +51,17 @@ USER_AGENT = "bevy_flora-asset-prep (https://github.com/ladvien/bevy_flora)"
 BARK_BUDGET = 3_500_000
 POLYHAVEN = "polyhaven"
 AMBIENTCG = "ambientcg"
+TEXTURECAN = "texturecan"
+TEXTURECAN_PAGES = {"wood_0027": 221}  # asset id -> the number in https://www.texturecan.com/details/<n>/
 
 # name (file stem), source, asset id, tile width x height in metres.
 BARK_ROWS = [
     ("oak", POLYHAVEN, "jolcham_oak_bark_01", (1.0, 2.0)),
     ("pine", POLYHAVEN, "pine_bark", (2.0, 2.0)),
     ("willow", POLYHAVEN, "bark_willow", (1.0, 1.0)),
-    ("birch", AMBIENTCG, "Bark004", (1.0, 1.0)),
+    # A procedural (Substance Designer) white birch: the tile is sized by eye, its lenticels and scars
+    # at about their real size (a few centimetres) on a 0.6 m tile.
+    ("birch", TEXTURECAN, "wood_0027", (0.6, 0.6)),
     ("palm", POLYHAVEN, "palm_bark", (1.86, 1.86)),
     ("cedar", POLYHAVEN, "japanese_cedar_bark", (1.0, 2.0)),
     ("zelkova", POLYHAVEN, "japanese_zelkova_bark", (1.8, 1.8)),
@@ -160,6 +165,20 @@ def load_bark_source(name, source, asset_id):
             normal.load()
         # The ambientCG API exposes no creator field; credit the library.
         return to_rgb8(color), to_rgb8(normal), "ambientCG", f"https://ambientcg.com/a/{asset_id}", None
+    if source == TEXTURECAN:
+        # The download link carries a hash, so it is read off the asset's page.
+        page_url = f"https://www.texturecan.com/details/{TEXTURECAN_PAGES[asset_id]}/"
+        page = fetch(page_url, f"tc_{asset_id}_page.html").decode("utf-8", "replace")
+        link = re.search(rf'href="(/downloads/{asset_id}/{asset_id}_1k_[A-Za-z0-9]+\.zip)"', page)
+        if link is None:
+            raise RuntimeError(f"no 1K download link on {page_url}")
+        zdata = fetch("https://www.texturecan.com" + link.group(1), f"tc_{asset_id}_1k.zip")
+        with zipfile.ZipFile(io.BytesIO(zdata)) as zf:
+            color = Image.open(io.BytesIO(zf.read(f"{asset_id}_color_1k.jpg")))
+            normal = Image.open(io.BytesIO(zf.read(f"{asset_id}_normal_opengl_1k.png")))
+            color.load()
+            normal.load()
+        return to_rgb8(color), to_rgb8(normal), "TextureCan", page_url, None
     raise ValueError(source)
 
 
@@ -232,6 +251,8 @@ def bark_credit_rows():
             info = fetch_json(f"https://api.polyhaven.com/info/{asset_id}", f"ph_{asset_id}_info.json")
             author = ", ".join(info.get("authors", {}).keys()) or "Poly Haven"
             url, library = f"https://polyhaven.com/a/{asset_id}", "Poly Haven"
+        elif source == TEXTURECAN:
+            author, url, library = "TextureCan", f"https://www.texturecan.com/details/{TEXTURECAN_PAGES[asset_id]}/", "TextureCan"
         else:
             author, url, library = "ambientCG", f"https://ambientcg.com/a/{asset_id}", "ambientCG"
         rows.append(

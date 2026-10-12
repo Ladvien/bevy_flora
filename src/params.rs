@@ -495,7 +495,7 @@ pub enum BarkScan {
     Pine,
     /// Rough willow (Poly Haven `bark_willow`).
     Willow,
-    /// Pale birch (ambientCG `Bark004`).
+    /// White papery birch with dark lenticels (TextureCan `wood_0027`).
     Birch,
     /// Ringed palm (Poly Haven `palm_bark`).
     Palm,
@@ -544,7 +544,8 @@ impl BarkScan {
         match self {
             BarkScan::Oak | BarkScan::Cedar => Vec2::new(1.0, 2.0),
             BarkScan::Pine => Vec2::new(2.0, 2.0),
-            BarkScan::Willow | BarkScan::Birch | BarkScan::Brown => Vec2::ONE,
+            BarkScan::Willow | BarkScan::Brown => Vec2::ONE,
+            BarkScan::Birch => Vec2::splat(0.6),
             BarkScan::Palm => Vec2::splat(1.86),
             BarkScan::Zelkova | BarkScan::Maple => Vec2::splat(1.8),
             BarkScan::Hackberry => Vec2::new(1.8, 3.6),

@@ -453,7 +453,7 @@ fn birch() -> TreeParams {
         },
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.961, 0.961, 0.863),
-        bark: BarkParams { scan: Some(BarkScan::Birch), smooth_below: 0.10, fissured_above: 0.40 },
+        bark: BarkParams { scan: Some(BarkScan::Birch), smooth_below: 0.03, fissured_above: 0.15 },
         style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.2, flutter: 1.3, sway_frequency: 1.1, flutter_frequency: 1.3 },
     }
