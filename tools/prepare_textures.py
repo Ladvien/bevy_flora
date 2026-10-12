@@ -254,7 +254,9 @@ CELL = ATLAS // 2
 LEAF_FIT = 240  # a leaf fits inside this many pixels of its 256 px cell, leaving room for the dilated border
 DILATE_PX = 8
 MIN_LEAF_AREA = 0.01  # fraction of the source image
-MAX_OUTLINE_POINTS = 24
+REFERENCE_OUTLINE_POINTS = 24  # the area reference: the full outline simplified to this many points
+DEFAULT_OUTLINE_POINTS = 12  # cap of the committed table's full outlines (24 and 16 cost a forest of oaks 60-75%)
+COARSE_MIN_POINTS = 6  # fewer would reduce a lobed leaf to a quad
 COARSE_POINTS = 8  # distant levels of detail use a coarser outline
 COARSE_POINTS_MAX = 10  # allowed for a leaf that cannot keep its area with COARSE_POINTS
 COARSE_AREA_TOL = 0.12
@@ -739,11 +741,13 @@ def visvalingam(pts, count):
 
 
 def coarse_outline(poly):
-    """A subset of the (ccw, simple) full outline for distant levels of detail. Douglas-Peucker with the
-    smallest epsilon that leaves at most COARSE_POINTS points; if that polygon is not simple or its area
-    is off by more than COARSE_AREA_TOL (a deeply lobed leaf), the same is tried with COARSE_POINTS_MAX
-    points, and failing that Visvalingam (least area change first) at COARSE_POINTS, then COARSE_POINTS_MAX.
-    Returns indices into `poly`, triangles, area ratio, and the method used."""
+    """A subset of the (ccw, simple) full outline for distant levels of detail, with COARSE_MIN_POINTS to
+    COARSE_POINTS points. Douglas-Peucker with the smallest epsilon that leaves at most COARSE_POINTS
+    points (when that leaves fewer than COARSE_MIN_POINTS, Visvalingam, least area change first, at
+    exactly that limit instead); if the polygon is not simple or its area is off by more than
+    COARSE_AREA_TOL (a deeply lobed leaf), the same is tried with COARSE_POINTS_MAX points, and failing
+    that Visvalingam at COARSE_POINTS, then COARSE_POINTS_MAX. Returns indices into `poly`, triangles,
+    area ratio, and the method used."""
     pts = np.array(poly)
     index = {tuple(p): i for i, p in enumerate(poly)}
     full_area = polygon_area(poly)
@@ -755,11 +759,14 @@ def coarse_outline(poly):
             while eps < 2.0:
                 cp = [tuple(p) for p in simplify_closed(pts, eps)]
                 if len(cp) <= limit:
-                    yield cp, f"douglas-peucker {limit}"
+                    if len(cp) >= COARSE_MIN_POINTS:
+                        yield cp, f"douglas-peucker {limit}"
+                    else:
+                        yield [poly[i] for i in sorted(visvalingam(poly, min(limit, len(poly))))], f"visvalingam {limit}"
                     break
                 eps *= 1.03
         for limit in (COARSE_POINTS, COARSE_POINTS_MAX):
-            yield [poly[i] for i in sorted(visvalingam(poly, limit))], f"visvalingam {limit}"
+            yield [poly[i] for i in sorted(visvalingam(poly, min(limit, len(poly))))], f"visvalingam {limit}"
 
     for cp, method in candidates():
         if len(cp) < 3 or not is_simple(cp):
@@ -780,8 +787,35 @@ def coarse_outline(poly):
     raise RuntimeError(f"no coarse outline within the area tolerance (tried {tried})")
 
 
-def leaf_geometry(alpha, cell):
-    """Outline, uv, triangles and aspect of the leaf in atlas cell `cell` (0..3)."""
+def simplify_to(full, limit):
+    """Douglas-Peucker of the closed contour with the smallest epsilon (on a 1.1x ladder from 0.3 px) that
+    leaves at most `limit` points and a simple polygon; None if there is none."""
+    eps = 0.3
+    while eps < 20.0:
+        simp = simplify_closed(full, eps)
+        if len(simp) <= limit and is_simple([tuple(p) for p in simp]):
+            return simp
+        eps *= 1.1
+    return None
+
+
+def outline_tolerance(max_points):
+    """Largest allowed relative area deviation of a `max_points` outline from the reference outline."""
+    if max_points >= REFERENCE_OUTLINE_POINTS:
+        return 0.0
+    if max_points >= 16:
+        return 0.04
+    if max_points >= 12:
+        return 0.08
+    return 0.15
+
+
+def leaf_geometry(alpha, cell, max_points=REFERENCE_OUTLINE_POINTS):
+    """Outline, uv, triangles and aspect of the leaf in atlas cell `cell` (0..3).
+
+    The reference outline has REFERENCE_OUTLINE_POINTS points. With a smaller `max_points` the full outline is
+    simplified harder, as long as its area stays within outline_tolerance of the reference (otherwise
+    the point count grows until it does, and the result says so in "points_needed")."""
     ox, oy = (cell % 2) * CELL, (cell // 2) * CELL
     pad = 2
     a = np.pad(alpha[oy : oy + CELL, ox : ox + CELL], pad)
@@ -792,30 +826,45 @@ def leaf_geometry(alpha, cell):
     xmin, ymin = full.min(axis=0)
     xmax, ymax = full.max(axis=0)
 
-    chosen = None
-    eps = 0.3
-    while eps < 20.0:
-        simp = simplify_closed(full, eps)
-        if len(simp) <= MAX_OUTLINE_POINTS and is_simple([tuple(p) for p in simp]):
-            chosen = simp
-            break
-        eps *= 1.1
+    def build(chosen):
+        card = np.stack(
+            [-1.0 + 2.0 * (chosen[:, 0] - xmin) / (xmax - xmin), 1.0 - 2.0 * (chosen[:, 1] - ymin) / (ymax - ymin)],
+            axis=1,
+        )
+        uv = chosen / ATLAS
+        poly = [tuple(p) for p in card]
+        if polygon_area(poly) < 0:  # image y points down, so the card-space winding flips
+            poly = poly[::-1]
+            uv = uv[::-1]
+        # round now so the validation sees what is written
+        poly = [(round(x, 5), round(y, 5)) for x, y in poly]
+        uv = [(round(float(u), 5), round(float(v), 5)) for u, v in uv]
+        if not is_simple(poly):
+            raise RuntimeError("rounded outline is not simple")
+        return poly, uv
+
+    chosen = simplify_to(full, REFERENCE_OUTLINE_POINTS)
     if chosen is None:
         raise RuntimeError("could not simplify the outline to a simple polygon")
-
-    card = np.stack(
-        [-1.0 + 2.0 * (chosen[:, 0] - xmin) / (xmax - xmin), 1.0 - 2.0 * (chosen[:, 1] - ymin) / (ymax - ymin)], axis=1
-    )
-    uv = chosen / ATLAS
-    poly = [tuple(p) for p in card]
-    if polygon_area(poly) < 0:  # image y points down, so the card-space winding flips
-        poly = poly[::-1]
-        uv = uv[::-1]
-    # round now so the validation sees what is written
-    poly = [(round(x, 5), round(y, 5)) for x, y in poly]
-    uv = [(round(float(u), 5), round(float(v), 5)) for u, v in uv]
-    if not is_simple(poly):
-        raise RuntimeError("rounded outline is not simple")
+    poly, uv = build(chosen)
+    points_needed = None
+    if max_points < REFERENCE_OUTLINE_POINTS:
+        ref_area = polygon_area(poly)
+        tol = outline_tolerance(max_points)
+        for limit in range(max_points, REFERENCE_OUTLINE_POINTS):
+            cand = simplify_to(full, limit)
+            if cand is None:
+                continue
+            cpoly, cuv = build(cand)
+            dev = abs(polygon_area(cpoly) / ref_area - 1.0)
+            if dev <= tol:
+                poly, uv, points_needed = cpoly, cuv, limit
+                break
+        else:
+            points_needed = REFERENCE_OUTLINE_POINTS  # keeps the reference polygon
+        dev = abs(polygon_area(poly) / ref_area - 1.0)
+    else:
+        dev = 0.0
     tris = triangulate(poly)
     area = polygon_area(poly)
     tri_area = sum(0.5 * _orient(poly[i], poly[j], poly[k]) for i, j, k in tris)
@@ -835,6 +884,8 @@ def leaf_geometry(alpha, cell):
         "coarse_triangles": coarse["triangles"],
         "coarse_area_ratio": coarse["ratio"],
         "coarse_method": coarse["method"],
+        "area_deviation": dev,
+        "points_needed": points_needed,
     }
 
 
@@ -876,10 +927,17 @@ def pairs_rust(points, indent):
     return "\n".join(lines)
 
 
-def write_leaves_rs(path, names, sets):
+def write_leaves_rs(path, names, sets, max_points):
+    leaves = [g for st in sets for g in st["leaves"]]
+    n_full = [len(g["outline"]) for g in leaves]
+    n_coarse = [len(g["coarse_outline"]) for g in leaves]
+    tris = [len(g["triangles"]) // 3 for g in leaves]
     out = [
         "//! Outlines, triangulations and atlas coordinates of the bundled leaf scans. Generated by",
         "//! `tools/prepare_textures.py`; do not edit.",
+        f"// Full outlines: cap {max_points} points, {min(n_full)} to {max(n_full)} used (mean {sum(n_full) / len(n_full):.1f}, "
+        f"{sum(tris) / len(tris):.1f} triangles per card side); a leaf exceeds the cap only where it needs the points",
+        f"// to stay within tolerance of the {REFERENCE_OUTLINE_POINTS}-point area. Coarse outlines: {min(n_coarse)} to {max(n_coarse)} points.",
         "// Outline points are measurements: one happens to be 0.63662, which clippy takes for 2/pi.",
         "#![allow(clippy::approx_constant)]",
         "",
@@ -949,8 +1007,11 @@ def write_leaves_rs(path, names, sets):
     path.write_text("\n".join(out) + "\n")
 
 
-def prepare_leaves(root):
-    out_dir = root / "src" / "textures" / "leaves"
+def prepare_leaves(root, max_points=DEFAULT_OUTLINE_POINTS, out_rs=None):
+    """Atlases and src/textures/leaves.rs. With `out_rs` (a variant run) the atlases go to a scratch
+    directory and only that Rust file is written, so the worktree's own files stay untouched."""
+    variant = out_rs is not None
+    out_dir = Path(f"/tmp/bevy_flora_leaf_variant_{max_points}") if variant else root / "src" / "textures" / "leaves"
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.jpg"):
         old.unlink()
@@ -998,8 +1059,8 @@ def prepare_leaves(root):
         color_img = Image.open(out_dir / f"{name}_color.jpg").convert("RGB")
         px = np.asarray(color_img, dtype=np.float64)
         mean = srgb_to_linear(px[alpha > 0.5]).mean(axis=0)
-        geoms = [leaf_geometry(alpha, k) for k in range(4)]
-        draw_overlay(DEBUG_DIR / f"{name}_overlay.png", color_img, geoms)
+        geoms = [leaf_geometry(alpha, k, max_points) for k in range(4)]
+        draw_overlay(DEBUG_DIR / (f"{name}_overlay.png" if not variant else f"{name}_overlay_{max_points}.png"), color_img, geoms)
         sets.append({"leaves": geoms, "mean": [float(m) for m in mean]})
         print(f"  {name:15s} {set_id}")
         print(f"    files: {sizes[name + '_color.jpg']} B colour, {sizes[name + '_normal.jpg']} B normal")
@@ -1009,10 +1070,29 @@ def prepare_leaves(root):
             f"coarse/full area {[round(g['coarse_area_ratio'], 3) for g in geoms]}, "
             f"methods {[g['coarse_method'] for g in geoms]}"
         )
+        if max_points < REFERENCE_OUTLINE_POINTS:
+            print(
+                f"    area deviation from the {REFERENCE_OUTLINE_POINTS}-point outline {[round(g['area_deviation'], 4) for g in geoms]}, "
+                f"points needed {[g['points_needed'] for g in geoms]}"
+            )
         print(f"    mean linear rgb {[round(m, 4) for m in sets[-1]['mean']]}")
     names = [b[0] for b in built]
-    rs_path = root / "src" / "textures" / "leaves.rs"
-    write_leaves_rs(rs_path, names, sets)
+    rs_path = Path(out_rs).resolve() if variant else root / "src" / "textures" / "leaves.rs"
+    rs_path.parent.mkdir(parents=True, exist_ok=True)
+    write_leaves_rs(rs_path, names, sets, max_points)
+    all_leaves = [g for st in sets for g in st["leaves"]]
+    print(
+        f"  full outline: mean {sum(len(g['outline']) for g in all_leaves) / len(all_leaves):.2f} points, "
+        f"{sum(len(g['triangles']) // 3 for g in all_leaves) / len(all_leaves):.2f} triangles per leaf; "
+        f"worst area deviation {max(g['area_deviation'] for g in all_leaves):.4f}"
+    )
+    for st, name in zip(sets, names):
+        ls = st["leaves"]
+        print(f"    {name:15s} triangles per leaf {[len(g['triangles']) // 3 for g in ls]} "
+              f"(total {sum(len(g['triangles']) // 3 for g in ls)}), coarse {[len(g['coarse_triangles']) // 3 for g in ls]}")
+        print(f"    {name:15s} mean outline points {sum(len(g['outline']) for g in ls) / 4:.2f}, "
+              f"worst deviation {max(g['area_deviation'] for g in ls):.4f}, "
+              f"mean coarse points {sum(len(g['coarse_outline']) for g in ls) / 4:.2f}, coarse points {[len(g['coarse_outline']) for g in ls]}")
     print(f"wrote {rs_path}; LEAF_SETS order: {', '.join(f'{i}={n}' for i, n in enumerate(names))}")
     print(f"  leaf total: {sum(sizes.values())} B (budget {LEAF_BUDGET}); used: {label}; overlays in {DEBUG_DIR}")
 
@@ -1067,13 +1147,40 @@ STAGES = {"bark": prepare_bark, "leaves": prepare_leaves}
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", choices=sorted(STAGES), help="run a single stage (default: all)")
+    parser.add_argument(
+        "--max-outline-points",
+        type=int,
+        default=DEFAULT_OUTLINE_POINTS,
+        help=(
+            f"leaves stage: cap on the full outline's points (default {DEFAULT_OUTLINE_POINTS}; a leaf may use "
+            f"more to stay within 4%% (cap >= 16) / 8%% (cap >= 12) of the {REFERENCE_OUTLINE_POINTS}-point area; "
+            f"other values need --out-rs)"
+        ),
+    )
+    parser.add_argument(
+        "--out-rs",
+        type=Path,
+        help="leaves stage: write the generated Rust here and leave every other file alone (default: src/textures/leaves.rs)",
+    )
     args = parser.parse_args()
+    if not 4 <= args.max_outline_points <= REFERENCE_OUTLINE_POINTS:
+        parser.error(f"--max-outline-points must be between 4 and {REFERENCE_OUTLINE_POINTS}")
+    variant = args.out_rs is not None
+    if args.max_outline_points != DEFAULT_OUTLINE_POINTS and not variant:
+        parser.error("--max-outline-points other than the default needs --out-rs (the committed file keeps the default)")
+    if variant and args.only != "leaves":
+        parser.error("--out-rs / --max-outline-points need --only leaves")
 
     root = Path(__file__).resolve().parent.parent
     for stage, fn in STAGES.items():
         if args.only and args.only != stage:
             continue
-        fn(root)
+        if stage == "leaves":
+            fn(root, args.max_outline_points, args.out_rs)
+        else:
+            fn(root)
+    if variant:
+        return 0
     # CREDITS.md always lists every stage, derived from the static tables, so a partial run keeps it whole.
     write_credits(root, bark_credit_rows() + leaf_credit_rows())
     return 0
