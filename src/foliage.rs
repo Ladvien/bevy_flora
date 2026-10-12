@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 
 use crate::growth::GrowthParams;
 use crate::mesh::MeshData;
-use crate::params::{FoliageParams, FoliagePlacement, LeafOrientation, LeafStyle, TrunkParams};
+use crate::params::{FoliageParams, FoliagePlacement, LeafOrientation, LeafStyle, RenderStyle, TrunkParams};
 use crate::rng::SeededRng;
 use crate::skeleton::{Node, NodeKind, Skeleton, trunk_depth};
 #[cfg(feature = "textures")]
@@ -33,6 +33,11 @@ pub struct LeafPoint {
     pub tint: f32,
     /// Per-leaf hue draw in −1..1, scaled by [`FoliageParams::hue_variation`].
     pub hue: f32,
+    /// The clump this leaf belongs to: the `Node::id` of the nearest ancestor of its node (the
+    /// node itself included) at recursion depth 0, that is the primary branch, leader or split it
+    /// hangs from. The painterly and toon styles shade the leaves of a clump as one soft mass
+    /// ([`RenderStyle::Painterly`]).
+    pub clump: u32,
 }
 
 /// Leaf points for every node of `skeleton`.
@@ -149,11 +154,30 @@ pub fn leaf_points_for_node(
         p.hue = hue_rng.range(-1.0, 1.0);
     }
 
+    // The leaves of a node shade with the rest of the primary branch (leader or split) it hangs
+    // from, whatever the age: ids are the full skeleton's.
+    let clump = clump_of(skeleton, i);
+    for p in &mut points[first..] {
+        p.clump = clump;
+    }
+
     if leaf_scale < 1.0 {
         for p in &mut points[first..] {
             p.size *= leaf_scale;
         }
     }
+}
+
+/// The clump node `i`'s leaves belong to: the id of its nearest ancestor (itself included) at
+/// recursion depth 0, a primary branch, the leader or a split.
+fn clump_of(skeleton: &Skeleton, mut i: usize) -> u32 {
+    while skeleton.nodes[i].depth > 0 {
+        match skeleton.nodes[i].parent {
+            Some(parent) => i = parent as usize,
+            None => break,
+        }
+    }
+    skeleton.nodes[i].id
 }
 
 struct NodeCtx<'a> {
@@ -191,6 +215,7 @@ fn add_terminal_leaves(
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
             tint: 0.0,
             hue: 0.0,
+            clump: 0,
         });
     }
 }
@@ -216,6 +241,7 @@ fn add_distributed_leaves(
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
             tint: 0.0,
             hue: 0.0,
+            clump: 0,
         });
     }
 }
@@ -255,6 +281,7 @@ fn add_cluster_leaves(
             rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
             tint: 0.0,
             hue: 0.0,
+            clump: 0,
         });
     }
 }
@@ -292,36 +319,46 @@ fn leaf_direction(node: &NodeCtx, foliage: &FoliageParams, rng: &mut SeededRng) 
     Vec3::new(base_dir.x, base_dir.y - foliage.droop, base_dir.z).normalize_or_zero()
 }
 
+/// Geometry for all `points` in `foliage.style`, as [`RenderStyle::Natural`]: see
+/// [`foliage_mesh_styled`].
+pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
+    foliage_mesh_styled(points, foliage, RenderStyle::Natural)
+}
+
 /// Geometry for all `points` in `foliage.style`.
 ///
 /// Each leaf gets a vertex colour (its tint scaled by
-/// [`FoliageParams::color_variation`], its hue by [`FoliageParams::hue_variation`]), every
-/// normal is bent toward pointing out of the crown by [`FoliageParams::normal_bend`], and the
+/// [`FoliageParams::color_variation`], its hue by [`FoliageParams::hue_variation`]), and the
 /// leaf shader's inputs are baked in: `uv1.x` flags the upper side of each card, `uv1.y` is the
-/// crown visibility ([`FoliageParams::occlusion`]) and `sway` is the flutter vector.
-pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
-    foliage_mesh_with(points, foliage, None)
+/// crown visibility ([`FoliageParams::occlusion`]) and `sway` is the flutter vector. Every
+/// normal is bent toward pointing out of the crown by [`FoliageParams::normal_bend`] in the
+/// natural style; in the painterly and toon styles every leaf takes the normal pointing out of
+/// its clump's centre instead (see [`RenderStyle::Painterly`]).
+pub fn foliage_mesh_styled(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle) -> MeshData {
+    foliage_mesh_with(points, foliage, style, None)
 }
 
-/// [`foliage_mesh`] that also records, when `firsts` is given, the index of
+/// [`foliage_mesh_styled`] that also records, when `firsts` is given, the index of
 /// each leaf's first vertex (one entry per point, in order).
 pub(crate) fn foliage_mesh_with(
     points: &[LeafPoint],
     foliage: &FoliageParams,
+    style: RenderStyle,
     firsts: Option<&mut Vec<u32>>,
 ) -> MeshData {
-    build_foliage(points, foliage, firsts, false)
+    build_foliage(points, foliage, style, firsts, false)
 }
 
-/// [`foliage_mesh`] for the coarse levels of detail: cards cut to a scanned leaf use its coarse
-/// outline (6 to 10 points), so a distant leaf costs about what a procedural one does.
-pub(crate) fn foliage_mesh_coarse(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
-    build_foliage(points, foliage, None, true)
+/// [`foliage_mesh_styled`] for the coarse levels of detail: cards cut to a scanned leaf use its
+/// coarse outline (6 to 10 points), so a distant leaf costs about what a procedural one does.
+pub(crate) fn foliage_mesh_coarse(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle) -> MeshData {
+    build_foliage(points, foliage, style, None, true)
 }
 
 fn build_foliage(
     points: &[LeafPoint],
     foliage: &FoliageParams,
+    style: RenderStyle,
     mut firsts: Option<&mut Vec<u32>>,
     coarse: bool,
 ) -> MeshData {
@@ -399,11 +436,30 @@ fn build_foliage(
         }
     }
 
-    let bend = foliage.normal_bend.clamp(0.0, 1.0);
-    if bend > 0.0 {
-        for (normal, &position) in mesh.normals.iter_mut().zip(&mesh.positions) {
-            let out = (position - center).normalize_or(Vec3::Y);
-            *normal = normal.lerp(out, bend).normalize_or(out);
+    if style == RenderStyle::Natural {
+        let bend = foliage.normal_bend.clamp(0.0, 1.0);
+        if bend > 0.0 {
+            for (normal, &position) in mesh.normals.iter_mut().zip(&mesh.positions) {
+                let out = (position - center).normalize_or(Vec3::Y);
+                *normal = normal.lerp(out, bend).normalize_or(out);
+            }
+        }
+    } else {
+        // Painted clumps: every leaf of a clump takes the normal that points out of the clump's
+        // own centre (the mean of its leaves), fully: `normal_bend` toward the crown's centre does
+        // not apply. The clump of a leaf is the primary branch, leader or split it hangs from.
+        let mut sums: std::collections::HashMap<u32, (Vec3, f32)> = std::collections::HashMap::new();
+        for point in points {
+            let entry = sums.entry(point.clump).or_insert((Vec3::ZERO, 0.0));
+            entry.0 += point.position;
+            entry.1 += 1.0;
+        }
+        for (point, &(first, end)) in points.iter().zip(&ranges) {
+            let (sum, count) = sums[&point.clump];
+            let clump_center = sum / count;
+            for k in first..end {
+                mesh.normals[k] = (mesh.positions[k] - clump_center).normalize_or(Vec3::Y);
+            }
         }
     }
     mesh
@@ -662,6 +718,7 @@ mod tests {
             rotation: 0.0,
             tint: 0.0,
             hue: 0.0,
+            clump: 0,
         }
     }
 
@@ -691,7 +748,7 @@ mod tests {
     /// Per leaf, the number of vertices its cards have, of a mesh built with `foliage`.
     fn vertices_per_leaf(points: &[LeafPoint], foliage: &FoliageParams) -> Vec<usize> {
         let mut firsts = Vec::new();
-        let mesh = foliage_mesh_with(points, foliage, Some(&mut firsts));
+        let mesh = foliage_mesh_with(points, foliage, RenderStyle::Natural, Some(&mut firsts));
         let ends = firsts.iter().skip(1).copied().chain([mesh.positions.len() as u32]);
         firsts.iter().zip(ends).map(|(&a, b)| (b - a) as usize).collect()
     }
@@ -780,6 +837,7 @@ mod tests {
             rotation: 1.1,
             tint: 0.0,
             hue: 0.0,
+            clump: 0,
         };
         for style in [
             LeafStyle::CrossedPlanes,
@@ -805,6 +863,7 @@ mod tests {
             rotation: 1.1,
             tint: 0.0,
             hue: 0.0,
+            clump: 0,
         };
         let (_, up, _) = build_basis(p.direction, p.rotation);
         for style in [LeafStyle::CrossedPlanes, LeafStyle::SingleQuad] {
@@ -847,6 +906,64 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn painterly_normals_point_out_of_the_leafs_own_clump() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        let mut sums = std::collections::HashMap::new();
+        for p in &points {
+            let entry = sums.entry(p.clump).or_insert((Vec3::ZERO, 0.0f32));
+            entry.0 += p.position;
+            entry.1 += 1.0;
+        }
+        assert!(sums.len() > 3, "an oak has several clumps, found {}", sums.len());
+
+        let mut firsts = Vec::new();
+        let painted = foliage_mesh_with(&points, &params.foliage, RenderStyle::Painterly, Some(&mut firsts));
+        assert_indices_valid(&painted, "painterly oak");
+        for (i, point) in points.iter().enumerate() {
+            let end = firsts.get(i + 1).map_or(painted.positions.len(), |&n| n as usize);
+            let (sum, count) = sums[&point.clump];
+            let center = sum / count;
+            for k in firsts[i] as usize..end {
+                let expected = (painted.positions[k] - center).normalize_or(Vec3::Y);
+                assert!(
+                    painted.normals[k].dot(expected) > 0.9999,
+                    "normal {:?} does not point out of clump {} (expected {expected:?})",
+                    painted.normals[k],
+                    point.clump
+                );
+            }
+        }
+
+        // Only the normals differ from the natural style's; toon bends them the same way.
+        let natural = foliage_mesh(&points, &params.foliage);
+        assert_eq!(painted.positions, natural.positions);
+        assert_eq!(painted.colors, natural.colors);
+        assert_eq!(painted.uv1, natural.uv1);
+        assert_ne!(painted.normals, natural.normals);
+        assert_eq!(foliage_mesh_styled(&points, &params.foliage, RenderStyle::Toon).normals, painted.normals);
+    }
+
+    #[test]
+    fn a_clump_is_a_primary_branch_leader_or_split_with_everything_that_grows_from_it() {
+        let skeleton = generate_skeleton(&TreePreset::Oak.params());
+        let mut subs = 0;
+        for (i, node) in skeleton.nodes.iter().enumerate() {
+            let clump = clump_of(&skeleton, i);
+            let owner = &skeleton.nodes[clump as usize];
+            assert_eq!(owner.id, clump, "ids index the full skeleton");
+            assert_eq!(owner.depth, 0, "node {i} belongs to clump {clump}, which is not a depth 0 node");
+            match node.parent {
+                Some(parent) if node.depth > 0 => {
+                    subs += 1;
+                    assert_eq!(clump, clump_of(&skeleton, parent as usize), "a sub-branch joins its parent's clump");
+                }
+                _ => assert_eq!(clump, node.id, "a primary branch, leader or split is its own clump"),
+            }
+        }
+        assert!(subs > 0, "the oak has sub-branches");
     }
 
     #[test]

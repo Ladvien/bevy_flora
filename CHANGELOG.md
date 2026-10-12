@@ -5,6 +5,77 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.9.0] - 2026-10-12
+
+Looks. `TreeParams::style` (`RenderStyle`) draws a tree natural (what 0.8.0 draws, pixel for
+pixel), painterly or toon. A style changes the leaf normals and the lighting, not a vertex
+position, colour or UV, so pools, levels of detail, impostors and `GpuGrowth` follow it. The API
+changes (new fields and a new parameter, below), hence the minor bump.
+
+### Added
+
+- **`RenderStyle`** (`Natural`, the default; `Painterly`; `Toon`) and **`TreeParams::style`**;
+  every preset is `Natural`.
+  - *Painterly:* every leaf takes the normal that points out of the centre of its own clump,
+    fully (`normal_bend` toward the crown does not apply), where a clump is the leaves of one
+    primary branch, the leader or one half of a split with everything that grows from it. The
+    lighting is the natural one, so a crown shades as a cluster of rounded masses, each with a lit
+    and a shaded side, instead of as one soft volume.
+  - *Toon:* the clump normals, and the lighting replaced: each directional light's `N.L` is cut
+    into three bands (0.15, 0.55 and 1, from 0 and 0.5) times its shadow, its colour and the
+    surface colour, plus the ambient light; the light through backlit leaves is kept; and an ink
+    rim darkens every surface toward its silhouette (`mix(0.35, 1, smoothstep(0.05, 0.3, |N.V|))`).
+    The bands use the geometric normal, not the one the bark and leaf detail maps perturb, so
+    they stay clean. Point and spot lights do not light a toon.
+- `LeafPoint::clump` (the `Node::id` of the leaf's clump, the nearest ancestor of its node at
+  recursion depth 0; stable as the tree ages) and `foliage_mesh_styled(points, foliage, style)`
+  (`foliage_mesh` is the natural style).
+- `FloraExtension::style`, `GrowthExtension::style` and `FloraKey::style`: toon is the shader def
+  `FLORA_TOON`, so a toon and a natural tree never share a pipeline, and `SharedFlora` shares
+  materials per style. The impostor shader reads the style from its `params.y`
+  (`ImpostorMaterial::new` takes it after `views`) because its pipeline is shared by every pool.
+- `--style natural|painterly|toon` for the `inspect`, `forest` and `capture_growth` examples, and
+  38 `gallery` scenarios (every preset mature in each look, the oak and the maple at ages 2 and
+  5): 357 in all.
+
+### Changed
+
+- API: struct literals of `TreeParams`, `LeafPoint`, `FloraExtension`, `GrowthExtension` and
+  `FloraKey` need the new fields; `ImpostorMaterial::new` takes a `RenderStyle`.
+- Without the renderer's plugins (the plain-material fallback) a toon tree is lit as a painterly
+  one: the plain material has no bands.
+
+### Measured
+
+Apple M4 Pro, release builds, against 0.8.0 built from the same source tree. bmb was loaded by
+other builds (load average 15-110 during the last runs), so cost is interleaved runs and the
+level-of-detail numbers carry that noise.
+
+- **The natural look is unchanged.** All 319 scenarios of 0.8.0's gallery render with a mean
+  difference of 0.000 of 255 and 100% close pixels from 0.9.0's.
+- **CPU against GPU growth** (`gallery` and `gallery --gpu`, `compare_gallery`): over all 357
+  scenarios the mean difference is 0.073 of 255, the worst a toon maple at age 5 at 1.31 (the
+  limit is 2.5). 48 PNGs are byte-identical. No `stats.tsv` flag, no warning or error in either log.
+- **Growth.** A 192-frame growth clip of the oak and of the maple, painterly and toon, on both
+  paths: the largest frame-to-frame step is at most 1.11 times its neighbours' (limit 2).
+- **Levels of detail and impostors** (`lod_fidelity.sh`, 15 presets, two bearings, 12 distances):
+  the impostor's error against level 0 (region mean colour, of 255) is 0.212 natural, 0.23-0.27
+  painterly and 0.27-0.32 toon (two runs each; the two runs of the same painterly code differ by
+  0.04, the second one with the machine at a load average over 80). In the first run the excess is
+  mostly the oak's and the baobab's, the other 13 presets within 0.1 of their natural error. Why
+  the toon's is the larger is not established: softening its bands in the impostor shader was
+  tried and changed nothing.
+- **How far a look departs from natural** (15 presets at 22 m, mean absolute luminance
+  difference over the tree's pixels, as a share of the natural luminance spread): painterly 0 to
+  19% (the oak 19%, willow 12%, palm 10%, maple 7%, needle trees under 5%), toon 2 to 32% (oak
+  32%, baobab 30%). Painterly is subtle: it shades by clump, and a crown's clumps are a few leaves
+  wide at game zoom (proposal D-065 in `qa/visual_findings.md`).
+- **Cost** (`forest --offscreen`, 1080p, sun with shadows, wind on, interleaved runs, medians): 100
+  000 pooled oaks 12.1-15.3 ms in 0.8.0, 13.1-14.8 natural (one run 20.7), 13.1-15.7 painterly and
+  14.9-15.8 toon; 1 000 individual oaks 32-35 ms in 0.8.0, 32-39 natural, 31-48 painterly and
+  32-48 toon, the spread being the load on the machine (the CPU time per frame was 18-21 ms in
+  the runs that were not disturbed).
+
 ## [0.8.0] - 2026-10-12
 
 Leaves. Seven presets cut their leaf cards to the real outline of a bundled CC0 leaf scan and wear
@@ -759,6 +830,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.9.0]: https://github.com/Ladvien/bevy_flora/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Ladvien/bevy_flora/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Ladvien/bevy_flora/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/Ladvien/bevy_flora/compare/v0.6.1...v0.6.2

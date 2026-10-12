@@ -115,13 +115,15 @@ fn sync_growth(materials: &mut Assets<GrowthMaterial>, handle: &Handle<GrowthMat
             || material.extension.flora != surface.uniform
             || material.extension.detail_color != detail_color
             || material.extension.detail_normal != detail_normal
-            || material.extension.venation != surface.venation)
+            || material.extension.venation != surface.venation
+            || material.extension.style != surface.style)
     {
         material.base.base_color = surface.color;
         material.extension.flora = surface.uniform;
         material.extension.detail_color = detail_color;
         material.extension.detail_normal = detail_normal;
         material.extension.venation = surface.venation.clone();
+        material.extension.style = surface.style;
     }
 }
 

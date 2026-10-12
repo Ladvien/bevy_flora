@@ -392,6 +392,7 @@ fn finish_bake(
                 albedo.clone(),
                 surface.clone(),
                 IMPOSTOR_VIEWS,
+                pool.params.style,
                 flora,
                 &wind,
             )),

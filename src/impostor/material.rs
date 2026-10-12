@@ -16,6 +16,7 @@ use bevy::shader::ShaderRef;
 
 use bevy::render::storage::ShaderBuffer;
 
+use crate::params::RenderStyle;
 use crate::shading::{FloraUniform, FloraWindBuffer};
 
 /// Draws a far tree as a quad that turns about the trunk to face the camera and
@@ -43,7 +44,7 @@ pub struct ImpostorMaterial {
     /// light it lets through in `a`. Linear.
     #[texture(2)]
     pub surface: Handle<Image>,
-    /// `x`: the number of views in the atlas.
+    /// `x`: the number of views in the atlas; `y`: the [`RenderStyle`] (0 natural, 1 painterly, 2 toon).
     #[uniform(3)]
     pub params: Vec4,
     /// The look of the leaves and the species' response to the wind.
@@ -55,19 +56,20 @@ pub struct ImpostorMaterial {
 }
 
 impl ImpostorMaterial {
-    /// A material for the atlases `albedo` and `surface` with `views` views, bending in the wind
-    /// of `wind`.
+    /// A material for the atlases `albedo` and `surface` with `views` views, lit in `style`
+    /// ([`RenderStyle::Toon`] bands the light), bending in the wind of `wind`.
     pub fn new(
         albedo: Handle<Image>,
         surface: Handle<Image>,
         views: u32,
+        style: RenderStyle,
         flora: FloraUniform,
         wind: &FloraWindBuffer,
     ) -> Self {
         Self {
             albedo,
             surface,
-            params: Vec4::new(views as f32, 0.0, 0.0, 0.0),
+            params: Vec4::new(views as f32, style as u32 as f32, 0.0, 0.0),
             flora,
             wind: wind.0.clone(),
         }

@@ -21,6 +21,9 @@ import package::shading::common::bark_surface;
 @if(FLORA_DETAIL && FLORA_LEAF)
 import package::shading::common::leaf_detail;
 
+@if(FLORA_TOON)
+import package::shading::common::{toon_lighting, toon_rim};
+
 @if(FLORA_LEAF)
 import package::shading::common::{leaf_surface, leaf_transmission};
 
@@ -54,12 +57,17 @@ fn fragment(
     apply_decals(&pbr_input);
 
     var out: FragmentOutput;
+@if(FLORA_TOON)
+    out.color = toon_lighting(pbr_input);
+@else
     out.color = apply_pbr_lighting(pbr_input);
 @if(FLORA_LEAF)
     out.color = vec4<f32>(
         out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y),
         out.color.a
     );
+@if(FLORA_TOON)
+    out.color = vec4<f32>(out.color.rgb * toon_rim(pbr_input.world_normal, pbr_input.V), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

@@ -36,7 +36,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FloraPlugin, FloraWind, GpuGrowth, GustFront, ProceduralTree, TreeAge, TreeParams, TreePreset, build_tree,
+    FloraPlugin, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams, TreePreset,
+    build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -131,7 +132,7 @@ struct Capture {
 struct OrbitCam;
 
 fn usage() -> ! {
-    eprintln!("usage: capture_growth [--out <dir>] [--preset <name> | --grove] [--gpu]");
+    eprintln!("usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove] [--gpu]");
     std::process::exit(2);
 }
 
@@ -140,6 +141,7 @@ fn main() {
     let mut preset = None;
     let mut grove = false;
     let mut gpu = false;
+    let mut style = RenderStyle::Natural;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -155,10 +157,18 @@ fn main() {
                         .unwrap_or_else(|| usage()),
                 );
             }
+            "--style" => {
+                style = match args.next().as_deref() {
+                    Some("natural") => RenderStyle::Natural,
+                    Some("painterly") => RenderStyle::Painterly,
+                    Some("toon") => RenderStyle::Toon,
+                    _ => usage(),
+                }
+            }
             _ => usage(),
         }
     }
-    if grove && preset.is_some() {
+    if grove && (preset.is_some() || style != RenderStyle::Natural) {
         usage();
     }
     let out = out.unwrap_or_else(|| PathBuf::from(if grove { "target/capture/grove" } else { "target/capture/growth" }));
@@ -167,7 +177,9 @@ fn main() {
     let scene = if grove {
         Scene::Grove
     } else {
-        Scene::Tree(Box::new(preset.unwrap_or(TreePreset::Maple).params()))
+        let mut params = preset.unwrap_or(TreePreset::Maple).params();
+        params.style = style;
+        Scene::Tree(Box::new(params))
     };
     let size = if grove { UVec2::new(1280, 720) } else { UVec2::new(800, 600) };
     let (distance, focus) = frame_scene(&scene, size);

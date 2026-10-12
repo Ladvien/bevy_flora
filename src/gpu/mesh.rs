@@ -215,7 +215,7 @@ fn tag_leaves(mature: &Skeleton, params: &TreeParams, state: &GrowthState) -> (M
         }
     }
     let mut firsts = Vec::new();
-    let leaves = foliage_mesh_with(&points, foliage, Some(&mut firsts));
+    let leaves = foliage_mesh_with(&points, foliage, params.style, Some(&mut firsts));
     let mut tags = vec![Tag::default(); leaves.positions.len()];
     for (i, from, to) in ranges {
         let node = &mature.nodes[i];

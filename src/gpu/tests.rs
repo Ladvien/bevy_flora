@@ -409,7 +409,7 @@ fn grown_leaves_match_the_cpu_meshers() {
                 owners.extend((before..points.len()).map(|p| (aged.nodes[i].id, (p - before) as u32)));
             }
             let mut firsts = Vec::new();
-            let cpu = foliage_mesh_with(&points, &params.foliage, Some(&mut firsts));
+            let cpu = foliage_mesh_with(&points, &params.foliage, params.style, Some(&mut firsts));
             for (p, &(id, ordinal)) in owners.iter().enumerate() {
                 let end = firsts.get(p + 1).map_or(cpu.positions.len(), |&n| n as usize);
                 let &(from, to) = leaves.get(&(id, ordinal)).expect("the mature tree has every leaf");

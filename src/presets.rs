@@ -188,6 +188,7 @@ fn oak() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.365, 0.227, 0.102),
         bark: BarkParams { scan: Some(BarkScan::Oak), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.8, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -275,6 +276,7 @@ fn pine() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.420, 0.267, 0.137),
         bark: BarkParams { scan: Some(BarkScan::Pine), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
@@ -363,6 +365,7 @@ fn willow() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.478, 0.361, 0.239),
         bark: BarkParams { scan: Some(BarkScan::Willow), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.4, flutter: 1.6, sway_frequency: 0.7, flutter_frequency: 0.8 },
     }
 }
@@ -451,6 +454,7 @@ fn birch() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.961, 0.961, 0.863),
         bark: BarkParams { scan: Some(BarkScan::Birch), smooth_below: 0.10, fissured_above: 0.40 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.2, flutter: 1.3, sway_frequency: 1.1, flutter_frequency: 1.3 },
     }
 }
@@ -538,6 +542,7 @@ fn palm() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.545, 0.451, 0.333),
         bark: BarkParams { scan: Some(BarkScan::Palm), smooth_below: 0.0, fissured_above: 0.05 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.5, flutter: 1.2, sway_frequency: 0.6, flutter_frequency: 0.9 },
     }
 }
@@ -625,6 +630,7 @@ fn cypress() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.290, 0.235, 0.165),
         bark: BarkParams { scan: Some(BarkScan::Cedar), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.6, flutter: 0.6, sway_frequency: 1.0, flutter_frequency: 1.2 },
     }
 }
@@ -713,6 +719,7 @@ fn bonsai() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.361, 0.251, 0.200),
         bark: BarkParams { scan: Some(BarkScan::Zelkova), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.2, flutter: 0.6, sway_frequency: 1.5, flutter_frequency: 1.2 },
     }
 }
@@ -801,6 +808,7 @@ fn maple() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.32, 0.21, 0.12),
         bark: BarkParams { scan: Some(BarkScan::Maple), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.9, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -894,6 +902,7 @@ fn spruce() -> TreeParams {
         },
         trunk_color: Color::srgb(0.380, 0.243, 0.141),
         bark: BarkParams { scan: Some(BarkScan::KnottedPine), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
@@ -982,6 +991,7 @@ fn poplar() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.553, 0.514, 0.435),
         bark: BarkParams { scan: Some(BarkScan::Sakura), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.1, flutter: 1.8, sway_frequency: 1.1, flutter_frequency: 1.8 },
     }
 }
@@ -1069,6 +1079,7 @@ fn baobab() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.506, 0.424, 0.369),
         bark: BarkParams { scan: Some(BarkScan::PalmTree), smooth_below: 0.20, fissured_above: 0.80 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.3, flutter: 0.8, sway_frequency: 0.8, flutter_frequency: 1.0 },
     }
 }
@@ -1156,6 +1167,7 @@ fn dragon_tree() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.463, 0.396, 0.322),
         bark: BarkParams { scan: Some(BarkScan::Hackberry), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.3, flutter: 0.7, sway_frequency: 0.9, flutter_frequency: 0.9 },
     }
 }
@@ -1244,6 +1256,7 @@ fn japanese_maple() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.376, 0.282, 0.212),
         bark: BarkParams { scan: Some(BarkScan::Maple), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.0, flutter: 1.2, sway_frequency: 1.1, flutter_frequency: 1.1 },
     }
 }
@@ -1318,6 +1331,7 @@ fn dead_tree() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.388, 0.361, 0.325),
         bark: BarkParams { scan: Some(BarkScan::Brown), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.6, flutter: 0.0, sway_frequency: 1.2, flutter_frequency: 1.0 },
     }
 }
@@ -1405,6 +1419,7 @@ fn redwood() -> TreeParams {
         growth: GrowthParams::default(),
         trunk_color: Color::srgb(0.463, 0.263, 0.161),
         bark: BarkParams { scan: Some(BarkScan::Metasequoia), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
         wind: WindResponse { sway: 0.5, flutter: 0.6, sway_frequency: 0.6, flutter_frequency: 1.0 },
     }
 }

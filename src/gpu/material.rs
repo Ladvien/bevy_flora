@@ -11,6 +11,7 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 use super::{ATTRIBUTE_GROWTH_AXIS, ATTRIBUTE_GROWTH_ID, ATTRIBUTE_GROWTH_OFFSET};
+use crate::params::RenderStyle;
 use crate::shading::{FloraKey, FloraUniform, FloraWindBuffer, Surface, flora_base, specialize_flora};
 
 /// [`StandardMaterial`] with the vertex stage of a tree that grows on the GPU, and the leaf
@@ -50,6 +51,8 @@ pub struct GrowthExtension {
     #[texture(106)]
     #[sampler(107)]
     pub venation: Option<Handle<Image>>,
+    /// How the surface is lit; see [`FloraExtension::style`](crate::FloraExtension::style).
+    pub style: RenderStyle,
 }
 
 impl From<&GrowthExtension> for FloraKey {
@@ -58,6 +61,7 @@ impl From<&GrowthExtension> for FloraKey {
             leaf: extension.leaf,
             detail: extension.detail_color.is_some() && extension.detail_normal.is_some(),
             venation: extension.venation.is_some(),
+            style: extension.style,
         }
     }
 }
@@ -79,6 +83,7 @@ pub(crate) fn growth_material(
             detail_color,
             detail_normal,
             venation: surface.venation.clone(),
+            style: surface.style,
         },
     }
 }

@@ -48,7 +48,7 @@ use bevy::time::Time;
 use crate::foliage::uses_scan;
 use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
-use crate::params::{LeafStyle, TreeParams};
+use crate::params::{LeafStyle, RenderStyle, TreeParams};
 
 mod share;
 pub use share::SharedFlora;
@@ -243,6 +243,8 @@ pub struct FloraKey {
     pub detail: bool,
     /// Leaf veins from an image: see [`FloraExtension::venation`].
     pub venation: bool,
+    /// The look: see [`FloraExtension::style`].
+    pub style: RenderStyle,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -275,6 +277,10 @@ pub struct FloraExtension {
     #[texture(106)]
     #[sampler(107)]
     pub venation: Option<Handle<Image>>,
+    /// How the surface is lit: [`RenderStyle::Toon`] replaces the physically based lighting of
+    /// the fragment stage with bands and an ink rim; the other styles are lit as ever (the
+    /// painterly look is in the normals of the mesh).
+    pub style: RenderStyle,
 }
 
 impl From<&FloraExtension> for FloraKey {
@@ -283,6 +289,7 @@ impl From<&FloraExtension> for FloraKey {
             leaf: extension.leaf,
             detail: extension.detail_color.is_some() && extension.detail_normal.is_some(),
             venation: extension.venation.is_some(),
+            style: extension.style,
         }
     }
 }
@@ -336,6 +343,13 @@ pub(crate) fn specialize_flora(
     {
         fragment.shader_defs.push("FLORA_DETAIL".into());
     }
+    // Toon shading replaces the lighting of the whole surface, wood and leaves alike. The painterly
+    // style differs from the natural one in the mesh (its normals), not in the shaders.
+    if key.style == RenderStyle::Toon
+        && let Some(fragment) = descriptor.fragment.as_mut()
+    {
+        fragment.shader_defs.push("FLORA_TOON".into());
+    }
     if !key.leaf {
         return Ok(());
     }
@@ -379,6 +393,8 @@ pub(crate) struct Surface {
     pub leaf_scan: Option<LeafTexture>,
     /// The image of leaf veins a leaf without a scan wears.
     pub venation: Option<Handle<Image>>,
+    /// How the surface is lit: see [`RenderStyle`].
+    pub style: RenderStyle,
 }
 
 impl Surface {
@@ -390,7 +406,7 @@ impl Surface {
             uniform.bark_mean = Vec4::new(bark.mean.red, bark.mean.green, bark.mean.blue, 0.0);
         }
         let color = bark.as_ref().map_or(params.trunk_color, |bark| bark.base_color(params.trunk_color));
-        Self { color, uniform, leaf: false, bark, leaf_scan: None, venation: None }
+        Self { color, uniform, leaf: false, style: params.style, bark, leaf_scan: None, venation: None }
     }
 
     /// The leaves of a tree with `params`, wearing `leaf_scan`'s atlas, or `venation`'s veins.
@@ -406,7 +422,7 @@ impl Surface {
             uniform.leaf.z = 0.0;
         }
         let color = leaf_scan.as_ref().map_or(params.foliage.color, |scan| scan.base_color(params.foliage.color));
-        Self { color, uniform, leaf: true, bark: None, leaf_scan, venation }
+        Self { color, uniform, leaf: true, style: params.style, bark: None, leaf_scan, venation }
     }
 
     /// The colour and normal maps the material binds, if it has them.
@@ -432,6 +448,7 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
             detail_color,
             detail_normal,
             venation: surface.venation.clone(),
+            style: surface.style,
         },
     }
 }
@@ -721,6 +738,28 @@ mod tests {
         let (other_wood, other_leaves) = surfaces(&other, true);
         assert_ne!(resolve(&wood), resolve(&other_wood));
         assert_ne!(resolve(&leaves), resolve(&other_leaves));
+    }
+
+    #[test]
+    fn every_render_style_has_its_own_material_and_pipeline_key() {
+        use crate::shading::SharedFlora;
+        let mut shared = SharedFlora::default();
+        let mut materials = Assets::<FloraMaterial>::default();
+        let wind = FloraWindBuffer(Handle::default());
+        let mut params = TreePreset::Oak.params();
+        let mut resolved = Vec::new();
+        for style in [RenderStyle::Natural, RenderStyle::Painterly, RenderStyle::Toon] {
+            params.style = style;
+            let (wood, leaves) = surfaces(&params, true);
+            for surface in [&wood, &leaves] {
+                assert_eq!(FloraKey::from(&flora_material(surface, &wind).extension).style, style);
+                resolved.push(shared.resolve(&mut materials, surface, &wind));
+            }
+        }
+        let distinct: std::collections::HashSet<_> = resolved.iter().collect();
+        assert_eq!(distinct.len(), resolved.len(), "a style shares its material with another");
+        // The impostor shader reads the style as a number.
+        assert_eq!([RenderStyle::Natural, RenderStyle::Painterly, RenderStyle::Toon].map(|s| s as u32), [0, 1, 2]);
     }
 
     #[test]

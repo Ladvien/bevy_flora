@@ -107,6 +107,15 @@
 //! small image every such leaf shares. Both need the `textures` feature only for the scans: the
 //! veins are grown at run time.
 //!
+//! # Looks: natural, painterly, toon
+//!
+//! [`TreeParams::style`] ([`RenderStyle`]) changes how a tree is lit, not its shape. `Painterly`
+//! gives every leaf the normal that points out of the centre of its own clump (the leaves of a
+//! primary branch, the leader or a split) rather than out of the crown's, so a crown reads as
+//! rounded masses with a lit and a shaded side each. `Toon` keeps those normals and cuts the
+//! light of every directional light into three bands, with an ink rim toward the silhouette. The
+//! pools, the impostors and `GpuGrowth` draw them all.
+//!
 //! # Building meshes without Bevy's ECS
 //!
 //! ```rust
@@ -144,7 +153,7 @@ pub use lod::{LodDistances, LodSettings, build_lods};
 pub use mesh::MeshData;
 pub use params::{
     BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, LeafOrientation, LeafScan, LeafShading,
-    LeafStyle, MeshParams, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
+    LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
 };
 pub use pipeline::{TreeMeshes, build_tree};
 pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeRender};
