@@ -79,12 +79,18 @@ two binaries.
 - **Growth.** A 192-frame growth clip of the oak and of the maple, on both paths: the largest
   frame-to-frame step is at most 1.11 times its neighbours' (limit 2), so leaves neither pop nor
   change shape as the tree grows.
-- **Cost** (`forest --offscreen`, 1080p, one shadow-casting sun, wind on, interleaved):
+- **Cost** (`forest --offscreen`, 1080p, one shadow-casting sun, wind on, interleaved runs):
   1 000 individual oaks, median frame time. A card's outline is what costs here (the GPU's vertex
   work, in the main pass and every shadow cascade): 0.7.0 took 29-31 ms while 0.8.0 with
-  24-point Douglas-Peucker outlines took 54-57 ms (+80%), with 16 points about +60%, with 12 points
-  35-37 ms (+13 to +19%) and with the 10 best vertices it ships with 32 ms (+4 to +10%); it is
-  the cap the 10% rule asks for (proposal D-063 in `qa/visual_findings.md` for more).
+  24-point Douglas-Peucker outlines took 54-57 ms (+80%), with 16 points about +60%, with 12
+  points 35-37 ms (+13 to +19%) and with the 10 best vertices it ships with 32 ms (+4 to +10%),
+  which is the cap the 10% rule asks for (proposal D-063 in `qa/visual_findings.md`). 100 000
+  pooled oaks: on a quiet machine the development build with 24-point outlines drew them in
+  10.0-10.6 ms against 0.7.0's 11.2-12.5 (five runs each); the shipped build's later runs were
+  made at a load average of 40-70 and say nothing about frame time, but its CPU time per frame
+  (the `cpu` column, which contention does not move) was 57-65 ms against 0.7.0's 62-65. The
+  500 `GpuGrowth` oaks' CPU time was 97-106 ms against 99-105. The README's frame-time table was
+  not re-measured: the machine was never quiet long enough to run it.
 
 ## [0.7.0] - 2026-10-11
 
