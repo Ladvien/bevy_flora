@@ -314,7 +314,7 @@ pub(crate) fn foliage_mesh_with(
 }
 
 /// [`foliage_mesh`] for the coarse levels of detail: cards cut to a scanned leaf use its coarse
-/// outline (at most 8 points), so a distant leaf costs about what a procedural one does.
+/// outline (6 to 10 points), so a distant leaf costs about what a procedural one does.
 pub(crate) fn foliage_mesh_coarse(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
     build_foliage(points, foliage, None, true)
 }

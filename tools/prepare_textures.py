@@ -8,6 +8,9 @@ are always regenerated. Needs python3, Pillow and numpy only.
 Stages (``--only``): ``bark``, ``leaves``. Each stage is a function ``prepare_<stage>(root)``.
 CREDITS.md and (for ``leaves``) src/textures/leaves.rs are rewritten on every run; CREDITS.md always
 lists every stage, built from the static tables, so ``--only`` never drops rows.
+The leaves stage caps each leaf's full outline at --max-outline-points (default 10) chosen by --selection
+(default optimal: the best vertex subset of the 24-point reference outline; dp: Douglas-Peucker); the
+defaults write the committed table, anything else needs --out-rs (and --sheet draws a comparison sheet).
 This tool is repo-only and is not part of the published crate.
 """
 
@@ -255,7 +258,9 @@ LEAF_FIT = 240  # a leaf fits inside this many pixels of its 256 px cell, leavin
 DILATE_PX = 8
 MIN_LEAF_AREA = 0.01  # fraction of the source image
 REFERENCE_OUTLINE_POINTS = 24  # the area reference: the full outline simplified to this many points
-DEFAULT_OUTLINE_POINTS = 12  # cap of the committed table's full outlines (24 and 16 cost a forest of oaks 60-75%)
+DEFAULT_OUTLINE_POINTS = 10  # cap of the committed table's full outlines (24 and 16 points cost a forest of
+# oaks 60-75% frame time, 12 about 13-18%; 10 points chosen by DEFAULT_SELECTION keep it within budget)
+DEFAULT_SELECTION = "optimal"  # how the committed table's full outlines are chosen
 COARSE_MIN_POINTS = 6  # fewer would reduce a lobed leaf to a quad
 COARSE_POINTS = 8  # distant levels of detail use a coarser outline
 COARSE_POINTS_MAX = 10  # allowed for a leaf that cannot keep its area with COARSE_POINTS
@@ -807,15 +812,124 @@ def outline_tolerance(max_points):
         return 0.04
     if max_points >= 12:
         return 0.08
+    if max_points >= 10:
+        return 0.10
     return 0.15
 
 
-def leaf_geometry(alpha, cell, max_points=REFERENCE_OUTLINE_POINTS):
+# -- optimal vertex subsets -------------------------------------------------
+
+
+def _grid(n=700):
+    xs = (np.arange(n) + 0.5) / n * 2.0 - 1.0
+    return np.meshgrid(xs, xs)
+
+
+def _winding(poly, X, Y):
+    """Winding number of the closed polygon around every grid point."""
+    w = np.zeros(X.shape, dtype=np.int32)
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if y1 == y2:
+            continue
+        side = (x2 - x1) * (Y - y1) - (y2 - y1) * (X - x1)  # > 0: point left of the edge
+        up = (y1 <= Y) & (Y < y2)
+        down = (y2 <= Y) & (Y < y1)
+        w += (up & (side > 0)).astype(np.int32)
+        w -= (down & (side < 0)).astype(np.int32)
+    return w
+
+
+def sym_diff_ratio(ref, q, n=700):
+    """Area of the symmetric difference of two polygons (card space, x and y in -1..1) over the area of
+    `ref`, by sampling an n x n grid."""
+    X, Y = _grid(n)
+    a = _winding(ref, X, Y) != 0
+    b = _winding(q, X, Y) != 0
+    return float((a ^ b).sum() / a.sum())
+
+
+def _loop_area(loop):
+    """Area covered by a closed loop counted without sign (sum of |winding number|): the area of a simple
+    loop, or of both lobes of a crossing one."""
+    x0, y0 = np.min(loop, axis=0)
+    x1, y1 = np.max(loop, axis=0)
+    if x1 - x0 < 1e-9 or y1 - y0 < 1e-9:
+        return 0.0
+    n = 240
+    xs = x0 + (np.arange(n) + 0.5) / n * (x1 - x0)
+    ys = y0 + (np.arange(n) + 0.5) / n * (y1 - y0)
+    X, Y = np.meshgrid(xs, ys)
+    return float(np.abs(_winding(loop, X, Y)).sum() * (x1 - x0) * (y1 - y0) / (n * n))
+
+
+def _chain_cost(seq, i, j):
+    """Area between the boundary chain seq[i..j] and its chord: |signed area| of the closed loop, or, if
+    the chord crosses its own chain, the sum of the lobes' areas."""
+    loop = [seq[k] for k in range(i, j + 1)]
+    if len(loop) == 2:
+        return 0.0
+    chord_a, chord_b = loop[-1], loop[0]
+    crossing = any(
+        _segments_intersect(loop[k], loop[k + 1], chord_a, chord_b) for k in range(1, len(loop) - 2)
+    )
+    if not crossing:
+        return abs(polygon_area(loop))
+    return _loop_area(loop)
+
+
+def optimal_subset(poly, count, tol, ref_area):
+    """The `count`-vertex subset of the (ccw, simple) polygon that keeps the base (lowest) and tip (highest)
+    vertices and minimises the area of the symmetric difference with `poly`, among the subsets that are
+    simple polygons, triangulate, and keep their area within `tol` of `ref_area`. Subsets are ranked by
+    the sum, over the boundary chains they cut off, of the area between each chain and its chord (exact for
+    a simple subset), exhaustively. Returns indices into `poly`, or None."""
+    from itertools import combinations
+
+    m = len(poly)
+    if count >= m:
+        return list(range(m))
+    base = min(range(m), key=lambda k: poly[k][1])
+    tip = max(range(m), key=lambda k: poly[k][1])
+    seq = [poly[(base + k) % m] for k in range(m)] + [poly[base]]
+    t = (tip - base) % m
+    cost = np.full((m + 1, m + 1), np.inf)
+    for i in range(m + 1):
+        for j in range(i + 1, m + 1):
+            cost[i, j] = _chain_cost(seq, i, j)
+    others = [k for k in range(1, m) if k != t]
+    combos = np.array(list(combinations(others, count - 2)), dtype=np.int32).reshape(-1, count - 2)
+    kept = np.concatenate(
+        [np.zeros((len(combos), 1), np.int32), np.full((len(combos), 1), t, np.int32), combos], axis=1
+    )
+    kept.sort(axis=1)
+    kept = np.concatenate([kept, np.full((len(kept), 1), m, np.int32)], axis=1)
+    total = cost[kept[:, :-1], kept[:, 1:]].sum(axis=1)
+    for row in np.argsort(total, kind="stable")[:20000]:
+        idx = [(base + int(k)) % m for k in kept[row, :-1]]
+        q = [poly[k] for k in idx]
+        if not is_simple(q) or polygon_area(q) <= 0:
+            continue
+        if abs(polygon_area(q) / ref_area - 1.0) > tol:
+            continue
+        try:
+            triangulate(q)
+        except RuntimeError:
+            continue
+        return idx
+    return None
+
+
+def leaf_geometry(alpha, cell, max_points=REFERENCE_OUTLINE_POINTS, selection="dp"):
     """Outline, uv, triangles and aspect of the leaf in atlas cell `cell` (0..3).
 
     The reference outline has REFERENCE_OUTLINE_POINTS points. With a smaller `max_points` the full outline is
     simplified harder, as long as its area stays within outline_tolerance of the reference (otherwise
-    the point count grows until it does, and the result says so in "points_needed")."""
+    the point count grows until it does, and the result says so in "points_needed"). `selection` is "dp"
+    (Douglas-Peucker on the traced contour) or "optimal" (the best subset of the reference's vertices,
+    see optimal_subset)."""
     ox, oy = (cell % 2) * CELL, (cell // 2) * CELL
     pad = 2
     a = np.pad(alpha[oy : oy + CELL, ox : ox + CELL], pad)
@@ -847,15 +961,22 @@ def leaf_geometry(alpha, cell, max_points=REFERENCE_OUTLINE_POINTS):
     if chosen is None:
         raise RuntimeError("could not simplify the outline to a simple polygon")
     poly, uv = build(chosen)
+    ref_poly, ref_uv = poly, uv
     points_needed = None
     if max_points < REFERENCE_OUTLINE_POINTS:
         ref_area = polygon_area(poly)
         tol = outline_tolerance(max_points)
         for limit in range(max_points, REFERENCE_OUTLINE_POINTS):
-            cand = simplify_to(full, limit)
-            if cand is None:
-                continue
-            cpoly, cuv = build(cand)
+            if selection == "optimal":
+                idx = optimal_subset(ref_poly, limit, tol, ref_area)
+                if idx is None:
+                    continue
+                cpoly, cuv = [ref_poly[k] for k in idx], [ref_uv[k] for k in idx]
+            else:
+                cand = simplify_to(full, limit)
+                if cand is None:
+                    continue
+                cpoly, cuv = build(cand)
             dev = abs(polygon_area(cpoly) / ref_area - 1.0)
             if dev <= tol:
                 poly, uv, points_needed = cpoly, cuv, limit
@@ -886,6 +1007,9 @@ def leaf_geometry(alpha, cell, max_points=REFERENCE_OUTLINE_POINTS):
         "coarse_method": coarse["method"],
         "area_deviation": dev,
         "points_needed": points_needed,
+        "reference_outline": ref_poly,
+        "reference_uv": ref_uv,
+        "sym_diff": sym_diff_ratio(ref_poly, poly) if poly is not ref_poly else 0.0,
     }
 
 
@@ -912,6 +1036,41 @@ def draw_overlay(path, color_img, geoms):
     img.save(path)
 
 
+def draw_sheet(path, names, sets, color_images, title):
+    """One contact sheet: a row per set, a tile per leaf, the reference outline (yellow) and the chosen
+    polygon (cyan, vertices red) over the colour atlas, labelled with point counts and the symmetric
+    difference to the reference."""
+    from PIL import ImageDraw
+
+    tile, head = 320, 22
+    scale = tile / CELL
+    sheet = Image.new("RGB", (4 * tile, len(names) * (tile + head) + head), (40, 40, 40))
+    d = ImageDraw.Draw(sheet)
+    d.text((6, 5), f"{title}: reference outline (yellow) vs chosen polygon (cyan)", fill=(255, 255, 255))
+    for r, (name, st) in enumerate(zip(names, sets)):
+        atlas = color_images[name]
+        for k, g in enumerate(st["leaves"]):
+            ox, oy = (k % 2) * CELL, (k // 2) * CELL
+            x0, y0 = k * tile, head + r * (tile + head)
+            sheet.paste(atlas.crop((ox, oy, ox + CELL, oy + CELL)).resize((tile, tile), Image.LANCZOS), (x0, y0 + head))
+
+            def pt(u, v):
+                return ((u * ATLAS - ox) * scale + x0, (v * ATLAS - oy) * scale + y0 + head)
+
+            ref = [pt(u, v) for u, v in g["reference_uv"]]
+            d.line(ref + [ref[0]], fill=(255, 230, 0), width=1)
+            ch = [pt(u, v) for u, v in g["uv"]]
+            d.line(ch + [ch[0]], fill=(0, 255, 255), width=2)
+            for x, y in ch:
+                d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 0, 0))
+            d.text(
+                (x0 + 4, y0 + 5),
+                f"{name} {k}: {len(g['outline'])}/{len(g['reference_outline'])} pts, symdiff {100 * g['sym_diff']:.1f}%",
+                fill=(255, 255, 255),
+            )
+    sheet.save(path)
+
+
 def fmt(v):
     s = f"{v:.5f}".rstrip("0")
     if s.endswith("."):
@@ -927,15 +1086,16 @@ def pairs_rust(points, indent):
     return "\n".join(lines)
 
 
-def write_leaves_rs(path, names, sets, max_points):
+def write_leaves_rs(path, names, sets, max_points, selection):
     leaves = [g for st in sets for g in st["leaves"]]
     n_full = [len(g["outline"]) for g in leaves]
     n_coarse = [len(g["coarse_outline"]) for g in leaves]
     tris = [len(g["triangles"]) // 3 for g in leaves]
+    used = f"all {min(n_full)}" if min(n_full) == max(n_full) else f"{min(n_full)} to {max(n_full)}"
     out = [
         "//! Outlines, triangulations and atlas coordinates of the bundled leaf scans. Generated by",
         "//! `tools/prepare_textures.py`; do not edit.",
-        f"// Full outlines: cap {max_points} points, {min(n_full)} to {max(n_full)} used (mean {sum(n_full) / len(n_full):.1f}, "
+        f"// Full outlines: cap {max_points} points ({selection} selection), {used} used (mean {sum(n_full) / len(n_full):.1f}, "
         f"{sum(tris) / len(tris):.1f} triangles per card side); a leaf exceeds the cap only where it needs the points",
         f"// to stay within tolerance of the {REFERENCE_OUTLINE_POINTS}-point area. Coarse outlines: {min(n_coarse)} to {max(n_coarse)} points.",
         "// Outline points are measurements: one happens to be 0.63662, which clippy takes for 2/pi.",
@@ -1007,11 +1167,12 @@ def write_leaves_rs(path, names, sets, max_points):
     path.write_text("\n".join(out) + "\n")
 
 
-def prepare_leaves(root, max_points=DEFAULT_OUTLINE_POINTS, out_rs=None):
+def prepare_leaves(root, max_points=DEFAULT_OUTLINE_POINTS, out_rs=None, selection=DEFAULT_SELECTION, sheet=None):
     """Atlases and src/textures/leaves.rs. With `out_rs` (a variant run) the atlases go to a scratch
-    directory and only that Rust file is written, so the worktree's own files stay untouched."""
+    directory and only that Rust file is written, so the worktree's own files stay untouched. `sheet` names a
+    contact sheet PNG of reference vs chosen outlines."""
     variant = out_rs is not None
-    out_dir = Path(f"/tmp/bevy_flora_leaf_variant_{max_points}") if variant else root / "src" / "textures" / "leaves"
+    out_dir = Path(f"/tmp/bevy_flora_leaf_variant_{max_points}{selection}") if variant else root / "src" / "textures" / "leaves"
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.jpg"):
         old.unlink()
@@ -1055,12 +1216,14 @@ def prepare_leaves(root, max_points=DEFAULT_OUTLINE_POINTS, out_rs=None):
         raise RuntimeError(f"leaf atlases are {total} bytes, over the {LEAF_BUDGET} budget")
 
     sets = []
+    color_images = {}
     for name, set_id, _rgb, _nrm, alpha in built:
         color_img = Image.open(out_dir / f"{name}_color.jpg").convert("RGB")
         px = np.asarray(color_img, dtype=np.float64)
         mean = srgb_to_linear(px[alpha > 0.5]).mean(axis=0)
-        geoms = [leaf_geometry(alpha, k, max_points) for k in range(4)]
-        draw_overlay(DEBUG_DIR / (f"{name}_overlay.png" if not variant else f"{name}_overlay_{max_points}.png"), color_img, geoms)
+        geoms = [leaf_geometry(alpha, k, max_points, selection) for k in range(4)]
+        color_images[name] = color_img
+        draw_overlay(DEBUG_DIR / (f"{name}_overlay.png" if not variant else f"{name}_overlay_{max_points}{selection}.png"), color_img, geoms)
         sets.append({"leaves": geoms, "mean": [float(m) for m in mean]})
         print(f"  {name:15s} {set_id}")
         print(f"    files: {sizes[name + '_color.jpg']} B colour, {sizes[name + '_normal.jpg']} B normal")
@@ -1079,7 +1242,7 @@ def prepare_leaves(root, max_points=DEFAULT_OUTLINE_POINTS, out_rs=None):
     names = [b[0] for b in built]
     rs_path = Path(out_rs).resolve() if variant else root / "src" / "textures" / "leaves.rs"
     rs_path.parent.mkdir(parents=True, exist_ok=True)
-    write_leaves_rs(rs_path, names, sets, max_points)
+    write_leaves_rs(rs_path, names, sets, max_points, selection)
     all_leaves = [g for st in sets for g in st["leaves"]]
     print(
         f"  full outline: mean {sum(len(g['outline']) for g in all_leaves) / len(all_leaves):.2f} points, "
@@ -1092,7 +1255,17 @@ def prepare_leaves(root, max_points=DEFAULT_OUTLINE_POINTS, out_rs=None):
               f"(total {sum(len(g['triangles']) // 3 for g in ls)}), coarse {[len(g['coarse_triangles']) // 3 for g in ls]}")
         print(f"    {name:15s} mean outline points {sum(len(g['outline']) for g in ls) / 4:.2f}, "
               f"worst deviation {max(g['area_deviation'] for g in ls):.4f}, "
+              f"symmetric difference worst {max(g['sym_diff'] for g in ls):.4f} mean {sum(g['sym_diff'] for g in ls) / 4:.4f}, "
+              f"needed more than {max_points}: {sum(1 for g in ls if len(g['outline']) > max_points)}, "
               f"mean coarse points {sum(len(g['coarse_outline']) for g in ls) / 4:.2f}, coarse points {[len(g['coarse_outline']) for g in ls]}")
+    print(
+        f"  symmetric difference to the {REFERENCE_OUTLINE_POINTS}-point outline: worst {max(g['sym_diff'] for g in all_leaves):.4f}, "
+        f"mean {sum(g['sym_diff'] for g in all_leaves) / len(all_leaves):.4f}; leaves above {max_points} points: "
+        f"{sum(1 for g in all_leaves if len(g['outline']) > max_points)} of {len(all_leaves)}"
+    )
+    if sheet is not None:
+        draw_sheet(Path(sheet), names, sets, color_images, f"{selection} {max_points}")
+        print(f"wrote {sheet}")
     print(f"wrote {rs_path}; LEAF_SETS order: {', '.join(f'{i}={n}' for i, n in enumerate(names))}")
     print(f"  leaf total: {sum(sizes.values())} B (budget {LEAF_BUDGET}); used: {label}; overlays in {DEBUG_DIR}")
 
@@ -1153,7 +1326,8 @@ def main():
         default=DEFAULT_OUTLINE_POINTS,
         help=(
             f"leaves stage: cap on the full outline's points (default {DEFAULT_OUTLINE_POINTS}; a leaf may use "
-            f"more to stay within 4%% (cap >= 16) / 8%% (cap >= 12) of the {REFERENCE_OUTLINE_POINTS}-point area; "
+            f"more to stay within 4%% (cap >= 16) / 8%% (cap >= 12) / 10%% (cap >= 10) of the "
+            f"{REFERENCE_OUTLINE_POINTS}-point area; "
             f"other values need --out-rs)"
         ),
     )
@@ -1162,12 +1336,21 @@ def main():
         type=Path,
         help="leaves stage: write the generated Rust here and leave every other file alone (default: src/textures/leaves.rs)",
     )
+    parser.add_argument(
+        "--selection",
+        choices=("dp", "optimal"),
+        default=DEFAULT_SELECTION,
+        help="leaves stage: how the capped full outline is chosen: the best subset of the reference outline's "
+        f"vertices, least symmetric-difference area (optimal, default {DEFAULT_SELECTION}), or Douglas-Peucker on "
+        "the traced contour (dp); values other than the defaults need --out-rs",
+    )
+    parser.add_argument("--sheet", type=Path, help="leaves stage: write a contact sheet PNG of reference vs chosen outlines")
     args = parser.parse_args()
     if not 4 <= args.max_outline_points <= REFERENCE_OUTLINE_POINTS:
         parser.error(f"--max-outline-points must be between 4 and {REFERENCE_OUTLINE_POINTS}")
     variant = args.out_rs is not None
-    if args.max_outline_points != DEFAULT_OUTLINE_POINTS and not variant:
-        parser.error("--max-outline-points other than the default needs --out-rs (the committed file keeps the default)")
+    if (args.max_outline_points != DEFAULT_OUTLINE_POINTS or args.selection != DEFAULT_SELECTION) and not variant:
+        parser.error("--max-outline-points / --selection other than the default need --out-rs (the committed file keeps the default)")
     if variant and args.only != "leaves":
         parser.error("--out-rs / --max-outline-points need --only leaves")
 
@@ -1176,7 +1359,7 @@ def main():
         if args.only and args.only != stage:
             continue
         if stage == "leaves":
-            fn(root, args.max_outline_points, args.out_rs)
+            fn(root, args.max_outline_points, args.out_rs, args.selection, args.sheet)
         else:
             fn(root)
     if variant:
