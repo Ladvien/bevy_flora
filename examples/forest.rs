@@ -5,6 +5,7 @@
 //!     [--preset <name>] [--frames <n>] [--warmup-secs <s>] [--spacing <m>]
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
+//!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>]
 //! ```
@@ -28,6 +29,8 @@
 //! `--deterministic` steps the clock a fixed 1/60 s per frame and counts `--warmup-secs` as
 //! 60 frames a second, so a `--screenshot` of two versions of the code is the same image
 //! wherever they draw the same (compare the PNGs byte for byte).
+//! `--eye <x,y,z>` and `--at <x,y,z>` move the camera and what it looks at (world metres, the
+//! grid centred on the origin), and `--fov <deg>` sets its vertical field of view (45 by default).
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame.
@@ -125,6 +128,11 @@ struct Args {
     shadows: Shadows,
     /// Where the sun stands; it looks at the origin.
     sun: Vec3,
+    /// Where the camera stands and what it looks at, if not the default corner view.
+    eye: Option<Vec3>,
+    at: Option<Vec3>,
+    /// Vertical field of view, degrees.
+    fov: f32,
     /// Strength of the wind, if not the library's default.
     wind: Option<f32>,
     /// Where the wind blows toward (world x and z), if not the library's default.
@@ -153,6 +161,7 @@ fn usage() -> ! {
         "usage: forest [--trees <n>] [--mode <naive|pool|gpu|gpu-live|cpu-live>] [--preset <name>] [--frames <n>] \
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
+         [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>]"
     );
@@ -171,6 +180,9 @@ fn parse_args() -> Args {
         lod: None,
         shadows: Shadows::Default,
         sun: Vec3::new(-20.0, 25.0, 20.0),
+        eye: None,
+        at: None,
+        fov: 45.0,
         wind: None,
         wind_dir: None,
         gust: None,
@@ -232,6 +244,17 @@ fn parse_args() -> Args {
                 let [x, y, z]: [f32; 3] = parts.try_into().unwrap_or_else(|_| usage());
                 args.sun = Vec3::new(x, y, z);
             }
+            "--eye" | "--at" => {
+                let list = it.next().unwrap_or_else(|| usage());
+                let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
+                let [x, y, z]: [f32; 3] = parts.try_into().unwrap_or_else(|_| usage());
+                if arg == "--eye" {
+                    args.eye = Some(Vec3::new(x, y, z));
+                } else {
+                    args.at = Some(Vec3::new(x, y, z));
+                }
+            }
+            "--fov" => args.fov = value(&mut it),
             "--wind" => args.wind = Some(value(&mut it)),
             "--wind-dir" => {
                 let list = it.next().unwrap_or_else(|| usage());
@@ -406,11 +429,12 @@ fn setup(
     let mut camera = commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
+            fov: bench.args.fov.to_radians(),
             far: extent * 2.0 + 500.0,
             ..default()
         }),
-        Transform::from_xyz(-half, CAMERA_HEIGHT, -half)
-            .looking_at(Vec3::new(0.0, 8.0, 0.0), Vec3::Y),
+        Transform::from_translation(bench.args.eye.unwrap_or(Vec3::new(-half, CAMERA_HEIGHT, -half)))
+            .looking_at(bench.args.at.unwrap_or(Vec3::new(0.0, 8.0, 0.0)), Vec3::Y),
     ));
     if bench.args.is_offscreen() {
         bench.target = images.add(Image::new_target_texture(

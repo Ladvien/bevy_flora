@@ -5,12 +5,49 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
-## [Unreleased]
+## [0.6.1] - 2026-10-11
 
-Media and documentation; the library's behaviour does not change.
+Far trees read like the trees they stand for. Up close nothing changes: all 319 gallery scenarios
+are byte-identical to 0.6.0, and so is every level of detail of a pool; only the impostors look
+different, and only with MSAA (without it they are byte-identical to 0.6.0). No API change.
+
+### Fixed
+
+- **Impostors were darker, more saturated and blockier than the trees they replace.** Beyond the
+  last level of detail a tree is a few dozen pixels high and its crown is leaves and sky mixed
+  inside each pixel; the meshes show that mix (MSAA blends each pixel's samples), and the
+  impostor's atlas keeps it too, as fractional alpha averaged down its mipmaps. The impostor cut
+  that alpha at one half, so a far crown became solid leaf colour or nothing: the oak's
+  impostor at 197 m was 30 levels of 255 darker than the oak and 68 off in colour, and lost 16%
+  of its pixels by 320 m. `ImpostorMaterial` now draws with alpha to coverage: with MSAA a pixel
+  draws the share of its samples the baked tree covers, unsharpened (Bevy's own sharpening would
+  turn a far mip's partial coverage back into all or nothing). Measured on an Apple M4 Pro with
+  the new `inspect` example, every level forced at the same distance and compared with level 0
+  at game zoom:
+
+  | impostor against level 0, beyond 200 m | 0.6.0 | 0.6.1 |
+  |---|---|---|
+  | luminance error, mean over 6 presets and 2 bearings (of 255) | 5.44 | 1.50 |
+  | colour error, same | 13.21 | 2.84 |
+  | oak at 197 m, colour error in a box around the tree | 7.1 | 3.4 |
+
+  A forest of 6 400 pooled oaks against the same forest drawn with level 0 everywhere, in
+  16-pixel blocks: from the air 4.16 -> 1.70, from 320 m straight up 3.37 -> 2.83, from the
+  example's corner 30 m up 4.35 -> 3.95; at ground level and through a telephoto lens the far
+  trees overlap so much that both versions cover the horizon alike. Standing still in a wind,
+  an impostor's pixels change frame to frame by 0.030 levels on average (0.024 before), the
+  oak's own meshes at that distance by 0.224. The cost is small: 100 000 pooled oaks take 7.30 ms a
+  frame against 7.31 ms, 20 000 take 3.41 ms against 3.31 ms (medians of three interleaved runs). Without MSAA (TAA users) the impostor is cut at one half as before.
 
 ### Added
 
+- `examples/inspect.rs`: photographs one tree under controlled conditions to look at how it
+  reads: a camera that backs off through every level of detail (`--distance a,b --frames n`),
+  optionally zooming so the tree keeps its size on screen (`--constant-size`, which shows a
+  level switch as a jump), any bearing, height and field of view, one level forced at every
+  distance (`--level 0|1|2|3`), the empty scene (`--empty`) and no MSAA (`--no-msaa`), at a fixed
+  1/60 s clock so runs repeat.
+- `forest --eye <x,y,z> --at <x,y,z> --fov <deg>`: put the forest's camera anywhere.
 - `capture_growth --grove` records a second README clip, `docs/grove.gif`: a grove of eight trees
   of six species (oak, two maples, two birches, pine, cypress, willow, Japanese maple), each
   growing from its own start frame, with the camera circling it and a `GustFront` crossing it
@@ -34,6 +71,8 @@ Media and documentation; the library's behaviour does not change.
   `PoolMaterials`, `GpuGrowth` and `Paint::Standard` docs and the no-impostors warning, the gust
   examples (launch a gust once, not every frame), `MeshData`'s fields, the `forest` flags, and
   `CLAUDE.md` and `AGENTS.md` (both clips, CI's commands, committing `Cargo.lock`).
+- `docs/growth.gif` and `docs/grove.gif` re-recorded for this release (byte-identical: the clips draw
+  no impostors). The README forest table's impostor column is measured again for 0.6.1.
 
 ## [0.6.0] - 2026-10-11
 
@@ -519,7 +558,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
-[Unreleased]: https://github.com/Ladvien/bevy_flora/compare/v0.6.0...HEAD
+[0.6.1]: https://github.com/Ladvien/bevy_flora/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Ladvien/bevy_flora/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Ladvien/bevy_flora/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Ladvien/bevy_flora/compare/v0.4.0...v0.4.1
