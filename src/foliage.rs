@@ -404,10 +404,12 @@ fn build_foliage(
         );
 
         // One flutter direction and phase per leaf; both faces and both crossed cards share them.
+        // The phase also picks the moment the leaf turns and falls in autumn (`FloraSeason`), so it
+        // hashes the leaf's own draws, which never change as the tree grows, not its position,
+        // which does: a growing leaf keeps its phase, the same as on the mature mesh `GpuGrowth`
+        // shrinks and on the levels of detail.
         let (_, _, forward) = build_basis(point.direction, point.rotation);
-        let phase = (point.position.dot(Vec3::new(12.9898, 78.233, 37.719)).sin() * 43_758.547)
-            .fract()
-            .abs();
+        let phase = leaf_phase(point);
         let rigid = foliage.style == LeafStyle::ClusterSphere;
         for &vertex in &mesh.positions[first..end] {
             let lever = if rigid { point.size * 0.4 } else { (vertex - point.position).length() };
@@ -636,6 +638,16 @@ fn scanned_card(_foliage: &FoliageParams, _point: &LeafPoint, _coarse: bool) -> 
     None
 }
 
+/// A leaf's flutter phase and season moment, 0..1: a hash of its colour and hue draws (not of
+/// the hash [`scanned_card`] takes its cell from, so the two are unrelated).
+fn leaf_phase(point: &LeafPoint) -> f32 {
+    let mut h = point.tint.to_bits().wrapping_mul(0x2C1B_3C6D) ^ point.hue.to_bits().wrapping_mul(0x297A_2D39);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7FEB_352D);
+    h ^= h >> 15;
+    (h >> 8) as f32 / (1u32 << 24) as f32
+}
+
 /// Leaf-shaped card spanned by `half_right`/`half_up` around `center`: a fan over
 /// [`LEAF_OUTLINE`], or, with a scanned `card`, the scan's outline (as wide as its width over
 /// length says) and triangulation, with the scan's atlas coordinates as UVs. Emitted twice with
@@ -796,6 +808,36 @@ mod tests {
         for (p, n) in young.iter().zip(vertices_per_leaf(&young, &foliage)) {
             assert_eq!(by_tint.get(&(p.tint.to_bits(), p.hue.to_bits())), Some(&n), "a leaf changed shape with age");
         }
+    }
+
+    #[test]
+    fn a_leaf_keeps_its_phase_as_the_tree_ages() {
+        // The phase is when a leaf flutters and when it turns and falls in autumn, so a growing
+        // tree must not reshuffle it while its leaves move outward.
+        let (params, mature) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        let skeleton = generate_skeleton(&params).aged(6.0, &params.growth);
+        let young = collect_leaf_points(&skeleton, &params.foliage, &params.growth, &params.trunk, params.seed);
+        assert!(!young.is_empty() && young.len() < mature.len());
+        let phases = |points: &[LeafPoint]| {
+            let mut firsts = Vec::new();
+            let mesh = foliage_mesh_with(points, &params.foliage, RenderStyle::Natural, Some(&mut firsts));
+            let key = |p: &LeafPoint| (p.tint.to_bits(), p.hue.to_bits());
+            points
+                .iter()
+                .zip(firsts)
+                .map(|(p, first)| (key(p), (p.position, mesh.sway[first as usize].w)))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let (old, new) = (phases(&mature), phases(&young));
+        let mut moved = 0;
+        for (key, (position, phase)) in &new {
+            let (mature_position, mature_phase) = old[key];
+            assert_eq!(phase.to_bits(), mature_phase.to_bits(), "a leaf changed its phase with age");
+            moved += usize::from(position.distance(mature_position) > 1e-3);
+        }
+        assert!(moved > new.len() / 2, "the young leaves should sit elsewhere than the mature ones");
+        let distinct: std::collections::BTreeSet<u32> = old.values().map(|(_, phase)| phase.to_bits()).collect();
+        assert!(distinct.len() > old.len() * 9 / 10, "leaves share phases");
     }
 
     #[test]
@@ -1083,7 +1125,9 @@ mod tests {
             rotation: 1.1,
             ..point()
         };
-        let b = LeafPoint { position: Vec3::new(-2.0, 3.0, 1.0), ..a.clone() };
+        // Two leaves with their own colour and hue draws, as every real leaf has: the phase
+        // comes from them.
+        let b = LeafPoint { position: Vec3::new(-2.0, 3.0, 1.0), tint: 0.3, hue: -0.6, ..a.clone() };
         for style in [
             LeafStyle::CrossedPlanes,
             LeafStyle::SingleQuad,
