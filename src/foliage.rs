@@ -36,7 +36,7 @@ pub struct LeafPoint {
     /// The clump this leaf belongs to: the `Node::id` of the nearest ancestor of its node (the
     /// node itself included) at recursion depth 0, that is the primary branch, leader or split it
     /// hangs from. The painterly and toon styles shade the leaves of a clump as one soft mass
-    /// ([`RenderStyle::Painterly`](crate::params::RenderStyle::Painterly)).
+    /// ([`RenderStyle::Painterly`]).
     pub clump: u32,
 }
 
