@@ -4,7 +4,7 @@
 //! The plugin keeps the entity's [`ProceduralTree`] equal to the asset: it is inserted once the
 //! asset has loaded and replaced whenever the asset changes, so every tree that shares a handle
 //! follows an edit, whether it comes from code (`Assets<TreeParams>::get_mut`), an inspector, or,
-//! with the `ron` feature and Bevy's `file_watcher`, a `.tree.ron` file saved on disk.
+//! with the `ron` and `file_watcher` features, a `.tree.ron` file saved on disk.
 //!
 //! With the `ron` feature, [`TreeParamsLoader`] loads `.tree.ron` files, and
 //! [`TreeParams::to_ron`] / [`TreeParams::from_ron`] write and read the same format. A file may

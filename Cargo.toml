@@ -1,11 +1,11 @@
 [package]
 name = "bevy_flora"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2024"
 # Bevy 0.20's own crates declare 1.97.1, and this crate cannot compile without
 # them, so claiming less would be a floor nothing can stand on.
 rust-version = "1.97.1"
-description = "Parametric, stylized procedural trees for Bevy that grow over time: 15 presets, bent and forking branches, CC0 bark and leaf scans, painterly and toon looks, deterministic per seed."
+description = "Parametric, stylized procedural trees and shrubs for Bevy that grow over time: 16 presets, bent and forking branches, CC0 bark and leaf scans, painterly and toon looks, deterministic per seed."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Ladvien/bevy_flora"
 documentation = "https://docs.rs/bevy_flora"
@@ -46,10 +46,12 @@ serde = ["dep:serde"]
 # `.tree.ron` files: an asset loader for `TreeParams`, and `TreeParams::to_ron` / `from_ron`.
 # `ron` is already in Bevy's dependency graph (`bevy_asset` reads `.meta` files with it).
 ron = ["serde", "dep:ron"]
+# Bevy's `file_watcher`: assets reload when their files are saved, so `.tree.ron` trees rebuild
+# (the `tree_file` example). Not on by default: with it, an app without an `assets` folder warns.
+file_watcher = ["bevy/file_watcher"]
 
 [dev-dependencies]
-# `file_watcher`: the `tree_file` example reloads its tree when the file is saved.
-bevy = { version = "0.20", features = ["file_watcher"] }
+bevy = { version = "0.20" }
 
 [[example]]
 name = "tree_file"

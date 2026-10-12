@@ -160,8 +160,9 @@
 //!
 //! [`TreeParams`] is an asset: a [`ProceduralTreeAsset`] draws a tree from a handle and follows
 //! every change to the asset, so trees that share one are edited together. With the `ron`
-//! feature the plugin loads `.tree.ron` files (`TreeParams::to_ron` writes one), and with Bevy's
-//! `file_watcher` a saved file rebuilds its trees while the game runs. See [`tree_asset`].
+//! feature the plugin loads `.tree.ron` files (`TreeParams::to_ron` writes one), and with the
+//! `file_watcher` feature (Bevy's) a saved file rebuilds its trees while the game runs. See
+//! [`tree_asset`].
 //!
 //! # Gameplay shapes
 //!

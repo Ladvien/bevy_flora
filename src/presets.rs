@@ -39,11 +39,14 @@ pub enum TreePreset {
     DeadTree,
     /// Very tall, thick-trunked conifer.
     Redwood,
+    /// A low, dense, rounded bush: many thin stems from the ground under small leaves, for
+    /// undergrowth, hedges and the edges of a wood.
+    Shrub,
 }
 
 impl TreePreset {
     /// Every preset, in display order.
-    pub const ALL: [TreePreset; 15] = [
+    pub const ALL: [TreePreset; 16] = [
         TreePreset::Oak,
         TreePreset::Pine,
         TreePreset::Willow,
@@ -59,6 +62,7 @@ impl TreePreset {
         TreePreset::JapaneseMaple,
         TreePreset::DeadTree,
         TreePreset::Redwood,
+        TreePreset::Shrub,
     ];
 
     /// snake_case name of the preset.
@@ -79,6 +83,7 @@ impl TreePreset {
             TreePreset::JapaneseMaple => "japanese_maple",
             TreePreset::DeadTree => "dead_tree",
             TreePreset::Redwood => "redwood",
+            TreePreset::Shrub => "shrub",
         }
     }
 
@@ -100,6 +105,7 @@ impl TreePreset {
             TreePreset::JapaneseMaple => japanese_maple(),
             TreePreset::DeadTree => dead_tree(),
             TreePreset::Redwood => redwood(),
+            TreePreset::Shrub => shrub(),
         }
     }
 }
@@ -1432,6 +1438,91 @@ fn redwood() -> TreeParams {
     }
 }
 
+/// A dozen stems from a stub of a trunk 0.5 m tall (the leader is one more), leaning out and
+/// arching down under gravity, the longest at 40% of the height (`Spreading`), each with a few
+/// side shoots and every one in leaves: a mound about 1.4 m high and 1.9 m across.
+fn shrub() -> TreeParams {
+    TreeParams {
+        seed: 42,
+        trunk: TrunkParams {
+            height: 0.5,
+            radius: 0.07,
+            radial_segments: 8,
+            height_segments: 4,
+            taper: 0.6,
+            taper_curve: 0.5,
+            flare: 1.15,
+            randomness: 0.15,
+            root_flare_count: 0,
+            root_flare_spread: 0.5,
+            root_flare_height: 0.15,
+            termination: TrunkTermination::LeaderBranch,
+            leader_length: 1.6,
+            leader_taper: 0.15,
+            leader_has_branches: true,
+            twist: 0.0,
+        },
+        branches: BranchParams {
+            // Low enough for leaves near the ground, high enough that the lowest stems' roots,
+            // buried in the trunk, stay above it.
+            start: 0.22,
+            end: 1.0,
+            density: 30.0,
+            length: 2.2,
+            angle: 55.0,
+            radius_ratio: 0.4,
+            taper: 0.75,
+            phyllotaxis_angle: 137.5,
+            randomness: 0.4,
+            up_attraction: 0.1,
+            recursion: 1,
+            sub_branch_count: 4,
+            sub_branch_scale: 0.55,
+            length_variation: 0.3,
+            sub_branch_position_bias: 0.2,
+            apical_dominance: 0.0,
+            flatness: 0.0,
+            angle_curve: 0.0,
+            crown_angle_variation: 0.0,
+            twist: 0.0,
+            gravity_strength: 0.5,
+            stiffness: 0.4,
+            break_chance: 0.0,
+            crown_shape: CrownShape::Spreading,
+            crown_influence: 0.5,
+            floor_avoidance: true,
+            floor_level: 0.0,
+            min_twig_radius: 0.003,
+        },
+        split: SplitParams::default(),
+        mesh: MeshParams::default(),
+        foliage: FoliageParams {
+            enabled: true,
+            style: LeafStyle::CrossedPlanes,
+            placement: FoliagePlacement::AllBranches,
+            orientation: LeafOrientation::RadialOutward,
+            density: 18.0,
+            cluster_size: 4,
+            leaf_size: 0.15,
+            leaf_size_variation: 0.25,
+            radius_threshold: 0.06,
+            height_falloff: 0.0,
+            droop: 0.2,
+            rotation_variation: 0.5,
+            use_crown_density: true,
+            color: Color::srgb(0.16, 0.33, 0.12),
+            autumn: Some(Color::srgb(0.70, 0.25, 0.05)),
+            scan: Some(LeafScan::Poplar),
+            ..Default::default()
+        },
+        growth: GrowthParams { maturity_age: 6.0, ..Default::default() },
+        trunk_color: Color::srgb(0.30, 0.24, 0.18),
+        bark: BarkParams { scan: Some(BarkScan::Brown), smooth_below: 0.03, fissured_above: 0.15 },
+        style: RenderStyle::Natural,
+        wind: WindResponse { sway: 1.2, flutter: 1.2, sway_frequency: 1.0, flutter_frequency: 1.0 },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1639,10 +1730,9 @@ mod tests {
 
     #[test]
     fn all_presets_have_distinct_names() {
-        assert_eq!(TreePreset::ALL.len(), 15);
         let mut names: Vec<_> = TreePreset::ALL.iter().map(|p| p.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), TreePreset::ALL.len());
     }
 }
