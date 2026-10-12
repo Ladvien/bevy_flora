@@ -6,7 +6,7 @@
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
-//!     [--style <natural|painterly|toon>] [--colliders]
+//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -45,7 +45,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FloraPlugin, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreePool,
+    FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge,
+    TreePool,
     TreePreset, TreeShape, build_pool, build_tree,
 };
 
@@ -87,6 +88,8 @@ struct Args {
     msaa: bool,
     /// Give the tree a `TreeShape` and draw it over the picture.
     colliders: bool,
+    /// How far deciduous trees have turned and shed their leaves.
+    season: FloraSeason,
 }
 
 fn usage() -> ! {
@@ -95,7 +98,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders]"
+         [--colliders] [--season <autumn>,<leaf fall>]"
     );
     std::process::exit(2);
 }
@@ -128,6 +131,7 @@ fn parse_args() -> Args {
         style: RenderStyle::Natural,
         msaa: true,
         colliders: false,
+        season: FloraSeason::SUMMER,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -204,6 +208,11 @@ fn parse_args() -> Args {
             }
             "--no-msaa" => args.msaa = false,
             "--colliders" => args.colliders = true,
+            "--season" => {
+                let v = floats(&it.next().unwrap_or_else(|| usage()));
+                let [autumn, leaf_fall] = v[..] else { usage() };
+                args.season = FloraSeason { autumn, leaf_fall };
+            }
             _ => usage(),
         }
     }
@@ -234,6 +243,7 @@ fn main() {
     let args = parse_args();
     fs::create_dir_all(&args.out).expect("create the output directory");
     let wind = args.wind;
+    let season = args.season;
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins.set(WindowPlugin {
@@ -250,6 +260,7 @@ fn main() {
         ..default()
     })
     .insert_resource(FloraWind { strength: wind, ..default() })
+    .insert_resource(season)
     .insert_resource(bevy::winit::WinitSettings::continuous())
     .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
     .insert_resource(Shoot {

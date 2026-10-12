@@ -8,6 +8,7 @@
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
+//!     [--season <autumn>,<leaf fall>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw. A
@@ -70,7 +71,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_flora::{
-    FloraPlugin, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
+    FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
     ProceduralTree, RenderStyle, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
 };
 
@@ -149,6 +150,8 @@ struct Args {
     /// Render into an image, with no window.
     offscreen: bool,
     screenshot: Option<PathBuf>,
+    /// How far deciduous trees have turned and shed their leaves.
+    season: FloraSeason,
 }
 
 impl Args {
@@ -165,7 +168,8 @@ fn usage() -> ! {
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
-         [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]"
+         [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
+         [--season <autumn>,<leaf fall>]"
     );
     std::process::exit(2);
 }
@@ -193,6 +197,7 @@ fn parse_args() -> Args {
         deterministic: false,
         offscreen: false,
         screenshot: None,
+        season: FloraSeason::SUMMER,
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -276,6 +281,12 @@ fn parse_args() -> Args {
             "--gust" => args.gust = Some(value(&mut it)),
             "--wind-animate" => args.wind_animate = true,
             "--deterministic" => args.deterministic = true,
+            "--season" => {
+                let list = it.next().unwrap_or_else(|| usage());
+                let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
+                let [autumn, leaf_fall]: [f32; 2] = parts.try_into().unwrap_or_else(|_| usage());
+                args.season = FloraSeason { autumn, leaf_fall };
+            }
             "--lod" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -359,6 +370,7 @@ fn main() {
     if args.deterministic {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
     }
+    app.insert_resource(args.season);
     // Unfocused, Bevy's default settings update 60 times a second; a benchmark
     // must run flat out whatever has the focus.
     app.insert_resource(bevy::winit::WinitSettings::continuous())

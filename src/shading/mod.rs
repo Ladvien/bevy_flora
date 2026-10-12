@@ -170,6 +170,58 @@ pub struct FloraUniform {
     /// The bark scan's average colour, linear rgb, 0: what smooth wood is multiplied by, since
     /// the material's base colour is the preset's over it. Zero for materials without bark.
     pub bark_mean: Vec4,
+    /// What a turned leaf's colour is multiplied by (linear rgb: the autumn colour over the leaf
+    /// colour, at most 1000 a channel) and 1, for a deciduous tree ([`FoliageParams::autumn`]
+    /// is set); zero for an evergreen and for wood.
+    ///
+    /// [`FoliageParams::autumn`]: crate::FoliageParams::autumn
+    pub autumn: Vec4,
+}
+
+/// Most a channel of the leaf colour may be multiplied by to reach the autumn colour: enough for
+/// any leaf channel above 0.1% (linear) to reach full brightness (the maple's dark green needs 47
+/// in red), while a black leaf colour gives a finite number.
+const AUTUMN_RATIO_MAX: f32 = 1000.0;
+
+/// The season, the same for every tree drawn with [`FloraMaterial`] (and impostors): how far
+/// deciduous trees ([`FoliageParams::autumn`](crate::FoliageParams::autumn)) have turned and
+/// shed their leaves. Evergreens ignore it.
+///
+/// Like [`FloraWind`] it lives in the shared buffer, so changing it every frame (a day/night and
+/// season cycle) costs one small buffer write and touches no material or mesh. Leaves turn and
+/// fall one by one, each at its own moment, in the order they turned; leaf fall also takes the
+/// leaves out of the shadows. For spring, set `autumn` to 0 while the trees are bare (nothing
+/// shows it), then bring `leaf_fall` back to 0 and the leaves return green, as [`Self::of_year`]
+/// does.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Resource)]
+pub struct FloraSeason {
+    /// How far the leaves have turned, 0 (summer green) to 1 (every leaf in its autumn colour).
+    pub autumn: f32,
+    /// Share of the leaves fallen, 0 (all on the tree) to 1 (bare).
+    pub leaf_fall: f32,
+}
+
+impl FloraSeason {
+    /// Full summer: green, every leaf on the tree.
+    pub const SUMMER: Self = Self { autumn: 0.0, leaf_fall: 0.0 };
+    /// Every leaf turned, none fallen.
+    pub const AUTUMN: Self = Self { autumn: 1.0, leaf_fall: 0.0 };
+    /// Bare deciduous trees.
+    pub const WINTER: Self = Self { autumn: 1.0, leaf_fall: 1.0 };
+
+    /// A season from the year's progress `t` (0..1, wraps): green until 0.55, turning to 0.75,
+    /// falling to 0.9, bare through winter, and green again from 0.05 (leaves are back by then).
+    pub fn of_year(t: f32) -> Self {
+        let t = t.rem_euclid(1.0);
+        let ramp = |a: f32, b: f32| ((t - a) / (b - a)).clamp(0.0, 1.0);
+        if t < 0.05 {
+            // Late winter into spring: the leaves come back green.
+            Self { autumn: 0.0, leaf_fall: 1.0 - ramp(0.0, 0.05) }
+        } else {
+            Self { autumn: ramp(0.55, 0.75), leaf_fall: ramp(0.7, 0.9) }
+        }
+    }
 }
 
 impl FloraUniform {
@@ -196,6 +248,16 @@ impl FloraUniform {
             tint: Vec4::new(tint.red, tint.green, tint.blue, 0.0),
             bark: Vec4::ZERO,
             bark_mean: Vec4::ZERO,
+            autumn: match params.foliage.autumn {
+                // What the leaf colour is multiplied by when the leaf has turned: the autumn
+                // colour over the summer one, so a scan's own variation stays.
+                Some(autumn) => {
+                    let (to, from) = (autumn.to_linear(), params.foliage.color.to_linear());
+                    let ratio = |a: f32, b: f32| (a / b.max(1e-4)).clamp(0.0, AUTUMN_RATIO_MAX);
+                    Vec4::new(ratio(to.red, from.red), ratio(to.green, from.green), ratio(to.blue, from.blue), 1.0)
+                }
+                None => Vec4::ZERO,
+            },
         }
     }
 
@@ -203,17 +265,18 @@ impl FloraUniform {
     /// so changing how leaves are shaded does not touch the wood's material. The wood bends like
     /// the species does.
     pub(crate) fn wood(self) -> Self {
-        Self { leaf: Vec4::ZERO, tint: Vec4::ZERO, ..self }
+        Self { leaf: Vec4::ZERO, tint: Vec4::ZERO, autumn: Vec4::ZERO, ..self }
     }
 }
 
-/// The five `Vec4`s of [`FloraWind`] the shaders read, in the order of the shared buffer:
-/// `wind` (direction x, direction z, strength, speed), `motion` (bend, flutter, gust strength,
-/// turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front` (origin x, origin z,
-/// direction x, direction z) and `front_shape` (speed, width, strength, start time); the last
-/// two are zero without a [`GustFront`], or with one that has no direction. Directions are
-/// normalised and every value clamped to what the shaders can use.
-pub(crate) fn wind_vectors(wind: &FloraWind) -> [Vec4; 5] {
+/// The six `Vec4`s of [`FloraWind`] and [`FloraSeason`] the shaders read, in the order of the
+/// shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend, flutter, gust
+/// strength, turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front` (origin x,
+/// origin z, direction x, direction z), `front_shape` (speed, width, strength, start time) and
+/// `season` (autumn, leaf fall, 0, 0); `front` and `front_shape` are zero without a
+/// [`GustFront`], or with one that has no direction. Directions are normalised and every value
+/// clamped to what the shaders can use.
+pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason) -> [Vec4; 6] {
     let d = wind.direction.normalize_or_zero();
     let (front, front_shape) = match wind.gust {
         Some(gust) if gust.direction.normalize_or_zero() != Vec2::ZERO => {
@@ -231,6 +294,7 @@ pub(crate) fn wind_vectors(wind: &FloraWind) -> [Vec4; 5] {
         Vec4::new(wind.gust_frequency.max(0.0), wind.flutter_frequency.max(0.0), 0.0, 0.0),
         front,
         front_shape,
+        Vec4::new(season.autumn.clamp(0.0, 1.0), season.leaf_fall.clamp(0.0, 1.0), 0.0, 0.0),
     ]
 }
 
@@ -462,9 +526,9 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FloraMaterialSupport;
 
-/// The wind the flora shaders read: one storage buffer of five `Vec4`s (direction and strength,
-/// motion, rates and the [`GustFront`], packed from [`FloraWind`]), shared by every flora material
-/// (binding 102), so changing [`FloraWind`]
+/// The wind the flora shaders read: one storage buffer of six `Vec4`s (direction and strength,
+/// motion, rates and the [`GustFront`], packed from [`FloraWind`], and the [`FloraSeason`]), shared
+/// by every flora material (binding 102), so changing [`FloraWind`] or [`FloraSeason`]
 /// writes this buffer in place and touches no material. Hand it to the `wind` field of a
 /// [`FloraExtension`], [`GrowthExtension`](crate::GrowthExtension) or
 /// [`ImpostorMaterial`](crate::ImpostorMaterial) you build yourself.
@@ -472,8 +536,8 @@ pub struct FloraMaterialSupport;
 pub struct FloraWindBuffer(pub Handle<ShaderBuffer>);
 
 impl FloraWindBuffer {
-    fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind) -> Self {
-        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind).map(|v| v.to_array()).to_vec())))
+    fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind, season: &FloraSeason) -> Self {
+        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind, season).map(|v| v.to_array()).to_vec())))
     }
 }
 
@@ -507,13 +571,15 @@ pub(crate) fn detect_flora_support(
     }
 }
 
-/// Write [`FloraWind`] into the shared buffer, in place. Runs when the wind changed.
+/// Write [`FloraWind`] and [`FloraSeason`] into the shared buffer, in place. Runs when either
+/// changed.
 pub(crate) fn sync_wind(
     wind: Res<FloraWind>,
+    season: Res<FloraSeason>,
     buffer: Res<FloraWindBuffer>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let packed = wind_vectors(&wind).map(|v| v.to_array());
+    let packed = wind_vectors(&wind, &season).map(|v| v.to_array());
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
     if buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>()) == Some(&packed[..]) {
         return;
@@ -533,9 +599,11 @@ pub(crate) fn sync_wind(
 /// with plain materials.
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<FloraWind>()
+        .init_resource::<FloraSeason>()
         .init_resource::<SharedFlora>()
         .init_resource::<FloraTextures>()
         .register_type::<FloraWind>()
+        .register_type::<FloraSeason>()
         .register_type::<GustFront>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         add_shaders(app);
@@ -578,7 +646,8 @@ fn add_wind_buffer(app: &mut App) {
         return;
     }
     let wind = *app.world().resource::<FloraWind>();
-    let buffer = FloraWindBuffer::new(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), &wind);
+    let season = *app.world().resource::<FloraSeason>();
+    let buffer = FloraWindBuffer::new(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), &wind, &season);
     app.insert_resource(buffer);
 }
 
@@ -593,6 +662,8 @@ fn add_shaders(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use bevy::math::Vec3;
 
     use super::*;
     use crate::presets::TreePreset;
@@ -621,6 +692,49 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_leaf_takes_the_autumn_colour_and_evergreens_and_wood_never_turn() {
+        let maple = TreePreset::Maple.params();
+        let uniform = FloraUniform::new(&maple);
+        assert_eq!(uniform.autumn.w, 1.0, "a deciduous preset turns");
+        // The shader multiplies the leaf colour by the ratio: that must give the autumn colour.
+        let (leaf, autumn) = (maple.foliage.color.to_linear(), maple.foliage.autumn.unwrap().to_linear());
+        let turned = Vec3::new(leaf.red, leaf.green, leaf.blue) * uniform.autumn.truncate();
+        assert!(turned.abs_diff_eq(Vec3::new(autumn.red, autumn.green, autumn.blue), 1e-5), "{turned}");
+        assert_eq!(uniform.wood().autumn, Vec4::ZERO, "wood never turns");
+        assert_eq!(FloraUniform::new(&TreePreset::Pine.params()).autumn, Vec4::ZERO, "a pine stays green");
+        // A black summer leaf cannot be multiplied into a colour: the ratio is capped, not infinite.
+        let mut black = maple.clone();
+        black.foliage.color = Color::BLACK;
+        assert!(FloraUniform::new(&black).autumn.truncate().cmple(Vec3::splat(AUTUMN_RATIO_MAX)).all());
+    }
+
+    #[test]
+    fn over_a_year_leaves_turn_before_they_fall_and_come_back_green() {
+        assert_eq!(FloraSeason::of_year(0.3), FloraSeason::SUMMER);
+        assert_eq!(FloraSeason::of_year(0.95), FloraSeason::WINTER);
+        assert_eq!(FloraSeason::of_year(1.3), FloraSeason::of_year(0.3), "the year wraps");
+        assert_eq!(FloraSeason::of_year(-0.05), FloraSeason::of_year(0.95), "the year wraps");
+        let steps = 2000;
+        let mut last = FloraSeason::of_year(0.0);
+        for i in 1..=steps {
+            let now = FloraSeason::of_year(i as f32 / steps as f32);
+            // The colour only goes back to green while the trees are bare, so no turned leaf
+            // turns green on the tree; leaves only come back once the colour is green, so none
+            // sprouts in its autumn colour; and a leaf only falls once most leaves have turned.
+            if now.autumn < last.autumn {
+                assert_eq!(last.leaf_fall, 1.0, "colour reset on a tree in leaf at step {i}");
+            }
+            if now.leaf_fall < last.leaf_fall {
+                assert_eq!(now.autumn, 0.0, "leaves came back turned at step {i}");
+            }
+            if now.leaf_fall > 0.0 && now.leaf_fall > last.leaf_fall {
+                assert!(now.autumn >= 0.75, "leaves fell green at step {i}: {now:?}");
+            }
+            last = now;
+        }
+    }
+
+    #[test]
     fn the_wind_is_packed_normalised_and_clamped() {
         let gale = FloraWind {
             direction: Vec2::new(0.0, -5.0),
@@ -634,19 +748,21 @@ mod tests {
             turbulence: -1.0,
             gust: None,
         };
-        let [wind, motion, rate, front, front_shape] = wind_vectors(&gale);
+        let [wind, motion, rate, front, front_shape, season] = wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0 });
         // Direction normalised, a negative speed stopped, strength not capped, the rest clamped.
         assert_eq!(wind, Vec4::new(0.0, -1.0, 7.0, 0.0));
         assert_eq!(motion, Vec4::new(3.0, 2.0, 1.0, 0.0));
         assert_eq!(rate, Vec4::new(0.5, 4.0, 0.0, 0.0));
         assert_eq!((front, front_shape), (Vec4::ZERO, Vec4::ZERO));
-        assert_ne!(wind_vectors(&FloraWind { strength: 0.0, ..gale }), wind_vectors(&gale));
+        assert_eq!(season, Vec4::new(1.0, 0.0, 0.0, 0.0), "the season is clamped to 0..1");
+        let calm = FloraSeason::default();
+        assert_ne!(wind_vectors(&FloraWind { strength: 0.0, ..gale }, &calm), wind_vectors(&gale, &calm));
     }
 
     #[test]
     fn gust_front_is_packed_normalised_and_off_when_absent() {
         let pack = |gust: Option<GustFront>| {
-            let [.., front, front_shape] = wind_vectors(&FloraWind { gust, ..Default::default() });
+            let [.., front, front_shape, _] = wind_vectors(&FloraWind { gust, ..Default::default() }, &FloraSeason::default());
             (front, front_shape)
         };
 
@@ -771,7 +887,7 @@ mod tests {
         let front = wind.gust.expect("the gust was launched");
         assert_eq!(front.start, time.elapsed_secs_wrapped());
         assert_eq!(front.start, 5.0);
-        let [.., front_shape] = wind_vectors(&wind);
+        let [.., front_shape, _] = wind_vectors(&wind, &FloraSeason::default());
         assert_eq!(front_shape.w, 5.0);
     }
 }

@@ -182,6 +182,7 @@ fn oak() -> TreeParams {
             rotation_variation: 0.6,
             use_crown_density: true,
             color: Color::srgb(0.176, 0.314, 0.086),
+            autumn: Some(Color::srgb(0.50, 0.24, 0.04)),
             scan: Some(LeafScan::Oak),
             ..Default::default()
         },
@@ -359,6 +360,7 @@ fn willow() -> TreeParams {
             rotation_variation: 0.8,
             use_crown_density: true,
             color: Color::srgb(0.565, 0.690, 0.376),
+            autumn: Some(Color::srgb(0.74, 0.62, 0.10)),
             scan: Some(LeafScan::Willow),
             ..Default::default()
         },
@@ -448,6 +450,7 @@ fn birch() -> TreeParams {
             rotation_variation: 0.5,
             use_crown_density: true,
             color: Color::srgb(0.486, 0.804, 0.486),
+            autumn: Some(Color::srgb(0.95, 0.70, 0.08)),
             scan: Some(LeafScan::Birch),
             ..Default::default()
         },
@@ -713,6 +716,7 @@ fn bonsai() -> TreeParams {
             rotation_variation: 0.7,
             use_crown_density: true,
             color: Color::srgb(0.208, 0.369, 0.231),
+            autumn: Some(Color::srgb(0.70, 0.22, 0.03)),
             scan: Some(LeafScan::Bonsai),
             ..Default::default()
         },
@@ -802,6 +806,7 @@ fn maple() -> TreeParams {
             rotation_variation: 0.6,
             use_crown_density: true,
             color: Color::srgb(0.133, 0.322, 0.133),
+            autumn: Some(Color::srgb(0.88, 0.25, 0.02)),
             scan: Some(LeafScan::Maple),
             ..Default::default()
         },
@@ -985,6 +990,7 @@ fn poplar() -> TreeParams {
             rotation_variation: 0.45,
             use_crown_density: true,
             color: Color::srgb(0.404, 0.545, 0.306),
+            autumn: Some(Color::srgb(0.92, 0.72, 0.05)),
             scan: Some(LeafScan::Poplar),
             ..Default::default()
         },
@@ -1074,6 +1080,7 @@ fn baobab() -> TreeParams {
             rotation_variation: 0.5,
             use_crown_density: false,
             color: Color::srgb(0.306, 0.463, 0.235),
+            autumn: Some(Color::srgb(0.62, 0.48, 0.08)),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -1250,6 +1257,7 @@ fn japanese_maple() -> TreeParams {
             rotation_variation: 0.65,
             use_crown_density: true,
             color: Color::srgb(0.698, 0.133, 0.133),
+            autumn: Some(Color::srgb(0.45, 0.02, 0.04)),
             scan: Some(LeafScan::JapaneseMaple),
             ..Default::default()
         },

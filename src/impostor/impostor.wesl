@@ -16,7 +16,7 @@ import bevy_pbr::render::{
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 };
 import package::shading::common::{
-    flora, wind_bend, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
+    flora, flora_wind, wind_bend, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
 };
 
 @if(VISIBILITY_RANGE_DITHER)
@@ -87,8 +87,21 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
 @if(VISIBILITY_RANGE_DITHER)
     visibility_range_dither(in.position, in.visibility_range_dither);
 
-    let color = textureSample(albedo, atlas_sampler, in.uv);
+    var color = textureSample(albedo, atlas_sampler, in.uv);
     let baked = textureSample(surface, atlas_sampler, in.uv);
+    // The season (`FloraSeason`): the baked picture is summer. A deciduous tree's leaves (baked
+    // translucency 1, wood 0) turn their autumn colour in patches a few texels wide, each at its
+    // own moment, and fallen leaves thin the crown's coverage, so a bare tree keeps its wood.
+    let season = flora_wind[5];
+    let leafy = saturate(baked.a) * flora.autumn.w;
+    let spot = in.uv * vec2<f32>(textureDimensions(albedo)) / 3.0;
+    let moment = fract(sin(dot(floor(spot), vec2<f32>(12.9898, 78.233))) * 43758.547) * 0.8;
+    // Where one pixel spans several patches, one patch's moment would flicker as the view moves:
+    // take the share of the patches that have turned (their moments are spread evenly) instead.
+    let spread = saturate(max(fwidth(spot.x), fwidth(spot.y)) - 0.5);
+    let turned = mix(smoothstep(moment, moment + 0.2, season.x), saturate((season.x - 0.1) / 0.8), spread);
+    let turn = turned * leafy;
+    color = vec4<f32>(color.rgb * mix(vec3<f32>(1.0), flora.autumn.rgb, turn), color.a * (1.0 - season.y * leafy));
     // Alpha is the share of the texel the tree covers, averaged down the mipmaps. With MSAA it
     // becomes the share of the pixel's samples drawn (alpha to coverage), so a far crown is as
     // airy as the leaves it was baked from: the sky shows through its gaps in the same

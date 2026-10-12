@@ -30,6 +30,7 @@ struct Look {
     tint: [u32; 4],
     bark_radii: [u32; 4],
     bark_mean: [u32; 4],
+    autumn: [u32; 4],
     bark: Option<BarkScan>,
     leaf_scan: Option<LeafScan>,
     venation: bool,
@@ -42,7 +43,7 @@ fn bits(v: Vec4) -> [u32; 4] {
 
 impl Look {
     fn new(surface: &Surface) -> Self {
-        let FloraUniform { tree, response, leaf, tint, bark, bark_mean } = surface.uniform;
+        let FloraUniform { tree, response, leaf, tint, bark, bark_mean, autumn } = surface.uniform;
         Self {
             color: surface.color.to_linear().to_f32_array().map(f32::to_bits),
             leaf: surface.leaf,
@@ -50,6 +51,7 @@ impl Look {
             response: bits(response),
             leaf_look: bits(leaf),
             tint: bits(tint),
+            autumn: bits(autumn),
             bark_radii: bits(bark),
             bark_mean: bits(bark_mean),
             bark: surface.bark.as_ref().map(|bark| bark.scan),

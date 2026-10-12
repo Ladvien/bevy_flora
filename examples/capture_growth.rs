@@ -14,6 +14,10 @@
 //!   docs/grove.gif
 //! ```
 //!
+//! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`, encoded like the
+//! grove): the deciduous trees turn their autumn colours, shed their leaves and leaf out again
+//! while the pine and the cypress stay green.
+//!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
 //! age of every tree and the clock are set explicitly per frame: time stands still except for
@@ -36,8 +40,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FloraPlugin, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams, TreePreset,
-    build_tree,
+    FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams,
+    TreePreset, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -89,6 +93,8 @@ enum Scene {
     Tree(Box<TreeParams>),
     /// A grove of mixed species growing in turn, and a gust front crossing it.
     Grove,
+    /// The grove, fully grown, through autumn, leaf fall, winter and spring (`FloraSeason`).
+    Seasons,
 }
 
 /// A tree of the grove: species, seed, where it stands (in units of the grove's spacing, x and
@@ -110,6 +116,10 @@ const GUST_FRAME: u32 = 110;
 const GUST_SPEED: f32 = 12.0;
 const GUST_WIDTH: f32 = 7.0;
 const GUST_STRENGTH: f32 = 1.4;
+/// The part of a year the seasons clip shows: from late summer (`FloraSeason::of_year`) on, for
+/// this share of a year: the leaves turn, fall, the trees stand bare, and the leaves come back.
+const SEASONS_FROM: f32 = 0.47;
+const SEASONS_SPAN: f32 = 0.66;
 
 #[derive(Resource)]
 struct Capture {
@@ -132,7 +142,9 @@ struct Capture {
 struct OrbitCam;
 
 fn usage() -> ! {
-    eprintln!("usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove] [--gpu]");
+    eprintln!(
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons] [--gpu]"
+    );
     std::process::exit(2);
 }
 
@@ -140,6 +152,7 @@ fn main() {
     let mut out = None;
     let mut preset = None;
     let mut grove = false;
+    let mut seasons = false;
     let mut gpu = false;
     let mut style = RenderStyle::Natural;
     let mut args = std::env::args().skip(1);
@@ -148,6 +161,7 @@ fn main() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
             "--grove" => grove = true,
+            "--seasons" => seasons = true,
             "--preset" => {
                 let name = args.next().unwrap_or_else(|| usage());
                 preset = Some(
@@ -168,20 +182,28 @@ fn main() {
             _ => usage(),
         }
     }
-    if grove && (preset.is_some() || style != RenderStyle::Natural) {
+    if (grove || seasons) && (preset.is_some() || style != RenderStyle::Natural) || (grove && seasons) {
         usage();
     }
-    let out = out.unwrap_or_else(|| PathBuf::from(if grove { "target/capture/grove" } else { "target/capture/growth" }));
+    let out = out.unwrap_or_else(|| {
+        PathBuf::from(match (grove, seasons) {
+            (true, _) => "target/capture/grove",
+            (_, true) => "target/capture/seasons",
+            _ => "target/capture/growth",
+        })
+    });
     fs::create_dir_all(&out).expect("create output directory");
 
     let scene = if grove {
         Scene::Grove
+    } else if seasons {
+        Scene::Seasons
     } else {
         let mut params = preset.unwrap_or(TreePreset::Maple).params();
         params.style = style;
         Scene::Tree(Box::new(params))
     };
-    let size = if grove { UVec2::new(1280, 720) } else { UVec2::new(800, 600) };
+    let size = if matches!(scene, Scene::Tree(_)) { UVec2::new(800, 600) } else { UVec2::new(1280, 720) };
     let (distance, focus) = frame_scene(&scene, size);
     // Across the view: the camera looks along (-1, -1), the wind blows toward (-1, 1).
     let wind = Vec2::new(-1.0, 1.0).normalize();
@@ -246,7 +268,7 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let radius = (0.5 * (max - min).length()).max(0.5);
             (radius / (FOV * 0.5).sin() * 0.8, Vec3::new(0.0, 0.5 * (min.y + max.y), 0.0))
         }
-        Scene::Grove => {
+        Scene::Grove | Scene::Seasons => {
             let placed = grove(Vec3::ZERO);
             let (min, max) = placed
                 .iter()
@@ -333,6 +355,8 @@ fn setup(
             vec![(TreeParams::clone(params), Vec3::ZERO, 0, TOTAL_FRAMES * 3 / 4)],
         ),
         Scene::Grove => (GROVE_SEEDLING, grove(Vec3::ZERO)),
+        // Every tree mature from the first frame: the seasons are the clip.
+        Scene::Seasons => (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect()),
     };
     for (params, at, start, frames) in trees {
         let mature_at = build_tree(&params, f32::INFINITY).mature_at;
@@ -375,6 +399,7 @@ fn drive(
     screenshots: Query<(), With<Screenshot>>,
     mut strategy: ResMut<TimeUpdateStrategy>,
     mut wind: ResMut<FloraWind>,
+    mut season: ResMut<FloraSeason>,
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -404,6 +429,14 @@ fn drive(
         }
     }
     **camera = orbit(&capture, frame as f32 / (TOTAL_FRAMES - 1) as f32);
+    if matches!(capture.scene, Scene::Seasons) {
+        // From late summer through autumn, leaf fall and winter into the next summer.
+        let t = frame as f32 / (TOTAL_FRAMES - 1) as f32;
+        let next = FloraSeason::of_year(SEASONS_FROM + t * SEASONS_SPAN);
+        if *season != next {
+            *season = next;
+        }
+    }
     if matches!(capture.scene, Scene::Grove) && frame >= GUST_FRAME && !capture.gusted {
         capture.gusted = true;
         // From well upwind of the grove, along the wind, across all of it.

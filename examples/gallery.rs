@@ -39,7 +39,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
-    CrownShape, FloraPlugin, FloraWind, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation, LeafStyle,
+    CrownShape, FloraPlugin, FloraSeason, FloraWind, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation,
+    LeafStyle,
     MeshData,
     NodeKind, ProceduralTree, RenderStyle, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
@@ -58,6 +59,8 @@ struct Scenario {
     name: String,
     params: TreeParams,
     age: f32,
+    /// The season the scenario is rendered in; summer unless it is one of the season scenarios.
+    season: FloraSeason,
 }
 
 fn preset(preset: TreePreset) -> TreeParams {
@@ -70,7 +73,7 @@ fn scenarios() -> Vec<Scenario> {
     let inf = f32::INFINITY;
     let mut list = Vec::new();
     let mut add = |name: String, params: TreeParams, age: f32| {
-        list.push(Scenario { name, params, age });
+        list.push(Scenario { name, params, age, season: FloraSeason::SUMMER });
     };
 
     for p in TreePreset::ALL {
@@ -392,6 +395,19 @@ fn scenarios() -> Vec<Scenario> {
         let mut params = preset(TreePreset::Oak);
         edit(&mut params);
         add(name.to_string(), params, *age);
+    }
+
+    // The season (`FloraSeason`, global): turning, every leaf turned, half fallen, bare. The
+    // pine is evergreen, so its four must match its mature render.
+    for p in [TreePreset::Maple, TreePreset::Oak, TreePreset::Birch, TreePreset::Willow, TreePreset::Pine] {
+        for (name, season) in [
+            ("turning", FloraSeason { autumn: 0.5, leaf_fall: 0.0 }),
+            ("autumn", FloraSeason::AUTUMN),
+            ("falling", FloraSeason { autumn: 1.0, leaf_fall: 0.5 }),
+            ("winter", FloraSeason::WINTER),
+        ] {
+            list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season });
+        }
     }
 
     list
@@ -760,6 +776,7 @@ fn drive(
     screenshots: Query<Entity, With<Screenshot>>,
     mut exit: MessageWriter<AppExit>,
     support: Res<GpuGrowthSupport>,
+    mut season: ResMut<FloraSeason>,
 ) {
     let gallery = &mut *gallery;
     match gallery.phase {
@@ -785,6 +802,9 @@ fn drive(
             tree_params.set_changed();
             tree_age.0 = age;
             tree_age.set_changed();
+            if *season != scenario.season {
+                *season = scenario.season;
+            }
 
             let out = build_tree(params, age);
             let stats = analyze(params, age, &out);

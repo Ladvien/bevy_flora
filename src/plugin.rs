@@ -40,7 +40,8 @@ use crate::pipeline::{aged_skeleton, build_aged};
 use crate::shape::TreeShape;
 use crate::pool::{fill_pooled_shapes, spawn_pooled_trees};
 use crate::shading::{
-    FloraMaterial, FloraMaterialSupport, FloraWind, FloraWindBuffer, SharedFlora, TextureLibrary, detect_flora_support,
+    FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWind, FloraWindBuffer, SharedFlora, TextureLibrary,
+    detect_flora_support,
     flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
@@ -181,7 +182,9 @@ impl bevy::app::Plugin for FloraPlugin {
                 (
                     detect_gpu_growth_support,
                     detect_flora_support,
-                    sync_wind.run_if(resource_changed::<FloraWind>),
+                    sync_wind.run_if(|wind: Res<FloraWind>, season: Res<FloraSeason>| {
+                        wind.is_changed() || season.is_changed()
+                    }),
                     grow_trees,
                     sync_growth_mode,
                     rebuild_trees.run_if(flora_decided),
@@ -965,19 +968,20 @@ mod tests {
         }
         app.update();
         assert!(update_and_modified(&mut app).is_empty());
-        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default()).map(|v| v.to_array()));
+        let season = FloraSeason::default();
+        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default(), &season).map(|v| v.to_array()));
 
         app.world_mut().resource_mut::<FloraWind>().strength = 0.9;
         assert!(update_and_modified(&mut app).is_empty(), "a new strength modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[0][2], 0.9);
 
         // A gust front is wind too.
         app.world_mut().resource_mut::<FloraWind>().launch_gust(GustFront::default(), &Time::default());
         assert!(update_and_modified(&mut app).is_empty(), "a launched gust modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season).map(|v| v.to_array()));
         assert!(wind_buffer(&app)[4][2] > 0.0);
 
         // Touching the resource without changing the wind writes nothing.
@@ -985,6 +989,13 @@ mod tests {
         assert_eq!(modified_buffers(&mut app), 0, "an unchanged wind wrote the buffer");
         app.world_mut().resource_mut::<FloraWind>().strength = 0.2;
         assert_eq!(modified_buffers(&mut app), 1, "a changed wind writes the buffer once");
+
+        // The season shares the buffer: changing it rewrites the buffer and no material.
+        *app.world_mut().resource_mut::<FloraSeason>() = FloraSeason::AUTUMN;
+        assert!(update_and_modified(&mut app).is_empty(), "the season modified a material");
+        let wind = *app.world().resource::<FloraWind>();
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app)[5][0], 1.0);
     }
 
     #[test]

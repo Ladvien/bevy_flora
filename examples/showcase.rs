@@ -3,20 +3,29 @@
 //!
 //! Controls: right-drag orbit, wheel zoom, `[`/`]` previous/next preset,
 //! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
-//! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`).
+//! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`),
+//! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back.
 
 use std::f32::consts::PI;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy_flora::{FloraPlugin, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset, TreeShape};
+use bevy_flora::{
+    FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset, TreeShape,
+};
 
 #[derive(Resource)]
 struct Showcase {
     /// Index into `TreePreset::ALL`.
     preset: usize,
     seed: i32,
+    /// How far through the year the season is (`FloraSeason::of_year`), and whether it runs.
+    year: f32,
+    year_running: bool,
 }
+
+/// Seconds a year takes in the showcase while it runs.
+const YEAR_SECONDS: f32 = 40.0;
 
 impl Showcase {
     fn preset(&self) -> TreePreset {
@@ -48,9 +57,9 @@ fn main() {
             brightness: 300.0,
             ..default()
         })
-        .insert_resource(Showcase { preset: 0, seed: 42 })
+        .insert_resource(Showcase { preset: 0, seed: 42, year: 0.3, year_running: false })
         .add_systems(Startup, setup)
-        .add_systems(Update, (handle_keys, frame_tree, orbit_camera, update_hud, draw_shape).chain())
+        .add_systems(Update, (handle_keys, advance_year, frame_tree, orbit_camera, update_hud, draw_shape).chain())
         .run();
 }
 
@@ -159,6 +168,17 @@ fn handle_keys(
             commands.entity(entity).insert(TreeShape::default());
         }
     }
+    if keys.just_pressed(KeyCode::KeyY) {
+        showcase.year_running = !showcase.year_running;
+    }
+}
+
+/// While the year runs, move it on and set the season from it.
+fn advance_year(time: Res<Time>, mut showcase: ResMut<Showcase>, mut season: ResMut<FloraSeason>) {
+    if showcase.year_running {
+        showcase.year = (showcase.year + time.delta_secs() / YEAR_SECONDS).fract();
+        *season = FloraSeason::of_year(showcase.year);
+    }
 }
 
 /// Re-frame the camera when the tree height changes noticeably.
@@ -192,6 +212,7 @@ fn orbit_camera(
 #[allow(clippy::type_complexity)]
 fn update_hud(
     showcase: Res<Showcase>,
+    season: Res<FloraSeason>,
     tree: Single<(&ProceduralTree, &TreeAge, Option<&Growing>, Has<GpuGrowth>, Option<&TreeShape>)>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
@@ -205,17 +226,25 @@ fn update_hud(
     let shape_text = shape.map_or("off".to_string(), |shape| {
         format!("{} capsules, {:.1} m tall", shape.capsules().count(), shape.height())
     });
+    let season_text = if tree.0.foliage.autumn.is_none() {
+        "evergreen".to_string()
+    } else {
+        format!("turned {:.0}%, fallen {:.0}%", season.autumn * 100.0, season.leaf_fall * 100.0)
+    };
     hud.0 = format!(
-        "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\ngrowth: {}\ncolliders: {shape_text}\n\n\
+        "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\ngrowth: {}\ncolliders: {shape_text}\n\
+         season: {season_text}{}\n\n\
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
          Space: toggle growing   R: restart   M: mature   G: rebuild\n\
-         U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape",
+         U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape\n\
+         Y: run the year (or stop it)",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),
         showcase.seed,
         if growing.is_some() { "on" } else { "off" },
         if gpu { "vertex shader (GpuGrowth)" } else { "CPU rebuild" },
+        if showcase.year_running { " (the year runs)" } else { "" },
     );
 }
 
