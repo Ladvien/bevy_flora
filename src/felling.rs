@@ -6,7 +6,10 @@
 //! tree, and both get a cut face (an end-grain disc). The tree then tips over toward `direction`
 //! as a rod hinged at the front of the cut would, comes to rest where its limbs first touch the
 //! ground (twigs and leaves give way), and bounces a little; [`TreeLanded`] is sent the moment
-//! it hits, and [`Felled`] says how far it has tipped and when it lies still.
+//! it hits, and [`Felled`] says how far it has tipped and when it lies still. The ground is flat
+//! at the height the tree stands at, unless a [`FloraGround`] resource says otherwise: then the
+//! cut is measured from the uphill side of the trunk and the tree lands on the terrain, down a
+//! slope or against it.
 //!
 //! Once it lands a felled tree stops swaying in the wind (its leaves still flutter). It is no
 //! longer rebuilt when its [`ProceduralTree`] or [`TreeAge`] changes, and keeps its entity:
@@ -25,6 +28,7 @@ use bevy::time::Time;
 use bevy::transform::components::Transform;
 
 use crate::gpu::GpuGrowth;
+use crate::ground::FloraGround;
 use crate::mesh::MeshData;
 use crate::mesh::cut::cut;
 use crate::pipeline::build_aged;
@@ -42,7 +46,7 @@ pub struct FellTree {
     /// Which way the tree falls, world x and z; normalised when used. Zero falls along +x.
     pub direction: Vec2,
     /// Where the saw goes in, in metres above the tree's base (at least 5 cm, at most half the
-    /// trunk).
+    /// trunk); with a [`FloraGround`], above the ground on the uphill side of the trunk.
     pub cut_height: f32,
     /// How fast it falls: 1 as a real tree of its height would (a 15 m tree takes about four
     /// seconds from the first lean to the ground), 2 twice as fast.
@@ -129,6 +133,9 @@ const GRAVITY: f32 = 9.81;
 /// up at a slant.
 const CONTACT_SHARE: f32 = 0.15;
 const CONTACT_RADIUS: f32 = 0.04;
+/// The furthest a felled tree turns, from upright: on flat ground its trunk meets the ground
+/// before 105°; down a steep slope it can lie along it, well past 90°.
+const REST_LIMIT: f32 = 150.0 * std::f32::consts::PI / 180.0;
 
 /// Start felling every tree with a [`FellTree`] that can be cut: turn a pooled tree into its
 /// `ProceduralTree`, move a tree off the GPU growth path, then cut, spawn the stump and set up
@@ -143,6 +150,7 @@ pub(crate) fn start_felling(
     mut textures: TextureLibrary,
     wind: Option<Res<FloraWindBuffer>>,
     pools: Option<Res<Assets<TreePool>>>,
+    ground: Option<Res<FloraGround>>,
     mut cut_face: Local<Option<Handle<StandardMaterial>>>,
     trees: Query<(
         Entity,
@@ -186,7 +194,12 @@ pub(crate) fn start_felling(
         }
 
         let scale = transform.scale.y.max(1.0e-4);
-        let cut_y = (fell.cut_height / scale).clamp(0.05 / scale, tree.0.trunk.height * 0.5);
+        // On a slope the saw goes in above the uphill side of the trunk.
+        let uphill = ground.as_deref().map_or(0.0, |ground| {
+            let top = ground.top(transform.translation.xz(), tree.0.base_radius() * scale);
+            (top - transform.translation.y).max(0.0) / scale
+        });
+        let cut_y = (uphill + fell.cut_height / scale).clamp(0.05 / scale, tree.0.trunk.height * 0.5);
         let above = cut(&built.trunk, cut_y, true);
         let below = cut(&built.trunk, cut_y, false);
         let face = cut_face
@@ -214,7 +227,15 @@ pub(crate) fn start_felling(
         let (hinge, trunk_reach) = hinge_point(&above.outlines, cut_y, local_dir);
         let axis = Vec3::Y.cross(local_dir).normalize();
         let contact_set = contact_points(&above.kept, &built.skeleton, &tree.0, cut_y, trunk_reach);
-        let (rest, contact) = rest_angle(&contact_set, hinge, axis);
+        // How far a point of the tree, in its own space, stands above the ground.
+        let clearance = |p: Vec3| match ground.as_deref() {
+            None => p.y,
+            Some(ground) => {
+                let world = transform.transform_point(p);
+                (world.y - ground.height(world.xz())) / scale
+            }
+        };
+        let (rest, contact) = rest_angle(&contact_set, hinge, axis, clearance);
         let length = above.kept.positions.iter().map(|p| (*p - hinge).length()).fold(trunk_reach, f32::max) * scale;
         let crown_radius =
             built.foliage.positions.iter().map(|p| Vec2::new(p.x, p.z).length()).fold(0.0, f32::max) * scale;
@@ -371,29 +392,31 @@ fn contact_points(wood: &MeshData, skeleton: &Skeleton, params: &TreeParams, cut
 }
 
 /// The smallest angle, turning about `axis` through `hinge`, at which a point of `points` first
-/// reaches the ground (y = 0), and that point; 110° if none does.
-fn rest_angle(points: &[Vec3], hinge: Vec3, axis: Vec3) -> (f32, Vec3) {
+/// reaches the ground, and that point; [`REST_LIMIT`] if none does. `clearance(p)` is how far
+/// `p` (in the tree's space) stands above the ground; points already below it before the fall
+/// (a limb low on the uphill side of a slope) are left out, as they would plough through.
+fn rest_angle(points: &[Vec3], hinge: Vec3, axis: Vec3, clearance: impl Fn(Vec3) -> f32) -> (f32, Vec3) {
+    let points: Vec<Vec3> = points.iter().copied().filter(|p| clearance(*p) >= 0.0).collect();
     let lowest = |angle: f32, stride: usize| {
         let turn = Quat::from_axis_angle(axis, angle);
         points
             .iter()
             .step_by(stride)
-            .map(|p| (*p, (turn * (*p - hinge) + hinge).y))
+            .map(|p| (*p, clearance(turn * (*p - hinge) + hinge)))
             .fold((hinge, f32::INFINITY), |best, (p, y)| if y < best.1 { (p, y) } else { best })
     };
     let stride = (points.len() / 6000).max(1);
-    let limit = 110f32.to_radians();
     let step = 0.5f32.to_radians();
     let mut below = None;
     let mut angle = 0.0;
-    while angle < limit {
+    while angle < REST_LIMIT {
         angle += step;
         if lowest(angle, stride).1 < 0.0 {
             below = Some(angle);
             break;
         }
     }
-    let Some(mut high) = below else { return (limit, lowest(limit, 1).0) };
+    let Some(mut high) = below else { return (REST_LIMIT, lowest(REST_LIMIT, 1).0) };
     let mut low = (high - step).max(0.0);
     for _ in 0..14 {
         let mid = 0.5 * (low + high);
@@ -503,7 +526,7 @@ mod tests {
             let (hinge, reach) = hinge_point(&above.outlines, 0.5, direction);
             let points = contact_points(&above.kept, &tree.skeleton, &params, 0.5, reach);
             let axis = Vec3::Y.cross(direction).normalize();
-            let (rest, contact) = rest_angle(&points, hinge, axis);
+            let (rest, contact) = rest_angle(&points, hinge, axis, |p| p.y);
             assert!(
                 rest > 45f32.to_radians() && rest < 105f32.to_radians(),
                 "{preset:?}: rests at {}°",
@@ -599,6 +622,73 @@ mod tests {
         assert!(app.world().get::<PooledTree>(tree).is_none(), "it is still pooled");
         assert_eq!(app.world().get::<ProceduralTree>(tree), Some(&ProceduralTree(expected)));
         assert!(app.world().get::<Felled>(tree).is_some_and(|f| f.at_rest));
+    }
+
+    #[test]
+    fn on_a_slope_a_tree_is_cut_above_its_uphill_side_and_lands_on_the_terrain() {
+        // The ground falls 0.4 m a metre toward +x, 22°.
+        let slope = FloraGround::new(|at: Vec2| 3.0 - 0.4 * at.x);
+        let params = TreePreset::Oak.params();
+        let at = Vec2::new(2.0, 1.0);
+        let fell = |ground: Option<&FloraGround>, direction: Vec2| {
+            let mut app = app();
+            let y = ground.map_or(0.0, |ground| ground.footing(at, params.base_radius()));
+            if let Some(ground) = ground {
+                app.insert_resource(ground.clone());
+            }
+            let base = Transform::from_xyz(at.x, y, at.y);
+            let tree = app.world_mut().spawn((ProceduralTree(params.clone()), base)).id();
+            app.update();
+            app.world_mut().entity_mut(tree).insert(FellTree { direction, speed: 4.0, ..Default::default() });
+            assert_eq!(settle(&mut app, 900), 1, "it did not land exactly once");
+            let felled = app.world().get::<Felled>(tree).unwrap().clone();
+            assert!(felled.at_rest, "it is still moving");
+            (base, *app.world().get::<Transform>(tree).unwrap(), felled)
+        };
+        let (_, _, flat) = fell(None, Vec2::X);
+        for (direction, downhill) in [(Vec2::X, true), (Vec2::NEG_X, false)] {
+            let (base, lying, felled) = fell(Some(&slope), direction);
+            // The saw went in half a metre above the ground on the trunk's uphill side.
+            let cut = base.translation.y + felled.fall.hinge.y;
+            let uphill = slope.top(at, params.base_radius());
+            assert!((cut - uphill - 0.5).abs() < 1.0e-3, "cut at {cut}, the uphill ground at {uphill}");
+            // Down the slope it turns further than on flat ground, up it less.
+            let (angle, on_flat) = (felled.angle.to_degrees(), flat.angle.to_degrees());
+            let turned = if downhill { angle > on_flat + 8.0 } else { angle < on_flat - 8.0 };
+            assert!(turned, "downhill {downhill}: rests at {angle}°, {on_flat}° on flat ground");
+            // And it lies on the terrain.
+            let contact = lying.transform_point(felled.fall.contact);
+            let gap = contact.y - slope.height(contact.xz());
+            assert!(gap.abs() < 0.03, "downhill {downhill}: it touches the ground {gap} m off it");
+        }
+    }
+
+    #[test]
+    fn every_preset_felled_on_a_slope_lands_once_and_lies_on_it() {
+        // 27°, falling toward +x.
+        let slope = FloraGround::new(|at: Vec2| -0.5 * at.x);
+        for preset in TreePreset::ALL {
+            let params = preset.params();
+            for direction in [Vec2::X, Vec2::NEG_X, Vec2::Y] {
+                let mut app = app();
+                app.insert_resource(slope.clone());
+                let base = Transform::from_xyz(0.0, slope.footing(Vec2::ZERO, params.base_radius()), 0.0);
+                let tree = app.world_mut().spawn((ProceduralTree(params.clone()), base)).id();
+                app.update();
+                app.world_mut().entity_mut(tree).insert(FellTree { direction, speed: 4.0, ..Default::default() });
+                let landings = settle(&mut app, 900);
+                let felled = app.world().get::<Felled>(tree).unwrap().clone();
+                let lying = *app.world().get::<Transform>(tree).unwrap();
+                let contact = lying.transform_point(felled.fall.contact);
+                let gap = contact.y - slope.height(contact.xz());
+                assert!(
+                    felled.at_rest && landings == 1 && gap.abs() < 0.05,
+                    "{preset:?} toward {direction}: landed {landings} times, at rest {}, at {}°, {gap} m off the ground",
+                    felled.at_rest,
+                    felled.angle.to_degrees()
+                );
+            }
+        }
     }
 
     #[test]

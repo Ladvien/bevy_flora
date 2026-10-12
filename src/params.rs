@@ -638,6 +638,20 @@ pub struct TreeParams {
     pub style: RenderStyle,
 }
 
+impl TreeParams {
+    /// How far the grown trunk reaches from its axis at the ground, in metres: its radius
+    /// widened by the flare, and by the root ridges when it has them. The footprint
+    /// [`FloraGround::footing`](crate::FloraGround::footing) stands a tree on.
+    pub fn base_radius(&self) -> f32 {
+        let flared = self.trunk.radius * self.trunk.flare;
+        if self.trunk.root_flare_count > 0 && self.trunk.root_flare_spread > 0.0 {
+            flared * (1.0 + self.trunk.root_flare_spread)
+        } else {
+            flared
+        }
+    }
+}
+
 impl Default for TreeParams {
     fn default() -> Self {
         Self {

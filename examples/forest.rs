@@ -9,7 +9,7 @@
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
-//!     [--undergrowth <preset>[:<spacing>]]
+//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -41,6 +41,11 @@
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame.
+//!
+//! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
+//! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
+//! footing (`ScatterPoint::transform_on`), none on ground steeper than 30°, and `--eye` and
+//! `--at` heights count from the ground under them.
 //!
 //! After the trees exist and `--warmup-secs` have passed (shaders compile in the
 //! background), the example times `--frames` frames and prints one line:
@@ -76,9 +81,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{PresentMode, WindowResolution};
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
-    ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, TreeShake,
+    FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings,
+    PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, TreeShake,
     TreeShakes, build_pool,
 };
 
@@ -90,6 +97,8 @@ const CAMERA_HEIGHT: f32 = 30.0;
 /// The undergrowth's pool switches levels of detail at this share of the trees' distances
 /// (15, 40 and 100 m by default): a shrub stands about a tenth as tall as a tree.
 const UNDERGROWTH_LOD_SCALE: f32 = 0.5;
+/// With `--terrain`, no tree or shrub stands on ground steeper than this, in degrees.
+const MAX_SLOPE_DEGREES: f32 = 30.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -172,6 +181,8 @@ struct Args {
     clearing: f32,
     /// A second `Scatter`, of this species this far apart, clear of the trunks.
     undergrowth: Option<(TreePreset, f32)>,
+    /// Rolling hills about this many metres high instead of flat ground (`FloraGround`).
+    terrain: Option<f32>,
 }
 
 impl Args {
@@ -190,7 +201,7 @@ fn usage() -> ! {
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
-         [--undergrowth <preset>[:<spacing>]]"
+         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>]"
     );
     std::process::exit(2);
 }
@@ -224,6 +235,7 @@ fn parse_args() -> Args {
         grove: 50.0,
         clearing: 0.0,
         undergrowth: None,
+        terrain: None,
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -328,6 +340,7 @@ fn parse_args() -> Args {
                 let preset = TreePreset::ALL.into_iter().find(|p| p.name() == name).unwrap_or_else(|| usage());
                 args.undergrowth = Some((preset, spacing.parse::<f32>().unwrap_or_else(|_| usage())));
             }
+            "--terrain" => args.terrain = Some(value(&mut it)),
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -469,7 +482,8 @@ fn setup(
     mut pools: ResMut<Assets<TreePool>>,
 ) {
     let placing = Instant::now();
-    let (trees, extent) = placements(&bench.args);
+    let ground = ground(&bench.args);
+    let (trees, extent) = placements(&bench.args, &ground);
     let placing = placing.elapsed().as_secs_f32() * 1000.0;
     bench.extent = extent;
     let half = extent * 0.5;
@@ -493,14 +507,16 @@ fn setup(
         Transform::from_translation(bench.args.sun).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
+    let side = extent * 1.2 + 200.0;
+    let ground_mesh = match bench.args.terrain {
+        Some(_) => terrain_mesh(&ground, side),
+        None => Plane3d::default().mesh().size(side, side).build(),
+    };
+    if bench.args.terrain.is_some() {
+        commands.insert_resource(ground.clone());
+    }
     commands.spawn((
-        Mesh3d(
-            meshes.add(
-                Plane3d::default()
-                    .mesh()
-                    .size(extent * 1.2 + 200.0, extent * 1.2 + 200.0),
-            ),
-        ),
+        Mesh3d(meshes.add(ground_mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
             // Grass, or snow over it as far as `--season` says it snowed.
             base_color: {
@@ -520,8 +536,13 @@ fn setup(
             far: extent * 2.0 + 500.0,
             ..default()
         }),
-        Transform::from_translation(bench.args.eye.unwrap_or(Vec3::new(-half, CAMERA_HEIGHT, -half)))
-            .looking_at(bench.args.at.unwrap_or(Vec3::new(0.0, 8.0, 0.0)), Vec3::Y),
+        // With `--terrain` the camera and its aim are given above the ground under them.
+        {
+            let lift = |p: Vec3| p + Vec3::Y * ground.height(p.xz());
+            let eye = lift(bench.args.eye.unwrap_or(Vec3::new(-half, CAMERA_HEIGHT, -half)));
+            let at = lift(bench.args.at.unwrap_or(Vec3::new(0.0, 8.0, 0.0)));
+            Transform::from_translation(eye).looking_at(at, Vec3::Y)
+        },
     ));
     if bench.args.is_offscreen() {
         bench.target = images.add(Image::new_target_texture(
@@ -619,13 +640,65 @@ fn setup(
     }
 }
 
+/// The ground: flat at 0, or with `--terrain <relief>` rolling hills about `relief` metres high.
+fn ground(args: &Args) -> FloraGround {
+    match args.terrain {
+        None => FloraGround::default(),
+        Some(relief) => FloraGround::new(move |at: Vec2| hills(at, relief)),
+    }
+}
+
+/// Rolling hills: crossed waves about 330, 160 and 75 m long whose crests a slow warp bends, so
+/// they wander; they reach about `relief` metres above and below 0.
+fn hills(at: Vec2, relief: f32) -> f32 {
+    let q = at + Vec2::new((at.y * 0.011).sin(), (at.x * 0.013).cos()) * 25.0;
+    relief
+        * (0.5 * (q.x * 0.019).sin() * (q.y * 0.016).cos()
+            + 0.3 * (q.x * 0.041 + 1.3).sin() * (q.y * 0.037 + 0.4).sin()
+            + 0.2 * ((q.x + q.y) * 0.083).sin())
+}
+
+/// A square of ground `side` metres across, centred on the origin, following `ground`: cells of
+/// 2 m (fewer, larger ones past 600 a side), smooth normals from the ground's slope.
+fn terrain_mesh(ground: &FloraGround, side: f32) -> Mesh {
+    let cells = ((side / 2.0).ceil() as u32).clamp(1, 600);
+    let step = side / cells as f32;
+    let n = cells + 1;
+    let mut positions = Vec::with_capacity((n * n) as usize);
+    let mut normals = Vec::with_capacity((n * n) as usize);
+    let mut uvs = Vec::with_capacity((n * n) as usize);
+    for j in 0..n {
+        for i in 0..n {
+            let at = Vec2::new(i as f32 * step, j as f32 * step) - side * 0.5;
+            positions.push([at.x, ground.height(at), at.y]);
+            normals.push(ground.normal(at).to_array());
+            uvs.push([i as f32 / cells as f32, j as f32 / cells as f32]);
+        }
+    }
+    let mut indices = Vec::with_capacity((cells * cells * 6) as usize);
+    for j in 0..cells {
+        for i in 0..cells {
+            let a = j * n + i;
+            let (b, c) = (a + 1, a + n);
+            // Counter-clockwise seen from above.
+            indices.extend([a, c, b, b, c, c + 1]);
+        }
+    }
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
 /// Where the trees stand (transform, species, variant) and the side of the square they cover:
 /// a jittered grid, or with `--scatter` a `Scatter` sized to hold about `--trees` trees, plus
 /// with `--undergrowth` a second `Scatter` of the undergrowth species (the last pool) that keeps
-/// clear of the trunks.
-fn placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
-    let (mut trees, extent) = tree_placements(args);
-    let Some((_, spacing)) = args.undergrowth else { return (trees, extent) };
+/// clear of the trunks. Each stands at its footing on `ground`; with `--terrain` none stands on
+/// ground steeper than [`MAX_SLOPE_DEGREES`].
+fn placements(args: &Args, ground: &FloraGround) -> (Vec<(Transform, usize, u32)>, f32) {
+    let (mut trees, extent) = tree_placements(args, ground);
+    let Some((shrub, spacing)) = args.undergrowth else { return (trees, extent) };
     // Trunks by 2 m cell, so a shrub looks at the nine cells around it only.
     const CELL: f32 = 2.0;
     const TRUNK_CLEARANCE: f32 = 1.5;
@@ -652,17 +725,23 @@ fn placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
         let t = ((wave + 0.6) / 1.2).clamp(0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
     };
+    let shrub_params = shrub.params();
+    let steep = |at: Vec2| args.terrain.is_some() && ground.slope(at) > MAX_SLOPE_DEGREES.to_radians();
     let shrubs = Scatter { seed: 2, ..Scatter::new(Rect::new(-half, -half, half, half), spacing) }
-        .points_where(|at| if at.length() < clearing || near_a_trunk(at) { 0.0 } else { patches(at) });
-    trees.extend(shrubs.into_iter().map(|shrub| (shrub.transform(0.0), species, shrub.variant % VARIANTS)));
+        .points_where(|at| if at.length() < clearing || near_a_trunk(at) || steep(at) { 0.0 } else { patches(at) });
+    trees.extend(
+        shrubs.into_iter().map(|shrub| (shrub.transform_on(ground, &shrub_params), species, shrub.variant % VARIANTS)),
+    );
     (trees, extent)
 }
 
 /// The trees alone: see [`placements`].
-fn tree_placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
+fn tree_placements(args: &Args, ground: &FloraGround) -> (Vec<(Transform, usize, u32)>, f32) {
     let spacing = args.spacing;
+    let steep = |at: Vec2| args.terrain.is_some() && ground.slope(at) > MAX_SLOPE_DEGREES.to_radians();
     let Some(species) = &args.scatter else {
         let (side, extent) = grid(args.trees, spacing);
+        let radius = args.preset.params().base_radius();
         let half = extent * 0.5;
         let trees = (0..args.trees)
             .map(|i| {
@@ -671,7 +750,8 @@ fn tree_placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
                 let x = (i % side) as f32 * spacing - half + rng.range(-jitter, jitter);
                 let z = (i / side) as f32 * spacing - half + rng.range(-jitter, jitter);
                 let yaw = rng.range(0.0, std::f32::consts::TAU);
-                (Transform::from_xyz(x, 0.0, z).with_rotation(Quat::from_rotation_y(yaw)), 0, i % VARIANTS)
+                let y = ground.footing(Vec2::new(x, z), radius);
+                (Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(yaw)), 0, i % VARIANTS)
             })
             .collect();
         return (trees, extent);
@@ -686,10 +766,11 @@ fn tree_placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
         ..Scatter::new(Rect::new(-half, -half, half, half), spacing)
     };
     let clearing = args.clearing;
+    let params: Vec<TreeParams> = species.iter().map(|&(preset, _)| preset.params()).collect();
     let trees = scatter
-        .points_where(|at| if at.length() < clearing { 0.0 } else { 1.0 })
+        .points_where(|at| if at.length() < clearing || steep(at) { 0.0 } else { 1.0 })
         .into_iter()
-        .map(|tree| (tree.transform(0.0), tree.species, tree.variant % VARIANTS))
+        .map(|tree| (tree.transform_on(ground, &params[tree.species]), tree.species, tree.variant % VARIANTS))
         .collect();
     (trees, extent)
 }

@@ -5,6 +5,62 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.18.0] - 2026-10-12
+
+Terrain. Trees stand on hills without their trunks floating over the slope, and felled trees
+land on the hills. Nothing is drawn differently on flat ground. Every change is an addition;
+the minor bump is for the new API.
+
+### Added
+
+- **`FloraGround`** (in the prelude): the height of the game's ground at every point (x, z),
+  from a closure (your terrain's height function or a heightmap lookup). `footing(at, radius)`
+  is the lowest ground under a trunk's base, where a tree stands so that its trunk meets a slope
+  all round: stood at the height under its centre, the downhill side of a trunk hangs over the
+  ground with its flat base showing (`docs/footing.jpg`). `slope(at)` and `normal(at)` are for
+  keeping trees off cliffs; `FloraGround::flat(h)` and `Default` are flat ground.
+- **`TreeParams::base_radius()`**, the grown trunk's radius at the ground, flare and root ridges
+  included: the footprint a footing is taken under.
+- **`ScatterPoint::transform_on(&ground, &params)`**: a scattered tree's transform at its
+  footing, at its own scale.
+- **Felling on terrain**: with a `FloraGround` resource the saw goes in `cut_height` above the
+  ground on the trunk's uphill side (so a stump on a slope is taller downhill), and the tree
+  comes to rest where its trunk or limbs meet the terrain, further over than on flat ground when
+  it falls down the slope, less when it falls against it. Without the resource a tree falls as in
+  0.17.0, onto flat ground at its own height.
+- `forest --terrain <relief>`: rolling hills about `relief` metres high, drawn as a heightfield
+  and used as the `FloraGround`; every tree and shrub stands at its footing and none on ground
+  steeper than 30°, and `--eye`/`--at` heights count from the ground (`docs/terrain.jpg`).
+  `inspect --slope <deg>` stands the tree on ground falling toward +x (`--on-centre`: where a
+  plain placement would put it) and fells it onto the slope with `--fell`.
+- README: "On terrain", with an example that plants a pool on hills, keeps it off steep ground
+  and lets felled trees land on them.
+
+### Changed
+
+- A felled tree may turn up to 150° from upright (110° before), so one felled down a steep
+  slope can lie along it; on flat ground every preset lands before 105°, as before.
+- README: the felling clip's oak lands about 2.7 s after the cut (it said a little over two).
+
+### Measured
+
+- **Look.** The 399 gallery scenarios and the five README clips render as 0.17.0's do (mean
+  difference 0.000 of 255; the fell clip too: without a `FloraGround` the fall is computed as
+  before), and a flat `forest --scatter` screenshot is byte for byte 0.17.0's. On a 25° slope an
+  oak's trunk was looked at close up at its footing and at the height under its centre (side by
+  side, the same camera), the oak felled down, up and across the slope (the uphill stump half a
+  metre tall on its uphill side, the log's butt on the stump's front edge), the spruce, willow,
+  shrub, maple, pine and baobab standing on it, and a 3 000-tree forest with undergrowth on hills
+  14 m high from a clearing, from above and with trunk bases zoomed in. The unit tests fell every
+  preset down, up and across a 27° slope (each lands once, lies still and touches the slope),
+  and the oak on a 22° slope against flat ground.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, 1080p, interleaved with the
+  0.17.0 binary, two runs each): 100 000 pooled oaks 7.7 ms a frame against 7.6 in the same
+  session (0.17.0 measured 7.5 on a quieter machine), 1 000 `ProceduralTree` oaks 24.2 ms on
+  both; nothing a frame runs changed. Placing trees costs a footing (17 height samples) each,
+  and with `forest --terrain` the slope test 4 more per candidate: 9 418 trees and shrubs on
+  hills were placed in 35 ms.
+
 ## [0.17.0] - 2026-10-12
 
 Felling. Any tree can be cut down: it leaves a stump, falls about the hinge of the cut, lands on
@@ -1230,6 +1286,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.18.0]: https://github.com/Ladvien/bevy_flora/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Ladvien/bevy_flora/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Ladvien/bevy_flora/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Ladvien/bevy_flora/compare/v0.14.0...v0.15.0
