@@ -27,8 +27,10 @@ use crate::shading::{FloraUniform, FloraWindBuffer};
 /// own lights, shadows, ambient light and fog, and lets light through backlit leaves like
 /// [`FloraMaterial`](crate::FloraMaterial). The quad bends with the wind.
 ///
-/// Drawn alpha-masked (opaque where the picture is, nothing elsewhere), without
-/// shadows and without prepasses; it cross-fades with a
+/// Drawn with alpha to coverage: with MSAA a pixel draws as many of its samples as the share of
+/// it the baked tree covers (the atlas's mipmaps average that share), so a far crown keeps the
+/// gaps between its leaves the way its meshes do; without MSAA it is alpha-masked at one half.
+/// No shadows and no prepasses; it cross-fades with a
 /// [`VisibilityRange`](bevy::camera::visibility::VisibilityRange) like any mesh.
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
 pub struct ImpostorMaterial {
@@ -82,7 +84,7 @@ impl Material for ImpostorMaterial {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Mask(0.5)
+        AlphaMode::AlphaToCoverage
     }
 
     // The vertex stage places the quad itself, so the default prepass and

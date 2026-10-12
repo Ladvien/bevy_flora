@@ -87,6 +87,16 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
 
     let color = textureSample(albedo, atlas_sampler, in.uv);
     let baked = textureSample(surface, atlas_sampler, in.uv);
+    // Alpha is the share of the texel the tree covers, averaged down the mipmaps. With MSAA it
+    // becomes the share of the pixel's samples drawn (alpha to coverage), so a far crown is as
+    // airy as the leaves it was baked from: the sky shows through its gaps in the same
+    // proportion. It is not sharpened the way Bevy's materials sharpen it, which would turn a
+    // far mip's partial coverage back into all or nothing. Without MSAA it is cut at one half.
+@if(ALPHA_TO_COVERAGE)
+    if color.a < 1.0 / 255.0 {
+        discard;
+    }
+@else
     if color.a < 0.5 {
         discard;
     }
@@ -120,7 +130,7 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         out.color.rgb + view.exposure * transmitted_light(
             p.world_position, N, N, p.V, p.frag_coord, p.flags, baked.b, through, baked.b
         ),
-        1.0
+        color.a,
     );
     out.color = main_pass_post_lighting_processing(p, out.color);
     return out;
