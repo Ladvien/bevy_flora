@@ -397,14 +397,16 @@ fn scenarios() -> Vec<Scenario> {
         add(name.to_string(), params, *age);
     }
 
-    // The season (`FloraSeason`, global): turning, every leaf turned, half fallen, bare. The
-    // pine is evergreen, so its four must match its mature render.
+    // The season (`FloraSeason`, global): turning, every leaf turned, half fallen, bare, and bare
+    // under snow. The pine is evergreen, so its first four must match its mature render; in the
+    // snow its needles turn white on top.
     for p in [TreePreset::Maple, TreePreset::Oak, TreePreset::Birch, TreePreset::Willow, TreePreset::Pine] {
         for (name, season) in [
-            ("turning", FloraSeason { autumn: 0.5, leaf_fall: 0.0 }),
+            ("turning", FloraSeason { autumn: 0.5, ..FloraSeason::SUMMER }),
             ("autumn", FloraSeason::AUTUMN),
-            ("falling", FloraSeason { autumn: 1.0, leaf_fall: 0.5 }),
+            ("falling", FloraSeason { leaf_fall: 0.5, ..FloraSeason::AUTUMN }),
             ("winter", FloraSeason::WINTER),
+            ("snow", FloraSeason::SNOW),
         ] {
             list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season });
         }

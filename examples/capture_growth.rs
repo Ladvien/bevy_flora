@@ -15,8 +15,8 @@
 //! ```
 //!
 //! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`, encoded like the
-//! grove): the deciduous trees turn their autumn colours, shed their leaves and leaf out again
-//! while the pine and the cypress stay green.
+//! grove): the deciduous trees turn their autumn colours and shed their leaves, snow settles on
+//! every tree and melts, and the leaves come out again, while the pine and the cypress stay green.
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -116,10 +116,29 @@ const GUST_FRAME: u32 = 110;
 const GUST_SPEED: f32 = 12.0;
 const GUST_WIDTH: f32 = 7.0;
 const GUST_STRENGTH: f32 = 1.4;
-/// The part of a year the seasons clip shows: from late summer (`FloraSeason::of_year`) on, for
-/// this share of a year: the leaves turn, fall, the trees stand bare, and the leaves come back.
-const SEASONS_FROM: f32 = 0.47;
-const SEASONS_SPAN: f32 = 0.66;
+/// The part of a year the seasons clip shows, as (share of the clip, `FloraSeason::of_year`'s
+/// year) keys joined by straight lines: late summer to the last leaves falling in the first 55%,
+/// the snowy weeks (0.88 to 0.98 of the year, a tenth of it) in the next quarter, so the snow is
+/// on screen long enough to see, and the melt, spring and summer again in the rest.
+const SEASON_KEYS: [(f32, f32); 4] = [(0.0, 0.47), (0.55, 0.88), (0.8, 0.98), (1.0, 1.13)];
+
+/// The year (for `FloraSeason::of_year`) at share `t` of the seasons clip.
+fn season_year(t: f32) -> f32 {
+    SEASON_KEYS
+        .windows(2)
+        .find(|pair| t <= pair[1].0)
+        .map_or(SEASON_KEYS[3].1, |pair| {
+            let ((t0, y0), (t1, y1)) = (pair[0], pair[1]);
+            y0 + (y1 - y0) * ((t - t0) / (t1 - t0)).clamp(0.0, 1.0)
+        })
+}
+
+/// The ground's colour under `snow` (0..1): grass, or snow over it.
+fn ground_colour(snow: f32) -> Color {
+    let (grass, snowed) = (Vec3::new(0.35, 0.45, 0.30), Vec3::new(0.86, 0.88, 0.92));
+    let c = grass.lerp(snowed, snow);
+    Color::srgb(c.x, c.y, c.z)
+}
 
 #[derive(Resource)]
 struct Capture {
@@ -127,6 +146,8 @@ struct Capture {
     size: UVec2,
     out: PathBuf,
     target: Handle<Image>,
+    /// The ground's material: it whitens with the snow in the seasons clip.
+    ground: Handle<StandardMaterial>,
     /// Orbit radius and look-at point, framed on the mature trees.
     distance: f32,
     focus: Vec3,
@@ -233,6 +254,7 @@ fn main() {
             size,
             out,
             target: Handle::default(),
+            ground: Handle::default(),
             distance,
             focus,
             wind,
@@ -341,13 +363,14 @@ fn setup(
         .build(),
         Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    capture.ground = materials.add(StandardMaterial {
+        base_color: ground_colour(0.0),
+        perceptual_roughness: 1.0,
+        ..default()
+    });
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(400.0, 400.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.35, 0.45, 0.30),
-            perceptual_roughness: 1.0,
-            ..default()
-        })),
+        MeshMaterial3d(capture.ground.clone()),
     ));
     let (seedling, trees): (f32, Vec<(TreeParams, Vec3, u32, u32)>) = match &capture.scene {
         Scene::Tree(params) => (
@@ -402,6 +425,7 @@ fn drive(
     mut season: ResMut<FloraSeason>,
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // The clock stands still, except for the one step the frame below asks for.
     *strategy = TimeUpdateStrategy::ManualDuration(Duration::ZERO);
@@ -430,11 +454,14 @@ fn drive(
     }
     **camera = orbit(&capture, frame as f32 / (TOTAL_FRAMES - 1) as f32);
     if matches!(capture.scene, Scene::Seasons) {
-        // From late summer through autumn, leaf fall and winter into the next summer.
+        // From late summer through autumn, leaf fall and the snow into the next summer.
         let t = frame as f32 / (TOTAL_FRAMES - 1) as f32;
-        let next = FloraSeason::of_year(SEASONS_FROM + t * SEASONS_SPAN);
+        let next = FloraSeason::of_year(season_year(t));
         if *season != next {
             *season = next;
+            if let Some(mut ground) = materials.get_mut(&capture.ground) {
+                ground.base_color = ground_colour(next.snow);
+            }
         }
     }
     if matches!(capture.scene, Scene::Grove) && frame >= GUST_FRAME && !capture.gusted {

@@ -8,7 +8,7 @@
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
-//!     [--season <autumn>,<leaf fall>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
+//!     [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -178,7 +178,7 @@ fn usage() -> ! {
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
-         [--season <autumn>,<leaf fall>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]"
+         [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]"
     );
     std::process::exit(2);
 }
@@ -310,8 +310,12 @@ fn parse_args() -> Args {
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
-                let [autumn, leaf_fall]: [f32; 2] = parts.try_into().unwrap_or_else(|_| usage());
-                args.season = FloraSeason { autumn, leaf_fall };
+                let (autumn, leaf_fall, snow) = match parts[..] {
+                    [autumn, leaf_fall] => (autumn, leaf_fall, 0.0),
+                    [autumn, leaf_fall, snow] => (autumn, leaf_fall, snow),
+                    _ => usage(),
+                };
+                args.season = FloraSeason { autumn, leaf_fall, snow };
             }
             "--lod" => {
                 let list = it.next().unwrap_or_else(|| usage());
@@ -477,7 +481,12 @@ fn setup(
             ),
         ),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.35, 0.45, 0.30),
+            // Grass, or snow over it as far as `--season` says it snowed.
+            base_color: {
+                let grass = Vec3::new(0.35, 0.45, 0.30);
+                let c = grass.lerp(Vec3::new(0.86, 0.88, 0.92), bench.args.season.snow);
+                Color::srgb(c.x, c.y, c.z)
+            },
             perceptual_roughness: 1.0,
             ..default()
         })),

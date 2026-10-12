@@ -185,14 +185,15 @@ const AUTUMN_RATIO_MAX: f32 = 1000.0;
 
 /// The season, the same for every tree drawn with [`FloraMaterial`] (and impostors): how far
 /// deciduous trees ([`FoliageParams::autumn`](crate::FoliageParams::autumn)) have turned and
-/// shed their leaves. Evergreens ignore it.
+/// shed their leaves, and how much snow lies on every tree. Evergreens ignore the first two.
 ///
 /// Like [`FloraWind`] it lives in the shared buffer, so changing it every frame (a day/night and
 /// season cycle) costs one small buffer write and touches no material or mesh. Leaves turn and
 /// fall one by one, each at its own moment, in the order they turned; leaf fall also takes the
 /// leaves out of the shadows. For spring, set `autumn` to 0 while the trees are bare (nothing
 /// shows it), then bring `leaf_fall` back to 0 and the leaves return green, as [`Self::of_year`]
-/// does.
+/// does. Snow settles on the surfaces that face up, wood, needles and leaves alike, first on the
+/// flattest and with more of it on steeper ones.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct FloraSeason {
@@ -200,26 +201,35 @@ pub struct FloraSeason {
     pub autumn: f32,
     /// Share of the leaves fallen, 0 (all on the tree) to 1 (bare).
     pub leaf_fall: f32,
+    /// How much snow lies on the trees, 0 (none) to 1 (every surface that faces up is white).
+    pub snow: f32,
 }
 
 impl FloraSeason {
     /// Full summer: green, every leaf on the tree.
-    pub const SUMMER: Self = Self { autumn: 0.0, leaf_fall: 0.0 };
+    pub const SUMMER: Self = Self { autumn: 0.0, leaf_fall: 0.0, snow: 0.0 };
     /// Every leaf turned, none fallen.
-    pub const AUTUMN: Self = Self { autumn: 1.0, leaf_fall: 0.0 };
+    pub const AUTUMN: Self = Self { autumn: 1.0, leaf_fall: 0.0, snow: 0.0 };
     /// Bare deciduous trees.
-    pub const WINTER: Self = Self { autumn: 1.0, leaf_fall: 1.0 };
+    pub const WINTER: Self = Self { autumn: 1.0, leaf_fall: 1.0, snow: 0.0 };
+    /// Bare deciduous trees, and snow on every tree.
+    pub const SNOW: Self = Self { autumn: 1.0, leaf_fall: 1.0, snow: 1.0 };
 
     /// A season from the year's progress `t` (0..1, wraps): green until 0.55, turning to 0.75,
-    /// falling to 0.9, bare through winter, and green again from 0.05 (leaves are back by then).
+    /// falling to 0.9, snow settling from 0.88 to 0.92 and melting from 0.98, and green again
+    /// from 0.05 (leaves are back by then).
     pub fn of_year(t: f32) -> Self {
         let t = t.rem_euclid(1.0);
         let ramp = |a: f32, b: f32| ((t - a) / (b - a)).clamp(0.0, 1.0);
         if t < 0.05 {
-            // Late winter into spring: the leaves come back green.
-            Self { autumn: 0.0, leaf_fall: 1.0 - ramp(0.0, 0.05) }
+            // Late winter into spring: the snow is gone and the leaves come back green.
+            Self { autumn: 0.0, leaf_fall: 1.0 - ramp(0.0, 0.05), snow: 0.0 }
         } else {
-            Self { autumn: ramp(0.55, 0.75), leaf_fall: ramp(0.7, 0.9) }
+            Self {
+                autumn: ramp(0.55, 0.75),
+                leaf_fall: ramp(0.7, 0.9),
+                snow: ramp(0.88, 0.92) * (1.0 - ramp(0.98, 1.0)),
+            }
         }
     }
 }
@@ -273,7 +283,7 @@ impl FloraUniform {
 /// shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend, flutter, gust
 /// strength, turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front` (origin x,
 /// origin z, direction x, direction z), `front_shape` (speed, width, strength, start time) and
-/// `season` (autumn, leaf fall, 0, 0); `front` and `front_shape` are zero without a
+/// `season` (autumn, leaf fall, snow, 0); `front` and `front_shape` are zero without a
 /// [`GustFront`], or with one that has no direction. Directions are normalised and every value
 /// clamped to what the shaders can use.
 pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason) -> [Vec4; 6] {
@@ -294,7 +304,12 @@ pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason) -> [Vec4; 6] 
         Vec4::new(wind.gust_frequency.max(0.0), wind.flutter_frequency.max(0.0), 0.0, 0.0),
         front,
         front_shape,
-        Vec4::new(season.autumn.clamp(0.0, 1.0), season.leaf_fall.clamp(0.0, 1.0), 0.0, 0.0),
+        Vec4::new(
+            season.autumn.clamp(0.0, 1.0),
+            season.leaf_fall.clamp(0.0, 1.0),
+            season.snow.clamp(0.0, 1.0),
+            0.0,
+        ),
     ]
 }
 
@@ -709,13 +724,14 @@ mod tests {
     }
 
     #[test]
-    fn over_a_year_leaves_turn_before_they_fall_and_come_back_green() {
+    fn over_a_year_leaves_turn_before_they_fall_snow_lies_on_bare_trees_and_leaves_come_back_green() {
         assert_eq!(FloraSeason::of_year(0.3), FloraSeason::SUMMER);
-        assert_eq!(FloraSeason::of_year(0.95), FloraSeason::WINTER);
+        assert_eq!(FloraSeason::of_year(0.95), FloraSeason::SNOW);
         assert_eq!(FloraSeason::of_year(1.3), FloraSeason::of_year(0.3), "the year wraps");
         assert_eq!(FloraSeason::of_year(-0.05), FloraSeason::of_year(0.95), "the year wraps");
         let steps = 2000;
         let mut last = FloraSeason::of_year(0.0);
+        let mut snowed = false;
         for i in 1..=steps {
             let now = FloraSeason::of_year(i as f32 / steps as f32);
             // The colour only goes back to green while the trees are bare, so no turned leaf
@@ -726,12 +742,21 @@ mod tests {
             }
             if now.leaf_fall < last.leaf_fall {
                 assert_eq!(now.autumn, 0.0, "leaves came back turned at step {i}");
+                assert_eq!(now.snow, 0.0, "leaves came back under snow at step {i}");
             }
             if now.leaf_fall > 0.0 && now.leaf_fall > last.leaf_fall {
                 assert!(now.autumn >= 0.75, "leaves fell green at step {i}: {now:?}");
             }
+            // Snow lies only on trees that have (nearly) shed their leaves, and comes and goes
+            // smoothly, with the year's wrap in the snowless spring.
+            if now.snow > 0.0 {
+                assert!(now.leaf_fall >= 0.9, "snow on a tree in leaf at step {i}: {now:?}");
+                snowed = true;
+            }
+            assert!((now.snow - last.snow).abs() < 0.05, "snow jumped at step {i}");
             last = now;
         }
+        assert!(snowed, "a year without snow");
     }
 
     #[test]
@@ -748,13 +773,14 @@ mod tests {
             turbulence: -1.0,
             gust: None,
         };
-        let [wind, motion, rate, front, front_shape, season] = wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0 });
+        let [wind, motion, rate, front, front_shape, season] =
+            wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0, snow: 3.0 });
         // Direction normalised, a negative speed stopped, strength not capped, the rest clamped.
         assert_eq!(wind, Vec4::new(0.0, -1.0, 7.0, 0.0));
         assert_eq!(motion, Vec4::new(3.0, 2.0, 1.0, 0.0));
         assert_eq!(rate, Vec4::new(0.5, 4.0, 0.0, 0.0));
         assert_eq!((front, front_shape), (Vec4::ZERO, Vec4::ZERO));
-        assert_eq!(season, Vec4::new(1.0, 0.0, 0.0, 0.0), "the season is clamped to 0..1");
+        assert_eq!(season, Vec4::new(1.0, 0.0, 1.0, 0.0), "the season is clamped to 0..1");
         let calm = FloraSeason::default();
         assert_ne!(wind_vectors(&FloraWind { strength: 0.0, ..gale }, &calm), wind_vectors(&gale, &calm));
     }

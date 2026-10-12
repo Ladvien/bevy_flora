@@ -57,7 +57,7 @@ struct FloraUniform {
 //   2: gust frequency, flutter frequency, 0, 0
 //   3: gust front origin x, origin z, direction x, direction z
 //   4: gust front speed, width, strength, start time
-//   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, 0, 0
+//   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, snow, 0
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
 
 // A leaf's own moment in the season, 0..1, from its phase (`sway.w`, one per leaf): it turns
@@ -83,6 +83,55 @@ fn leaf_autumn_tint(sway: vec4<f32>) -> vec3<f32> {
     let moment = leaf_season_moment(sway) * 0.8;
     let turn = smoothstep(moment, moment + 0.2, flora_wind[5].x) * flora.autumn.w;
     return mix(vec3<f32>(1.0), flora.autumn.rgb, turn);
+}
+
+// Fresh snow's colour: bright and a little blue.
+const SNOW_ALBEDO: vec3<f32> = vec3<f32>(0.80, 0.83, 0.88);
+
+// The dusting of snow a sky-facing leaf or needle holds whichever way it faces, as a share of the
+// full cover: a cold hint on a snowy conifer's green undersides. Tiny, because the mix is in
+// linear light: on a spruce branch seen from below a share of 0.08 already lifts its mean colour
+// from sRGB (39, 62, 50) to (67, 80, 70) and 0.2 to (89, 96, 87), a grey-olive that reads as
+// paint, not snow. The snow itself lies on the sides that face up.
+const LEAF_FROST: f32 = 0.03;
+
+// How much snow lies on a surface whose world normal is `n` (unit): none until
+// `FloraSeason::snow` rises, first on what faces straight up and, with more snow, on steeper
+// faces too (all of it from `n.y` 0.45 at full snow). Not the normal the detail maps perturbed:
+// the cover would break up into the bark's crevices and the leaf scans' veins.
+fn snow_cover(n: vec3<f32>) -> f32 {
+    let snow = flora_wind[5].z;
+    let edge = 0.85 - 0.6 * snow;
+    return snow * smoothstep(edge, edge + 0.2, n.y);
+}
+
+// How much of the falling snow reaches a leaf that sees `sky` of the sky (its baked crown
+// visibility): none deep in the crown, all of it on the outside. Snow on an inner card is lit only
+// by what little light gets in, and a white surface there renders charcoal, not white.
+fn snow_shelter(sky: f32) -> f32 {
+    return smoothstep(0.35, 0.85, sky);
+}
+
+// Lay this season's snow on a surface: `n` is the normal snow sees (the geometric normal for wood,
+// `facing_normal` for a leaf card), `shelter` how much of the falling snow reaches it (a leaf's
+// share of the sky; 1 for wood), `frost` the share of the snow that lies on it whichever way it
+// faces (needles and leaves hold a dusting; wood 0). Its colour turns to snow's and it goes matte.
+// Returns how much lies there, for what must fade under it (the light through a leaf). Without
+// snow the surface is exactly as it was.
+fn snow_on(p: ptr<function, PbrInput>, n: vec3<f32>, shelter: f32, frost: f32) -> f32 {
+    let cover = max(snow_cover(n), frost * flora_wind[5].z) * shelter;
+    let base = (*p).material.base_color;
+    (*p).material.base_color = vec4<f32>(mix(base.rgb, SNOW_ALBEDO, cover), base.a);
+    (*p).material.perceptual_roughness = mix((*p).material.perceptual_roughness, 0.9, cover);
+    return cover;
+}
+
+// The world normal of the flat face being drawn, on the side the camera sees. Snow on a leaf card
+// follows the card, not its crown-bent shading normal (which would whiten the top of the crown and
+// nothing below it): a tier seen from above is white, seen from below green.
+fn facing_normal(world_position: vec3<f32>, V: vec3<f32>) -> vec3<f32> {
+    let n = normalize(cross(dpdx(world_position), dpdy(world_position)));
+    return select(-n, n, dot(n, V) >= 0.0);
 }
 
 fn smooth_curve(x: vec4<f32>) -> vec4<f32> {

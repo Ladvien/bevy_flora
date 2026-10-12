@@ -6,7 +6,7 @@
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
-//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>]
+//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -98,7 +98,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>]"
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]"
     );
     std::process::exit(2);
 }
@@ -210,8 +210,12 @@ fn parse_args() -> Args {
             "--colliders" => args.colliders = true,
             "--season" => {
                 let v = floats(&it.next().unwrap_or_else(|| usage()));
-                let [autumn, leaf_fall] = v[..] else { usage() };
-                args.season = FloraSeason { autumn, leaf_fall };
+                let (autumn, leaf_fall, snow) = match v[..] {
+                    [autumn, leaf_fall] => (autumn, leaf_fall, 0.0),
+                    [autumn, leaf_fall, snow] => (autumn, leaf_fall, snow),
+                    _ => usage(),
+                };
+                args.season = FloraSeason { autumn, leaf_fall, snow };
             }
             _ => usage(),
         }
