@@ -4,15 +4,16 @@
 //! Controls: right-drag orbit, wheel zoom, `[`/`]` previous/next preset,
 //! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
 //! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`),
-//! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back, `H` hit the tree (`TreeShakes`).
+//! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back, `H` hit the tree (`TreeShakes`),
+//! `F` fell it (`FellTree`; the next key brings a new tree).
 
 use std::f32::consts::PI;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy_flora::{
-    FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset, TreeShake,
-    TreeShakes, TreeShape,
+    FellTree, Felled, FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated,
+    TreePreset, TreeShake, TreeShakes, TreeShape,
 };
 
 #[derive(Resource)]
@@ -115,11 +116,31 @@ fn handle_keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut showcase: ResMut<Showcase>,
     mut commands: Commands,
-    tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge, Option<&Growing>, Has<GpuGrowth>, Has<TreeShape>)>,
+    tree: Single<(
+        Entity,
+        &mut ProceduralTree,
+        &mut TreeAge,
+        Option<&Growing>,
+        Has<GpuGrowth>,
+        Has<TreeShape>,
+        Option<&Felled>,
+    )>,
+    camera: Single<&Transform, With<Camera3d>>,
     mut shakes: ResMut<TreeShakes>,
     time: Res<Time>,
 ) {
-    let (entity, mut tree, mut age, growing, gpu, shaped) = tree.into_inner();
+    let (entity, mut tree, mut age, growing, gpu, shaped, felled) = tree.into_inner();
+    if let Some(felled) = felled {
+        // A felled tree is left as it lies; the next key brings a new one, standing.
+        if keys.get_just_pressed().next().is_some() {
+            commands.entity(felled.stump).despawn();
+            commands.entity(entity).despawn();
+            let mut params = showcase.preset().params();
+            params.seed = showcase.seed;
+            commands.spawn((ProceduralTree(params), TreeAge(f32::INFINITY)));
+        }
+        return;
+    }
     let count = TreePreset::ALL.len();
 
     let mut preset_changed = false;
@@ -178,6 +199,11 @@ fn handle_keys(
         // An axe on the trunk: the tree (at the origin) swings, its neighbours would not.
         let hit = TreeShake { at: Vec2::ZERO, radius: 1.0, strength: 2.0, direction: Vec2::X, ..default() };
         shakes.shake(hit, &time);
+    }
+    if keys.just_pressed(KeyCode::KeyF) {
+        // Across the view, to the right, so the fall shows in profile.
+        let right = camera.right();
+        commands.entity(entity).insert(FellTree { direction: Vec2::new(right.x, right.z), ..default() });
     }
 }
 
@@ -246,7 +272,7 @@ fn update_hud(
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
          Space: toggle growing   R: restart   M: mature   G: rebuild\n\
          U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape\n\
-         Y: run the year (or stop it)   H: hit the tree",
+         Y: run the year (or stop it)   H: hit the tree   F: fell it (any key: a new one)",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),

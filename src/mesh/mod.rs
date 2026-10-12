@@ -1,6 +1,7 @@
 //! CPU-side mesh buffers and the meshers that fill them.
 
 pub mod branch;
+pub mod cut;
 pub mod rings;
 pub mod smoothing;
 pub mod trunk;

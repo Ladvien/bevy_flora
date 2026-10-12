@@ -7,6 +7,7 @@
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]
+//!     [--fell <deg>]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -30,6 +31,9 @@
 //! changes, and a switch of level of detail shows as a jump in the picture. Without it the field
 //! of view stays `--fov` and the tree shrinks as it would in a game.
 //!
+//! `--fell <deg>` cuts the tree half a metre up (`FellTree`) and lets it fall toward that bearing
+//! (degrees from +x toward +z), fast; the photographs are taken once it lies still.
+//!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
 
@@ -45,9 +49,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge,
-    TreePool,
-    TreePreset, TreeShape, build_pool, build_tree,
+    FellTree, Felled, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree,
+    RenderStyle, TreeAge, TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -90,6 +93,8 @@ struct Args {
     colliders: bool,
     /// How far deciduous trees have turned and shed their leaves.
     season: FloraSeason,
+    /// Fell the tree toward this bearing (degrees from +x toward +z) and photograph it lying.
+    fell: Option<f32>,
 }
 
 fn usage() -> ! {
@@ -98,7 +103,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]"
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]] [--fell <deg>]"
     );
     std::process::exit(2);
 }
@@ -132,6 +137,7 @@ fn parse_args() -> Args {
         msaa: true,
         colliders: false,
         season: FloraSeason::SUMMER,
+        fell: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -217,6 +223,7 @@ fn parse_args() -> Args {
                 };
                 args.season = FloraSeason { autumn, leaf_fall, snow };
             }
+            "--fell" => args.fell = Some(value(&mut it)),
             _ => usage(),
         }
     }
@@ -387,13 +394,24 @@ fn setup(
             if shoot.args.colliders {
                 commands.entity(tree).insert(TreeShape::default());
             }
+            fell(&mut commands, tree, shoot.args.fell);
         }
         Mode::Tree => {
             let tree = commands.spawn((ProceduralTree(params), TreeAge(shoot.args.age), Transform::default())).id();
             if shoot.args.colliders {
                 commands.entity(tree).insert(TreeShape::default());
             }
+            fell(&mut commands, tree, shoot.args.fell);
         }
+    }
+}
+
+/// With `--fell`: cut the tree and let it fall toward the bearing (degrees from +x toward +z),
+/// fast; the photographs wait until it lies still.
+fn fell(commands: &mut Commands, tree: Entity, bearing: Option<f32>) {
+    if let Some(degrees) = bearing {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        commands.entity(tree).insert(FellTree { direction: Vec2::new(cos, sin), speed: 4.0, ..default() });
     }
 }
 
@@ -419,6 +437,8 @@ fn drive(
     screenshots: Query<(), With<Screenshot>>,
     pools: Res<Assets<TreePool>>,
     trees: Query<(), Unfinished>,
+    felling: Query<&Felled>,
+    cutting: Query<(), With<FellTree>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if !shoot.ready {
@@ -429,7 +449,7 @@ fn drive(
             shoot.wait -= 1;
             return;
         }
-        if !baked || !trees.is_empty() {
+        if !baked || !trees.is_empty() || !felling.iter().all(|felled| felled.at_rest) || !cutting.is_empty() {
             return;
         }
         shoot.ready = true;

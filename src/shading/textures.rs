@@ -92,6 +92,7 @@ pub struct FloraTextures {
     bark: HashMap<BarkScan, Option<BarkTexture>>,
     leaves: HashMap<LeafScan, Option<LeafTexture>>,
     venation: Option<Handle<Image>>,
+    end_grain: Option<Handle<Image>>,
 }
 
 impl FloraTextures {
@@ -146,6 +147,13 @@ impl TextureLibrary<'_> {
         let leaf_shaped = !matches!(foliage.style, LeafStyle::NeedleCluster | LeafStyle::ClusterSphere);
         let venation = (leaf_shaped && foliage.shading.veins > 0.0).then(|| self.textures.venation(images));
         Surface::leaves(params, None, venation)
+    }
+
+    /// The end-grain picture a cut face wears (a felled tree and its stump): made on the first
+    /// call and shared. `None` without image assets (a headless app).
+    pub(crate) fn end_grain(&mut self) -> Option<Handle<Image>> {
+        let images = self.images.as_deref_mut()?;
+        Some(self.textures.end_grain.get_or_insert_with(|| images.add(crate::felling::end_grain_image())).clone())
     }
 }
 

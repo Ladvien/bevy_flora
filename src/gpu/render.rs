@@ -11,6 +11,7 @@ use super::material::{GrowthMaterial, growth_material};
 use super::mesh::build_growth_data;
 use super::state::GrowthState;
 use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
+use crate::felling::Felled;
 use crate::params::TreeParams;
 use crate::plugin::{
     Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, build_in_batches,
@@ -68,7 +69,7 @@ pub(crate) fn sync_growth_mode(
     support: Res<GpuGrowthSupport>,
     added: Query<(), Added<GpuGrowth>>,
     mut removed: RemovedComponents<GpuGrowth>,
-    trees: Query<(Entity, &TreeRender, Has<GpuGrowth>)>,
+    trees: Query<(Entity, &TreeRender, Has<GpuGrowth>), Without<Felled>>,
 ) {
     let removed_any = removed.read().count() > 0;
     if !(support.is_changed() || removed_any || !added.is_empty()) {
@@ -140,7 +141,7 @@ pub(crate) fn rebuild_gpu_trees(
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
-        Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>,
+        (Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>, Without<Felled>),
     >,
 ) {
     // Trees that only aged are updated here; the others are built on all cores below.

@@ -63,7 +63,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.4 ms a frame (1080p, Apple M4 Pro).
+//! 7.5 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -156,6 +156,20 @@
 //! }
 //! ```
 //!
+//! Insert [`FellTree`] on a tree and it is cut: a [`TreeStump`] stays, and the tree falls about
+//! the hinge of the cut, lands on its limbs ([`TreeLanded`]) and lies still ([`Felled`]). Pooled
+//! and GPU-grown trees can be felled too; the [`felling`] module has the details.
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::FellTree;
+//!
+//! // Fell the tree toward +x.
+//! fn fell(mut commands: Commands, tree: Entity) {
+//!     commands.entity(tree).insert(FellTree { direction: Vec2::X, ..default() });
+//! }
+//! ```
+//!
 //! # Trees from assets and files
 //!
 //! [`TreeParams`] is an asset: a [`ProceduralTreeAsset`] draws a tree from a handle and follows
@@ -183,6 +197,7 @@
 //! ```
 
 pub mod crown;
+pub mod felling;
 pub mod foliage;
 mod gpu;
 pub mod growth;
@@ -204,6 +219,7 @@ pub mod tree_asset;
 pub mod venation;
 
 pub use crown::CrownShape;
+pub use felling::{FellTree, Felled, TreeLanded, TreeStump};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use growth::GrowthParams;
@@ -233,14 +249,13 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 /// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
 /// growth components, trees from assets, the presets and parameters, the wind, the season, the
-/// shakes, the gameplay shape and the forest scatter.
+/// shakes, felling, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront,
-        LeafScan,
-        LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint,
-        TreeAge, TreeGenerated, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape,
-        WindResponse, WoodCapsule, build_pool,
+        BarkParams, BarkScan, FellTree, Felled, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth,
+        Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset,
+        RenderStyle, Scatter, ScatterPoint, TreeAge, TreeGenerated, TreeLanded, TreeMature, TreeParams, TreePool,
+        TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,
     };
 }
 

@@ -5,6 +5,59 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.17.0] - 2026-10-12
+
+Felling. Any tree can be cut down: it leaves a stump, falls about the hinge of the cut, lands on
+its limbs and lies there. Nothing is drawn differently until a tree is felled. `TreePool` gains a
+public field, which breaks building one with a struct literal, hence the minor bump.
+
+### Added
+
+- **`FellTree { direction, cut_height, speed }`** (in the prelude): insert it on a tree and the
+  plugin cuts its wood at `cut_height` (0.5 m by default). The wood below stays as a
+  **`TreeStump`** entity; the tree keeps its entity and the wood above, tips over toward
+  `direction` about the front edge of the cut (a felled trunk's hinge, so it never cuts into its
+  stump), slowly at first and faster as a rod of its height would, and comes to rest where its
+  trunk or a big limb meets the ground, after a small bounce. Twigs and leaves on the near side
+  sink into the ground, as a crushed crown does; a conifer's whorls do not prop it up.
+- **`TreeLanded { tree, stump, at }`**, a message sent the frame a felled tree hits the ground,
+  with the point it hit (for sound, dust or a camera shake). The landing shakes the crowns it
+  falls through and rustles its own leaves through `TreeShakes`.
+- **`Felled { stump, angle, at_rest }`** on a falling or fallen tree. Once it lands it no longer
+  sways in the wind (its leaves still flutter); it is not rebuilt when its `ProceduralTree` or
+  `TreeAge` changes, and stays until you despawn it.
+- Cut faces on both sides: the cut is closed with faces that show end grain (a pale sapwood
+  band, rings, the pith and a few radial checks), a procedural image built once and shared.
+  Branch stubs inside the trunk add no face.
+- Pooled and GPU-grown trees fell too: a `PooledTree` becomes the `ProceduralTree` of its variant
+  (the same tree as the pool's finest level) and a `GpuGrowth` or `Growing` tree is moved to the
+  CPU path before the cut. `TreePool::tree_params(variant)` gives a variant's parameters.
+- `inspect --fell <bearing>` (photographs wait until the tree lies still), `capture_growth --fell`
+  (`docs/fell.gif`: an oak felled among four other trees, from a still camera), and `F` in
+  `showcase` (fell the tree; the next key brings a new one).
+- README: a "Felling" section with the clip and an example of an axe that fells a tree away from
+  the player and listens for the landing.
+
+### Changed
+
+- **`TreePool` has a public `age` field**, the age its variants were built at (`build_pool`
+  fills it), so a pooled tree can be felled as the tree it shows. Code that builds a `TreePool`
+  with a struct literal must set it.
+
+### Measured
+
+- **Look.** The 399 gallery scenarios render as the 0.16.0 binary's do (mean difference 0.000 of
+  255), on the CPU and `--gpu` paths; the growth, grove, seasons and shake clips are frame for
+  frame those of 0.16.0. Felled trees were looked at lying still (oak, spruce, birch, redwood,
+  willow, shrub), close up at the stump and the log's end, as a pooled birch, and frame by frame
+  in the clip (the cut, the landing, a per-frame difference series); the unit tests fell every
+  preset at three seeds and check that each lands once and lies still, and that seven presets
+  of every shape rest on their trunk and limbs, neither sinking into the ground nor floating.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, 1080p, interleaved with the
+  0.16.0 binary, three runs each): 100 000 pooled oaks 7.5 ms a frame against 7.4 (+1%), 1 000
+  `ProceduralTree` oaks 24.2 ms on both; CPU time per frame unchanged. With nothing being
+  felled, the two felling systems match no entity.
+
 ## [0.16.0] - 2026-10-12
 
 Undergrowth. A new preset, `TreePreset::Shrub`, and a recipe for planting it under the trees.
@@ -1177,6 +1230,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.17.0]: https://github.com/Ladvien/bevy_flora/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Ladvien/bevy_flora/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Ladvien/bevy_flora/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Ladvien/bevy_flora/compare/v0.13.0...v0.14.0

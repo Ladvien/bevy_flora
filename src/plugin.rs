@@ -46,6 +46,7 @@ use crate::shading::{
     expire_shakes, flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
+use crate::felling::{Felled, drive_felling, start_felling};
 use crate::tree_asset::sync_tree_assets;
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
@@ -134,7 +135,7 @@ pub(crate) enum Paint {
 
 impl Paint {
     /// This paint's handles, for a tree rebuilt on the CPU; `None` for one grown on the GPU.
-    fn cloned_cpu(&self) -> Option<Paint> {
+    pub(crate) fn cloned_cpu(&self) -> Option<Paint> {
         match self {
             Paint::Standard { trunk, foliage } => Some(Paint::Standard {
                 trunk: trunk.clone(),
@@ -196,6 +197,8 @@ impl bevy::app::Plugin for FloraPlugin {
                     rebuild_trees.run_if(flora_decided),
                     rebuild_gpu_trees,
                     update_tree_shapes,
+                    start_felling,
+                    drive_felling,
                 )
                     .chain(),
             )
@@ -216,6 +219,7 @@ impl bevy::app::Plugin for FloraPlugin {
         crate::impostor::build(app);
         crate::pool::build(app);
         crate::tree_asset::build(app);
+        crate::felling::build(app);
     }
 
     fn finish(&self, app: &mut bevy::app::App) {
@@ -251,7 +255,7 @@ pub(crate) fn leaf_material(base_color: bevy::color::Color) -> StandardMaterial 
 /// [`TreeMature`] for each that reaches its mature age this frame.
 pub fn grow_trees(
     time: Res<Time>,
-    mut trees: Query<(Entity, &mut TreeAge, &Growing, &TreeRender)>,
+    mut trees: Query<(Entity, &mut TreeAge, &Growing, &TreeRender), Without<Felled>>,
     mut mature: MessageWriter<TreeMature>,
 ) {
     let dt = time.delta_secs();
@@ -305,7 +309,7 @@ pub fn rebuild_trees(
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
-        Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>,
+        (Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>, Without<Felled>),
     >,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
@@ -487,7 +491,7 @@ pub(crate) fn build_in_batches<J: Send, R: Send + 'static>(
 }
 
 /// Give a wood or leaf child the material `paint` holds for it.
-fn paint_child(child: &mut EntityCommands, paint: &Paint, leaf: bool) {
+pub(crate) fn paint_child(child: &mut EntityCommands, paint: &Paint, leaf: bool) {
     match (paint, leaf) {
         (Paint::Standard { trunk, .. }, false) => child.insert(MeshMaterial3d(trunk.clone())),
         (Paint::Standard { foliage, .. }, true) => child.insert(MeshMaterial3d(foliage.clone())),
