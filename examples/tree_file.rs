@@ -1,17 +1,17 @@
 //! A tree from a `.tree.ron` file that rebuilds the moment the file is saved.
 //!
 //! ```text
-//! cargo run --release --example tree_file --features ron [-- --tree trees/maple.tree.ron]
+//! cargo run --release --example tree_file --features ron,file_watcher [-- --tree trees/maple.tree.ron]
 //! cargo run --release --example tree_file --features ron -- --export oak > examples/assets/trees/oak.tree.ron
 //! cargo run --release --example tree_file --features ron -- --screenshot tree.png
 //! ```
 //!
 //! The tree is a `ProceduralTreeAsset` loaded from `examples/assets/<--tree>` (default
-//! `trees/maple.tree.ron`) with Bevy's file watcher on: edit the file while the example runs and
-//! the tree rebuilds when you save. A file that does not parse keeps the last good tree, and the
-//! error (line, column, and for a misspelt field the fields that exist) shows on screen and in
-//! the log. `--export <preset>` prints a preset as a tree file to start from; `--screenshot
-//! <path>` renders offscreen, saves the tree once it is drawn, and exits.
+//! `trees/maple.tree.ron`). With the `file_watcher` feature (Bevy's), edit the file while the
+//! example runs and the tree rebuilds when you save. A file that does not parse keeps the last
+//! good tree, and the error (line, column, and for a misspelt field the fields that exist) shows
+//! on screen and in the log. `--export <preset>` prints a preset as a tree file to start from;
+//! `--screenshot <path>` renders offscreen, saves the tree once it is drawn, and exits.
 
 use std::path::PathBuf;
 
@@ -70,8 +70,9 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(AssetPlugin {
                 file_path: ASSETS.to_string(),
-                // Reload a file when it is saved (needs Bevy's `file_watcher` feature).
-                watch_for_changes_override: Some(true),
+                // Reload a file when it is saved: Bevy's `file_watcher`, this crate's feature
+                // of the same name.
+                watch_for_changes_override: Some(cfg!(feature = "file_watcher")),
                 ..default()
             }),
             FloraPlugin,
@@ -160,11 +161,12 @@ fn update_hud(example: Res<Example>, assets: Res<AssetServer>, mut hud: Query<&m
         Some(LoadState::Failed(error)) => format!("not loaded: {error}"),
         Some(_) | None => "loading".to_string(),
     };
-    text.0 = format!(
-        "{ASSETS}/{}: {state}\nEdit the file and save it: the tree rebuilds. \
-         A file with an error keeps the last good tree.",
-        example.path
-    );
+    let how = if cfg!(feature = "file_watcher") {
+        "Edit the file and save it: the tree rebuilds. A file with an error keeps the last good tree."
+    } else {
+        "Run with `--features ron,file_watcher` and the tree rebuilds when the file is saved."
+    };
+    text.0 = format!("{ASSETS}/{}: {state}\n{how}", example.path);
 }
 
 /// `--screenshot`: once the tree has been drawn (or the file failed to load) for a few frames,

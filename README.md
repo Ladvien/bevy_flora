@@ -4,7 +4,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/bevy_flora.svg)](https://crates.io/crates/bevy_flora) [![docs.rs](https://img.shields.io/docsrs/bevy_flora)](https://docs.rs/bevy_flora) [![CI](https://github.com/Ladvien/bevy_flora/actions/workflows/ci.yml/badge.svg)](https://github.com/Ladvien/bevy_flora/actions/workflows/ci.yml) [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Ladvien/bevy_flora/blob/main/LICENSE-MIT)
 
-**Parametric, stylized procedural trees for Bevy that grow over time.** Pick one of 15 presets or tune every parameter, spawn a component, and watch a seedling grow into a mature tree. The same seed always gives the same tree.
+**Parametric, stylized procedural trees for Bevy that grow over time.** Pick one of 16 presets (15 trees and a shrub) or tune every parameter, spawn a component, and watch a seedling grow into a mature tree. The same seed always gives the same tree.
 
 ![A maple growing from a bare trunk into a full crown while the camera circles it](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/growth.gif)
 
@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.15 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.16 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.15"
+bevy_flora = "0.16"
 ```
 
 | feature | default | what it does |
@@ -36,6 +36,7 @@ bevy_flora = "0.15"
 | `textures` | yes | The bundled CC0 bark and leaf scans (about 3.6 MB of JPEG compiled into the crate). Without it every scan is absent: wood is plain colour and leaves keep their procedural outline |
 | `serde` | — | `Serialize` / `Deserialize` on every parameter type and on `Scatter`, so trees and forests can be authored in RON or JSON. A tree's fields may be left out (they keep their defaults); an unknown field is an error |
 | `ron` | — | `serde`, plus the `.tree.ron` asset loader and `TreeParams::to_ron` / `from_ron` (see [Trees from files](#trees-from-files-proceduraltreeasset-and-treeron)) |
+| `file_watcher` | — | Bevy's `file_watcher`: assets, `.tree.ron` trees included, reload when their files are saved. An app without an `assets` folder then logs a warning at startup |
 
 The library depends on `bevy` with default features off (`std`, `bevy_asset`, `bevy_color`, `bevy_log`, `bevy_mesh`, `bevy_pbr`, and `jpeg` to decode the bundled textures), so it adds no windowing or audio to a build.
 
@@ -74,7 +75,7 @@ The plugin keeps two child entities on each tree (wood and leaves) and rebuilds 
 
 ### Trees from files: `ProceduralTreeAsset` and `.tree.ron`
 
-`TreeParams` is an asset. Spawn `ProceduralTreeAsset(handle)` in place of `ProceduralTree(params)` and the plugin gives the entity its `ProceduralTree` once the asset has loaded, and replaces it whenever the asset changes, so every tree that shares the handle follows an edit, made in code (`Assets<TreeParams>::get_mut`), in an inspector (the asset is registered for reflection) or in a file. With the `ron` feature the plugin loads `.tree.ron` files, and with Bevy's `file_watcher` feature (`AssetPlugin { watch_for_changes_override: Some(true), .. }`) saving one rebuilds its trees while the game runs, a few tenths of a second after the save: tune a tree without recompiling. `TreeParams::to_ron` writes any tree as a file to start from (`cargo run --example tree_file --features ron -- --export oak`). A file may leave fields out, which keep their defaults; a misspelt field is an error that gives the line and the fields that exist; and a file that fails to load keeps the last good tree.
+`TreeParams` is an asset. Spawn `ProceduralTreeAsset(handle)` in place of `ProceduralTree(params)` and the plugin gives the entity its `ProceduralTree` once the asset has loaded, and replaces it whenever the asset changes, so every tree that shares the handle follows an edit, made in code (`Assets<TreeParams>::get_mut`), in an inspector (the asset is registered for reflection) or in a file. With the `ron` feature the plugin loads `.tree.ron` files, and with Bevy's `file_watcher` (this crate's `file_watcher` feature turns it on) saving one rebuilds its trees while the game runs, a few tenths of a second after the save: tune a tree without recompiling. `TreeParams::to_ron` writes any tree as a file to start from (`cargo run --example tree_file --features ron -- --export oak`). A file may leave fields out, which keep their defaults; a misspelt field is an error that gives the line and the fields that exist; and a file that fails to load keeps the last good tree.
 
 ```rust,no_run
 use bevy::prelude::*;
@@ -98,7 +99,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 
 ![The maple preset as exported to a tree file, and the same file with three values changed: a fuller, lighter crown](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/tree_file.jpg)
 
-*`cargo run --release --example tree_file --features ron`: left, `examples/assets/trees/maple.tree.ron` as exported; right, the same file with the branch density raised from 3 to 7, the leaf density from 4.5 to 7 and the leaf colour lightened.*
+*`cargo run --release --example tree_file --features ron` (add `file_watcher` to rebuild on save): left, `examples/assets/trees/maple.tree.ron` as exported; right, the same file with the branch density raised from 3 to 7, the leaf density from 4.5 to 7 and the leaf colour lightened.*
 
 Pools are built from a value (`build_pool(assets.get(&handle).unwrap(), ..)`), so a pool does not follow later edits to the asset.
 
@@ -210,6 +211,28 @@ fn plant_forest(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut po
 ![A scattered forest in autumn seen from above one edge: groves of scarlet maples, russet oaks, pale birches and green pines with bending borders, around a round clearing](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/scatter.jpg)
 
 *`cargo run --release --example forest -- --trees 3000 --spacing 7 --scatter oak:3,birch:2,maple:2,pine:1 --grove 60 --clearing 25 --season 1,0 --eye 0,45,-200 --at 0,0,-20 --wind 0 --deterministic --screenshot scatter.png`*
+
+Undergrowth is a second, closer scatter that keeps clear of the trunks, drawn from the `Shrub` preset (a mound of arching stems about 1.4 m high and 1.9 m across: 5 900 wood and 17 600 leaf triangles up close, 2 100 in all at its coarsest level):
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::prelude::*;
+
+// Shrubs at least 2.5 m apart and 1.5 m from every trunk. For a big forest, look the trunks up in a
+// grid instead of all of them (the `forest` example does).
+fn plant_undergrowth(commands: &mut Commands, trees: &[ScatterPoint], area: Rect, shrubs: &Handle<TreePool>) {
+    let layer = Scatter { seed: 2, ..Scatter::new(area, 2.5) };
+    for shrub in layer.points_where(|at| if trees.iter().any(|t| t.position.distance(at) < 1.5) { 0.0 } else { 1.0 }) {
+        commands.spawn((PooledTree { pool: shrubs.clone(), variant: shrub.variant }, shrub.transform(0.0)));
+    }
+}
+```
+
+![Eye level in a birch grove with oaks beyond: shrubs stand between the trunks in thickets and gaps](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/undergrowth.jpg)
+
+*`cargo run --release --example forest -- --trees 1500 --spacing 7 --scatter oak:3,birch:2,maple:2 --grove 30 --clearing 14 --undergrowth shrub:2.5 --eye -14,1.8,-30 --at 6,1,0 --fov 55 --sun 20,25,-30 --wind 0 --deterministic --screenshot undergrowth.png`: the example's undergrowth also thins out in patches about 30 m across.*
+
+A shrub stands about a tenth as tall as a tree, so its pool can hand over to coarser levels much nearer: build it with half the default distances, `LodSettings { distances: LodDistances { lod1: 15.0, lod2: 40.0, impostor: 100.0 }, ..default() }`, as the example does. In the forest above (1 372 trees and 4 863 shrubs, `--offscreen --deterministic`, the default camera), the trees alone take 2.7 ms a frame; with the shrubs at the trees' distances 7.9 ms, at half of them 3.3 ms (Apple M4 Pro).
 
 ### Leaf shading and wind
 
@@ -432,7 +455,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 
 ## Features
 
-- **15 presets**: oak, pine, willow, birch, palm, cypress, bonsai, maple, spruce, poplar, baobab, dragon tree, Japanese maple, dead tree and redwood. Each is a plain `TreeParams` value you can edit.
+- **16 presets**: oak, pine, willow, birch, palm, cypress, bonsai, maple, spruce, poplar, baobab, dragon tree, Japanese maple, dead tree, redwood, and a shrub for undergrowth. Each is a plain `TreeParams` value you can edit.
 - **Growth over time.** Every branch has a birth age and a growth duration, derived from where it sits on the tree. A tree can be shown at any age, branches thicken after they lengthen, and leaves grow to full size without re-rolling or disappearing as the tree ages.
 - **Deterministic.** Each branch draws randomness from its own seeded stream, so the same `seed` gives the same tree on every run, and aging never re-rolls branches or leaves that already exist.
 - **Branch shape**: crown envelopes, phyllotaxis, apical dominance, Y-splits, recursive sub-branches, twist, and a gravity bend that sub-branches and leaves follow. Floor avoidance keeps even strongly drooping wood above the ground.
@@ -447,19 +470,19 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Trees that react.** `TreeShakes` swings the trees near a hit, a passing character or a blast and rustles their leaves, on every way a tree is drawn, for one small buffer write and nothing per tree while nothing shakes.
 - **Trees from files.** `TreeParams` is an asset: `ProceduralTreeAsset` draws a tree from a handle, and every tree sharing it follows edits; with the `ron` feature trees load from `.tree.ron` files and rebuild when the file is saved.
 - **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.4 ms a frame, leaf shading, wind and seasons included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 24 ms a frame), but each keeps its own meshes, so use a pool beyond that.
-- **Planting forests.** `Scatter` says where the trees stand: trunks at least a spacing apart and otherwise irregular (Poisson disc), species in groves with bending borders, each tree its own yaw, size and variant, and a density per spot for roads and clearings; deterministic per seed.
+- **Planting forests.** `Scatter` says where the trees stand: trunks at least a spacing apart and otherwise irregular (Poisson disc), species in groves with bending borders, each tree its own yaw, size and variant, and a density per spot for roads and clearings; deterministic per seed. A second scatter of the `Shrub` preset, kept clear of the trunks, makes the undergrowth.
 
 ## Examples
 
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU, `C` draws the gameplay shape, `Y` runs the year (`FloraSeason::of_year`, 40 s a year), `H` hits the tree (`TreeShakes`). |
-| `gallery` | Renders 382 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, four deciduous presets and the pine turning, turned, half bare, bare and under snow) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
+| `gallery` | Renders 399 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, four deciduous presets and the pine turning, turned, half bare, bare and under snow) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
 | `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>[,<snow>]`, which `forest` takes too). The clock is fixed, so runs repeat. |
 | `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, or with `--shake` the grove knocked by `TreeShakes` (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
-| `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--shake-animate` knocks the trees every few frames (every shake slot busy), `--season <autumn>,<leaf fall>[,<snow>]` sets the season; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
-| `tree_file` | (`--features ron`) A tree from `examples/assets/trees/maple.tree.ron` (`--tree <path>` for another file) that rebuilds when the file is saved; a load error shows on screen and the last good tree stays. `--export <preset>` prints a preset as a tree file, `--screenshot <path>` saves the tree and exits. |
+| `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`; `--undergrowth shrub:2.5` adds a patchy layer of shrubs 2.5 m apart and clear of the trunks), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--shake-animate` knocks the trees every few frames (every shake slot busy), `--season <autumn>,<leaf fall>[,<snow>]` sets the season; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
+| `tree_file` | (`--features ron`) A tree from `examples/assets/trees/maple.tree.ron` (`--tree <path>` for another file); with `file_watcher` too it rebuilds when the file is saved, and a load error shows on screen while the last good tree stays. `--export <preset>` prints a preset as a tree file, `--screenshot <path>` saves the tree and exits. |
 
 ```sh
 cargo run --release --example showcase

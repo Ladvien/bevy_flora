@@ -5,6 +5,50 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.16.0] - 2026-10-12
+
+Undergrowth. A new preset, `TreePreset::Shrub`, and a recipe for planting it under the trees.
+Every other preset draws what 0.15.0 drew. `TreePreset` gains a variant, which breaks an
+exhaustive `match` on it, hence the minor bump.
+
+### Added
+
+- **`TreePreset::Shrub`**: a low, dense, rounded bush, a dozen stems from a stub of a trunk that
+  lean out and arch down, each with a few side shoots, in poplar leaves down to near the ground:
+  about 1.4 m high and 1.9 m across. 5 900 wood and 17 600 leaf triangles at level 0, 5 200 at
+  level 1 and 2 100 at level 2. It grows, turns orange-red in autumn and sheds its leaves, takes
+  snow, and draws in the painterly and toon looks, on `GpuGrowth`, in pools and as an impostor
+  like every preset.
+- `forest --undergrowth <preset>[:<spacing>]`: a second `Scatter` of that species, 2.5 m apart
+  by default and at least 1.5 m from every trunk, thinned in patches about 30 m across, its pool
+  switching levels of detail at half the trees' distances.
+- README: undergrowth under "Planting a forest", with the recipe (a second scatter that keeps
+  clear of the trunks, the shrub pool's nearer levels of detail) and `docs/undergrowth.jpg`.
+
+### Changed
+
+- `TreePreset::ALL` has 16 presets; the gallery renders 399 scenarios (the shrub in all 17 of a
+  preset's).
+- **Bevy's `file_watcher` is this crate's `file_watcher` feature**, off by default, instead of
+  being on for every example through the `bevy` dev-dependency (0.15.0): with it every example
+  without an `assets` folder logged two warnings at startup. `tree_file` rebuilds on save with
+  `--features ron,file_watcher`, and says so on screen without it.
+
+### Measured
+
+- **Look.** The 382 scenarios of 0.15.0 render as they did (mean difference 0.000 of 255); the
+  17 shrub scenarios raise no `stats.tsv` flag; CPU against `--gpu` at a mean of means 0.078,
+  the worst the young shrub at 2.1 (young `AllBranches` leaves keep their mature places on the
+  GPU, as documented). The shrub was looked at from eye height at 3 and 6 m, through every level
+  of detail into the impostor, through the year, in both looks, and in woods from the ground and
+  from 14 m up; it was designed by editing `.tree.ron` files with the `tree_file` example.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, 1080p, the default camera, two
+  runs each, within 0.3 ms): 1 372 trees of three species 2.7 ms a frame; with 4 863 shrubs under
+  them 7.9 ms when the shrub pool uses the trees' distances, 3.3 ms at half of them. With the
+  wall clock instead, the half-distance forest ran at 3.4 ms in some runs and 6.6 ms in others,
+  switching part way through a 900-frame run with the same scene and wind or no wind; the
+  trees-only and trees'-distance runs did not. The fixed clock gave 3.3 ms in all six runs.
+
 ## [0.15.0] - 2026-10-12
 
 Trees from files. `TreeParams` is an asset, a tree can be drawn from a handle to one, and with
@@ -1133,6 +1177,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.16.0]: https://github.com/Ladvien/bevy_flora/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Ladvien/bevy_flora/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Ladvien/bevy_flora/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Ladvien/bevy_flora/compare/v0.12.0...v0.13.0

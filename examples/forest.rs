@@ -9,12 +9,15 @@
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
+//!     [--undergrowth <preset>[:<spacing>]]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
 //! `--scatter oak:3,birch:1,...`, where `Scatter` puts them: trunks at least `--spacing` apart,
 //! the species in groves `--grove` metres wide (0 mixes them tree by tree), one pool per species,
-//! about `--trees` of them, around a clearing `--clearing` metres wide. A
+//! about `--trees` of them, around a clearing `--clearing` metres wide. `--undergrowth
+//! shrub:2.5` adds a second `Scatter` of that species, 2.5 m apart (the default) and at least
+//! 1.5 m from every trunk, under the trees (it counts on top of `--trees`). A
 //! fixed camera 30 m above one corner looks across the grid toward its centre,
 //! so near, mid and far trees are all on screen. The window is 1920x1080 with
 //! vsync off and one shadow-casting directional light.
@@ -84,6 +87,9 @@ const WINDOW: UVec2 = UVec2::new(1920, 1080);
 const VARIANTS: u32 = 8;
 /// Height of the camera above the ground, in metres.
 const CAMERA_HEIGHT: f32 = 30.0;
+/// The undergrowth's pool switches levels of detail at this share of the trees' distances
+/// (15, 40 and 100 m by default): a shrub stands about a tenth as tall as a tree.
+const UNDERGROWTH_LOD_SCALE: f32 = 0.5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -164,6 +170,8 @@ struct Args {
     grove: f32,
     /// Radius of a clearing at the centre, with `--scatter`.
     clearing: f32,
+    /// A second `Scatter`, of this species this far apart, clear of the trunks.
+    undergrowth: Option<(TreePreset, f32)>,
 }
 
 impl Args {
@@ -181,7 +189,8 @@ fn usage() -> ! {
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
-         [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]"
+         [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
+         [--undergrowth <preset>[:<spacing>]]"
     );
     std::process::exit(2);
 }
@@ -214,6 +223,7 @@ fn parse_args() -> Args {
         scatter: None,
         grove: 50.0,
         clearing: 0.0,
+        undergrowth: None,
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -312,6 +322,12 @@ fn parse_args() -> Args {
             }
             "--grove" => args.grove = value(&mut it),
             "--clearing" => args.clearing = value(&mut it),
+            "--undergrowth" => {
+                let item = it.next().unwrap_or_else(|| usage());
+                let (name, spacing) = item.split_once(':').unwrap_or((&item, "2.5"));
+                let preset = TreePreset::ALL.into_iter().find(|p| p.name() == name).unwrap_or_else(|| usage());
+                args.undergrowth = Some((preset, spacing.parse::<f32>().unwrap_or_else(|_| usage())));
+            }
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -517,13 +533,15 @@ fn setup(
         camera.insert(RenderTarget::Image(bench.target.clone().into()));
     }
 
-    // One species, or one per `--scatter` entry: a pool each in pool mode.
+    // One species, or one per `--scatter` entry, then the undergrowth's: a pool each in pool mode.
     let bases: Vec<TreeParams> = bench
         .args
         .scatter
         .as_ref()
         .map_or_else(|| vec![bench.args.preset], |species| species.iter().map(|&(preset, _)| preset).collect())
         .into_iter()
+        // The undergrowth is the last species.
+        .chain(bench.args.undergrowth.map(|(preset, _)| preset))
         .map(|preset| {
             let mut base = preset.params();
             base.seed = 1;
@@ -544,9 +562,25 @@ fn setup(
             lod.distances.impostor = f32::INFINITY;
         }
         let started = Instant::now();
+        let undergrowth = bench.args.undergrowth.map(|_| bases.len() - 1);
         let built: Vec<_> = bases
             .iter()
-            .map(|base| pools.add(build_pool(base, VARIANTS, f32::INFINITY, &lod, &mut meshes)))
+            .enumerate()
+            .map(|(i, base)| {
+                // A shrub is a tenth of a tree's height, so its coarser levels can take over
+                // much nearer.
+                let lod = if Some(i) == undergrowth {
+                    let d = lod.distances;
+                    let near = UNDERGROWTH_LOD_SCALE;
+                    LodSettings {
+                        distances: LodDistances { lod1: d.lod1 * near, lod2: d.lod2 * near, impostor: d.impostor * near },
+                        ..lod
+                    }
+                } else {
+                    lod
+                };
+                pools.add(build_pool(base, VARIANTS, f32::INFINITY, &lod, &mut meshes))
+            })
             .collect();
         eprintln!(
             "forest: built {} pool(s) of {VARIANTS} variants in {:.2} s",
@@ -586,8 +620,46 @@ fn setup(
 }
 
 /// Where the trees stand (transform, species, variant) and the side of the square they cover:
-/// a jittered grid, or with `--scatter` a `Scatter` sized to hold about `--trees` trees.
+/// a jittered grid, or with `--scatter` a `Scatter` sized to hold about `--trees` trees, plus
+/// with `--undergrowth` a second `Scatter` of the undergrowth species (the last pool) that keeps
+/// clear of the trunks.
 fn placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
+    let (mut trees, extent) = tree_placements(args);
+    let Some((_, spacing)) = args.undergrowth else { return (trees, extent) };
+    // Trunks by 2 m cell, so a shrub looks at the nine cells around it only.
+    const CELL: f32 = 2.0;
+    const TRUNK_CLEARANCE: f32 = 1.5;
+    let cell = |p: Vec2| ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32);
+    let mut trunks: std::collections::HashMap<(i32, i32), Vec<Vec2>> = Default::default();
+    for (transform, ..) in &trees {
+        let at = transform.translation.xz();
+        trunks.entry(cell(at)).or_default().push(at);
+    }
+    let near_a_trunk = |at: Vec2| {
+        let (cx, cz) = cell(at);
+        (cx - 1..=cx + 1).any(|x| {
+            (cz - 1..=cz + 1).any(|z| {
+                trunks.get(&(x, z)).is_some_and(|ps| ps.iter().any(|p| p.distance(at) < TRUNK_CLEARANCE))
+            })
+        })
+    };
+    let species = args.scatter.as_ref().map_or(1, Vec::len);
+    let half = extent * 0.5;
+    let clearing = args.clearing * 0.75;
+    // Thickets and gaps some 30 m across rather than an even carpet: two crossed waves.
+    let patches = |at: Vec2| {
+        let wave = (at.x * 0.19 + (at.y * 0.13).sin() * 2.0).sin() * (at.y * 0.17 + (at.x * 0.11).cos() * 2.0).cos();
+        let t = ((wave + 0.6) / 1.2).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let shrubs = Scatter { seed: 2, ..Scatter::new(Rect::new(-half, -half, half, half), spacing) }
+        .points_where(|at| if at.length() < clearing || near_a_trunk(at) { 0.0 } else { patches(at) });
+    trees.extend(shrubs.into_iter().map(|shrub| (shrub.transform(0.0), species, shrub.variant % VARIANTS)));
+    (trees, extent)
+}
+
+/// The trees alone: see [`placements`].
+fn tree_placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
     let spacing = args.spacing;
     let Some(species) = &args.scatter else {
         let (side, extent) = grid(args.trees, spacing);
