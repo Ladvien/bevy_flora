@@ -3,13 +3,13 @@
 //!
 //! Controls: right-drag orbit, wheel zoom, `[`/`]` previous/next preset,
 //! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
-//! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU.
+//! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`).
 
 use std::f32::consts::PI;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy_flora::{FloraPlugin, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset};
+use bevy_flora::{FloraPlugin, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset, TreeShape};
 
 #[derive(Resource)]
 struct Showcase {
@@ -50,7 +50,7 @@ fn main() {
         })
         .insert_resource(Showcase { preset: 0, seed: 42 })
         .add_systems(Startup, setup)
-        .add_systems(Update, (handle_keys, frame_tree, orbit_camera, update_hud).chain())
+        .add_systems(Update, (handle_keys, frame_tree, orbit_camera, update_hud, draw_shape).chain())
         .run();
 }
 
@@ -105,9 +105,9 @@ fn handle_keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut showcase: ResMut<Showcase>,
     mut commands: Commands,
-    tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge, Option<&Growing>, Has<GpuGrowth>)>,
+    tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge, Option<&Growing>, Has<GpuGrowth>, Has<TreeShape>)>,
 ) {
-    let (entity, mut tree, mut age, growing, gpu) = tree.into_inner();
+    let (entity, mut tree, mut age, growing, gpu, shaped) = tree.into_inner();
     let count = TreePreset::ALL.len();
 
     let mut preset_changed = false;
@@ -152,6 +152,13 @@ fn handle_keys(
             commands.entity(entity).insert(GpuGrowth);
         }
     }
+    if keys.just_pressed(KeyCode::KeyC) {
+        if shaped {
+            commands.entity(entity).remove::<TreeShape>();
+        } else {
+            commands.entity(entity).insert(TreeShape::default());
+        }
+    }
 }
 
 /// Re-frame the camera when the tree height changes noticeably.
@@ -182,23 +189,27 @@ fn orbit_camera(
     *transform = camera_transform(&cam);
 }
 
+#[allow(clippy::type_complexity)]
 fn update_hud(
     showcase: Res<Showcase>,
-    tree: Single<(&ProceduralTree, &TreeAge, Option<&Growing>, Has<GpuGrowth>)>,
+    tree: Single<(&ProceduralTree, &TreeAge, Option<&Growing>, Has<GpuGrowth>, Option<&TreeShape>)>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
-    let (tree, age, growing, gpu) = tree.into_inner();
+    let (tree, age, growing, gpu, shape) = tree.into_inner();
     let maturity = tree.0.growth.maturity_age;
     let age_text = if age.0.is_finite() {
         format!("{:.1}", age.0)
     } else {
         "mature".to_string()
     };
+    let shape_text = shape.map_or("off".to_string(), |shape| {
+        format!("{} capsules, {:.1} m tall", shape.capsules().count(), shape.height())
+    });
     hud.0 = format!(
-        "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\ngrowth: {}\n\n\
+        "preset: {} ({}/{})\nseed: {}\nage: {age_text} / {maturity}\ngrowing: {}\ngrowth: {}\ncolliders: {shape_text}\n\n\
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
          Space: toggle growing   R: restart   M: mature   G: rebuild\n\
-         U: grow in the vertex shader or rebuild on the CPU",
+         U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),
@@ -206,4 +217,20 @@ fn update_hud(
         if growing.is_some() { "on" } else { "off" },
         if gpu { "vertex shader (GpuGrowth)" } else { "CPU rebuild" },
     );
+}
+
+/// The tree's `TreeShape`, when shown: capsules orange, the crown's box cyan.
+fn draw_shape(mut gizmos: Gizmos, shapes: Query<(&GlobalTransform, &TreeShape)>) {
+    for (transform, shape) in &shapes {
+        let (_, rotation, translation) = transform.to_scale_rotation_translation();
+        let tree = Isometry3d::new(translation, rotation);
+        for capsule in shape.capsules() {
+            let (primitive, local) = capsule.to_primitive();
+            gizmos.primitive_3d(&primitive, tree * local, Color::srgb(1.0, 0.45, 0.05));
+        }
+        if let Some((center, half)) = shape.crown {
+            let cuboid = Cuboid { half_size: half };
+            gizmos.primitive_3d(&cuboid, tree * Isometry3d::from_translation(center), Color::srgb(0.1, 0.9, 1.0));
+        }
+    }
 }

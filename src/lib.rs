@@ -116,6 +116,14 @@
 //! light of every directional light into three bands, with an ink rim toward the silhouette. The
 //! pools, the impostors and `GpuGrowth` draw them all.
 //!
+//! # Gameplay shapes
+//!
+//! A [`TreeShape`] on a tree (opt-in: insert `TreeShape::default()`) is kept up to date by the
+//! plugin: capsules up the trunk and along every limb thicker than its `limb_radius`, and a box
+//! around the crown, in the tree's local space, for colliders, picking or line of sight.
+//! [`TreeMature`] is sent once when a [`Growing`] tree reaches maturity. The [`prelude`] has the
+//! types a game usually needs.
+//!
 //! # Building meshes without Bevy's ECS
 //!
 //! ```rust
@@ -141,6 +149,7 @@ pub mod presets;
 pub mod rng;
 pub mod shading;
 pub mod skeleton;
+pub mod shape;
 mod textures;
 pub mod venation;
 
@@ -156,7 +165,7 @@ pub use params::{
     LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
 };
 pub use pipeline::{TreeMeshes, build_tree};
-pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeRender};
+pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeMature, TreeRender};
 pub use pool::{PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
@@ -164,7 +173,18 @@ pub use shading::{
     FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWind, FloraWindBuffer, GustFront,
     SharedFlora,
 };
+pub use shape::{TreeShape, WoodCapsule};
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
+
+/// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
+/// growth components, the presets and parameters, the wind and the gameplay shape.
+pub mod prelude {
+    pub use crate::{
+        BarkParams, BarkScan, FloraPlugin, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafScan,
+        LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeGenerated, TreeMature,
+        TreeParams, TreePool, TreePreset, TreeShape, WindResponse, WoodCapsule, build_pool,
+    };
+}
 
 // Compile the README's Rust examples as doctests.
 #[cfg(doctest)]

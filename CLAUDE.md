@@ -28,6 +28,7 @@ cargo run --release --example forest -- --offscreen [--mode pool|naive|gpu|gpu-l
 - `src/skeleton.rs`, `growth.rs`: node tree and age model
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems
+- `src/shape.rs`: `TreeShape`, the gameplay capsules and crown box (opt-in component kept up to date by the plugin)
 - `src/venation.rs`: leaf veins by space colonisation (pure CPU), rasterised into the image `FloraTextures` shares
 - `src/shading/` (`FloraWind`, `FloraMaterial`, leaf look and wind in `common.wesl`/`vertex.wesl`/`prepass.wesl`/`fragment.wesl`; `share.rs`: `SharedFlora`, materials shared by trees with equal looks; `textures.rs`: `FloraTextures`, the bark images and their mean colours)
 - `src/gpu/` (`GpuGrowth`: growth in the vertex shader, `growth*.wesl`)
@@ -41,5 +42,5 @@ cargo run --release --example forest -- --offscreen [--mode pool|naive|gpu|gpu-l
 ## Conventions
 
 - Prefer `TreeParams` fields over magic numbers.
-- Core modules depend only on `bevy::math` and `bevy::color`; only `mesh/mod.rs`, `plugin.rs`, `shading/`, `gpu/`, `pool.rs` and `impostor/` touch render/ECS types (`lod.rs` is pure CPU).
+- Core modules depend only on `bevy::math` and `bevy::color`; only `mesh/mod.rs`, `plugin.rs`, `shading/`, `gpu/`, `pool.rs` and `impostor/` touch render/ECS types (`lod.rs` is pure CPU; `shape.rs` is pure CPU but derives `Component` on `TreeShape`).
 - Docs: https://docs.rs/bevy/0.20.0, https://bevy.org/news/bevy-0-20/
