@@ -7,7 +7,10 @@
 //!   baked into the leaf mesh by [`foliage_mesh`](crate::foliage::foliage_mesh)), and light
 //!   that comes through a leaf lit from behind: the wrapped back-side `N·L` of Unreal's
 //!   two-sided foliage model times a forward-scattering GGX lobe and the leaf colour, so the
-//!   crown glows yellow-green toward the sun and stays dark where other leaves shade it.
+//!   crown glows yellow-green toward the sun and stays dark where other leaves shade it. A
+//!   leaf's gloss fades as the camera turns to face the sun: a flat card stands for a leaf or a
+//!   cluster of needles, whose many surfaces would scatter the sun's glint, and reflecting all
+//!   of it at once turned treetops white.
 //! - **Wind** ([`FloraWind`]) bends a tree as a whole, more toward its top, and flutters each
 //!   leaf (Crysis' vegetation animation, GPU Gems 3 chapter 16). A species answers it in its
 //!   own way ([`WindResponse`](crate::WindResponse)), and a [`GustFront`] sweeps a band of

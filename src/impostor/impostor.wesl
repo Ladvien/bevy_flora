@@ -15,7 +15,7 @@ import bevy_pbr::render::{
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing, calculate_view},
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 };
-import package::shading::common::{flora, wind_bend, oct_decode, transmitted_light};
+import package::shading::common::{flora, wind_bend, oct_decode, transmitted_light, leaf_gloss_toward_light};
 
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -118,6 +118,8 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     p.N = N;
     p.is_orthographic = view.clip_from_view[3].w == 1.0;
     p.V = calculate_view(in.world_position, p.is_orthographic);
+    // Leaves (baked translucency 1; wood 0) lose their gloss facing the sun as the meshes' do.
+    p.material.reflectance = p.material.reflectance * mix(1.0, leaf_gloss_toward_light(p.V), saturate(baked.a));
     p.flags = MESH_FLAGS_SHADOW_RECEIVER_BIT;
     // What the crown's own leaves keep from the sky and the sun.
     p.diffuse_occlusion = vec3<f32>(baked.b);

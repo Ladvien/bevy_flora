@@ -5,6 +5,39 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.6.2] - 2026-10-11
+
+Trees keep their colour against the sun. Nothing changes where the sun is beside or behind the
+camera: those views are byte-identical to 0.6.1 (318 of the 319 gallery scenarios, the other
+one differs by at most 2 levels of 255 in any pixel; all 80 `gallery --gpu` renders of the
+`mature_*` and `age_*` scenarios; every front-lit forest view). No API change.
+
+### Fixed
+
+- **Treetops turned white when the camera faced the sun.** A leaf card is flat, and seen against
+  the sun its glossy upper side mirrored the sun straight into the camera; the pine's and the
+  spruce's upper whorls, the maple's and oak's crown tops and the birch's apex read as snow,
+  frost or blossom, at every level of detail and on the impostors. A card stands for a leaf or a
+  cluster of needles whose many small surfaces would scatter that glint, so a leaf's specular
+  reflectance now fades as the camera turns toward a directional light (all of it kept until
+  the view and the light are 114 degrees apart, none left from 143 degrees), and the crown glows
+  green through its leaves instead, as the leaf shader already lets it. The impostor does the
+  same for its leaf texels; wood keeps its gloss. Measured on an Apple M4 Pro with the
+  `inspect` example, near-white pixels on a tree photographed against the sun (bearing 135):
+
+  | preset | level 0 | level 1 | level 2 | impostor |
+  |---|---|---|---|---|
+  | pine | 262 -> 0 | 278 -> 0 | 407 -> 0 | grey top -> green |
+  | spruce | 369 -> 0 | 406 -> 0 | 592 -> 0 | grey top -> green |
+  | maple | 95 -> 0 | 126 -> 0 | 49 -> 0 | grey top -> green |
+  | oak | 129 -> 0 | 240 -> 0 | 32 -> 0 | grey top -> green |
+
+  An orbit from 30 to 240 degrees in 3-degree steps changes as smoothly from frame to frame as
+  before (the largest step against its neighbours 1.68 in both versions), with no white pixel at
+  any bearing (37 on the oak and 164 on the pine at 129 degrees before). The cost is one loop
+  over the directional lights per leaf pixel: 100 000 pooled oaks take the same time
+  (7.23-7.25 ms against 7.21-7.30 ms), 1 000 individual oaks 0.2-0.4 ms more (22.1-22.3 ms).
+
 ## [0.6.1] - 2026-10-11
 
 Far trees read like the trees they stand for. Up close nothing changes: all 319 gallery scenarios
@@ -558,6 +591,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.6.2]: https://github.com/Ladvien/bevy_flora/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/Ladvien/bevy_flora/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Ladvien/bevy_flora/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Ladvien/bevy_flora/compare/v0.4.1...v0.5.0
