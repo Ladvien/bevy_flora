@@ -19,7 +19,9 @@
 //! every tree and melts, and the leaves come out again, while the pine and the cypress stay green.
 //! `--shake` records it fully grown from a still camera, knocked with `TreeShakes`
 //! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on a birch, then a blast that
-//! swings every tree.
+//! swings every tree. `--fell` records a few grown trees from a still camera while the oak in
+//! front is felled (`FellTree`), crashes to the ground and leaves its stump (`docs/fell.gif`,
+//! encoded like the grove).
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -43,8 +45,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams,
-    TreePreset, TreeShake, TreeShakes, build_tree,
+    FellTree, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge,
+    TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -56,6 +58,19 @@ const TOTAL_FRAMES: u32 = 192;
 /// against 1.4, so a harder knock), one on a birch, then a blast that swings every tree.
 const SHAKES: [(u32, Option<usize>, f32, f32, f32); 3] =
     [(12, Some(0), 1.0, 3.0, 3.0), (64, Some(2), 1.0, 2.5, 2.5), (112, None, 30.0, 3.0, 3.5)];
+/// The fell clip's trees: species, seed and place (in the grove's spacing), the oak in front
+/// with open ground on both sides of it, the others behind.
+const FELL_GROVE: [(TreePreset, i32, [f32; 2]); 5] = [
+    (TreePreset::Oak, 42, [0.0, 0.0]),
+    (TreePreset::Maple, 5, [-1.6, -0.6]),
+    (TreePreset::Pine, 1, [-1.9, 0.8]),
+    (TreePreset::Birch, 8, [0.3, -1.4]),
+    (TreePreset::Cypress, 2, [-2.3, 1.9]),
+];
+/// The fell clip's cut: (frame, the tree in `FELL_GROVE`, bearing it falls toward in degrees
+/// from +x toward +z). The camera looks from +x, so the oak falls to the left across open
+/// ground, square to the view.
+const FELLS: [(u32, usize, f32); 1] = [(24, 0, 90.0)];
 /// Frames rendered before the first capture so meshes and shadows exist.
 const WARMUP_FRAMES: u32 = 10;
 /// Frames between setting an age and capturing it (mesh upload, shadows).
@@ -105,6 +120,8 @@ enum Scene {
     Seasons,
     /// The grove, fully grown, in a light wind, knocked: one tree, another, then all of it.
     Shake,
+    /// A few grown trees in a light wind; the oak in front is felled and crashes to the ground.
+    Fell,
 }
 
 /// A tree of the grove: species, seed, where it stands (in units of the grove's spacing, x and
@@ -169,8 +186,12 @@ struct Capture {
     gusted: bool,
     /// Where the trees stand, in spawn order (the grove's order).
     trees: Vec<Vec3>,
+    /// The grove's trees in its order; `None` for one the clip leaves out.
+    entities: Vec<Option<Entity>>,
     /// How many of `SHAKES` have been sent.
     shaken: usize,
+    /// How many of `FELLS` have been cut.
+    felled: usize,
 }
 
 #[derive(Component)]
@@ -178,7 +199,7 @@ struct OrbitCam;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake] [--gpu]"
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell] [--gpu]"
     );
     std::process::exit(2);
 }
@@ -186,7 +207,7 @@ fn usage() -> ! {
 fn main() {
     let mut out = None;
     let mut preset = None;
-    // The grove clips: "grove", "seasons" or "shake"; none is the single growing tree.
+    // The grove clips: "grove", "seasons", "shake" or "fell"; none is the single growing tree.
     let mut clip: Option<&'static str> = None;
     let mut gpu = false;
     let mut style = RenderStyle::Natural;
@@ -195,14 +216,15 @@ fn main() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
-            "--grove" | "--seasons" | "--shake" => {
+            "--grove" | "--seasons" | "--shake" | "--fell" => {
                 if clip.is_some() {
                     usage();
                 }
                 clip = Some(match arg.as_str() {
                     "--grove" => "grove",
                     "--seasons" => "seasons",
-                    _ => "shake",
+                    "--shake" => "shake",
+                    _ => "fell",
                 });
             }
             "--preset" => {
@@ -234,7 +256,8 @@ fn main() {
     let scene = match clip {
         Some("grove") => Scene::Grove,
         Some("seasons") => Scene::Seasons,
-        Some(_) => Scene::Shake,
+        Some("shake") => Scene::Shake,
+        Some(_) => Scene::Fell,
         None => {
             let mut params = preset.unwrap_or(TreePreset::Maple).params();
             params.style = style;
@@ -263,9 +286,9 @@ fn main() {
             brightness: 300.0,
             ..default()
         })
-        // A light wind in the shake clip, so the knocks are what moves the trees.
+        // A light wind in the shake and fell clips, so the knocks and the falls are what moves.
         .insert_resource(FloraWind {
-            strength: if matches!(scene, Scene::Shake) { 0.15 } else { 0.5 },
+            strength: if matches!(scene, Scene::Shake | Scene::Fell) { 0.15 } else { 0.5 },
             direction: wind,
             speed: 1.4,
             ..default()
@@ -286,7 +309,9 @@ fn main() {
             in_flight: false,
             gusted: false,
             trees: Vec::new(),
+            entities: Vec::new(),
             shaken: 0,
+            felled: 0,
         })
         .insert_resource(UseGpu(gpu))
         .add_systems(Startup, setup)
@@ -331,31 +356,61 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
             (fit * 0.9 + half_width * 0.35, focus)
         }
+        // Seen from +x: the standing trees and the ground the felled ones will lie on.
+        Scene::Fell => {
+            let placed = fell_grove();
+            let (mut min, mut max) = placed
+                .iter()
+                .map(|(params, at, ..)| bounds(params, *at))
+                .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+            for &(_, tree, bearing) in &FELLS {
+                let (params, at, ..) = &placed[tree];
+                let (sin, cos) = bearing.to_radians().sin_cos();
+                let (lo, hi) = bounds(params, Vec3::ZERO);
+                let crown = 0.5 * (hi.x - lo.x).max(hi.z - lo.z);
+                let lying = *at + Vec3::new(cos, 0.0, sin) * (hi.y + 0.5 * crown);
+                (min, max) = (min.min(lying), max.max(lying));
+            }
+            let half_width = 0.55 * (max.z - min.z);
+            let focus = Vec3::new(0.5 * (min.x + max.x), 0.42 * max.y, 0.5 * (min.z + max.z));
+            let half_height = (max.y - focus.y).max(focus.y);
+            let aspect = size.x as f32 / size.y as f32;
+            let half_h_fov = ((FOV * 0.5).tan() * aspect).atan();
+            let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
+            (fit * 0.9 + 0.25 * (max.x - min.x), focus)
+        }
     }
 }
 
 /// The grove's trees (parameters, position, start frame, growth frames), centred on `centre`,
 /// spaced by the mean crown width of the species.
 fn grove(centre: Vec3) -> Vec<(TreeParams, Vec3, u32, u32)> {
-    let params: Vec<TreeParams> = GROVE
+    let spacing = grove_spacing();
+    GROVE
         .iter()
-        .map(|&(preset, seed, ..)| {
-            let mut params = preset.params();
-            params.seed = seed;
-            params
+        .map(|&(preset, seed, [x, z], start, frames)| {
+            (TreeParams { seed, ..preset.params() }, centre + Vec3::new(x, 0.0, z) * spacing, start, frames)
         })
-        .collect();
+        .collect()
+}
+
+/// Half the mean crown width of the grove's species: the grid its positions are given in.
+fn grove_spacing() -> f32 {
     let width = |p: &TreeParams| {
         let (min, max) = bounds(p, Vec3::ZERO);
         Vec2::new(max.x - min.x, max.z - min.z).length()
     };
-    let spacing = 0.5 * params.iter().map(width).sum::<f32>() / params.len() as f32;
-    params
-        .into_iter()
-        .zip(GROVE)
-        .map(|(params, (_, _, [x, z], start, frames))| {
-            (params, centre + Vec3::new(x, 0.0, z) * spacing, start, frames)
-        })
+    let widths: Vec<f32> =
+        GROVE.iter().map(|&(preset, seed, ..)| width(&TreeParams { seed, ..preset.params() })).collect();
+    0.5 * widths.iter().sum::<f32>() / widths.len() as f32
+}
+
+/// The fell clip's trees, mature, on the grove's spacing.
+fn fell_grove() -> Vec<(TreeParams, Vec3, u32, u32)> {
+    let spacing = grove_spacing();
+    FELL_GROVE
+        .iter()
+        .map(|&(preset, seed, [x, z])| (TreeParams { seed, ..preset.params() }, Vec3::new(x, 0.0, z) * spacing, 0, 1))
         .collect()
 }
 
@@ -407,6 +462,7 @@ fn setup(
         Scene::Seasons | Scene::Shake => {
             (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect())
         }
+        Scene::Fell => (1.0, fell_grove()),
     };
     capture.trees = trees.iter().map(|&(_, at, ..)| at).collect();
     for (params, at, start, frames) in trees {
@@ -419,6 +475,7 @@ fn setup(
                 Transform::from_translation(at),
             ))
             .id();
+        capture.entities.push(Some(tree));
         if gpu.0 {
             commands.entity(tree).insert(GpuGrowth);
         }
@@ -426,7 +483,7 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),
-        orbit(&capture, if matches!(capture.scene, Scene::Shake) { 0.5 } else { 0.0 }),
+        camera_at(&capture, 0),
         OrbitCam,
     ));
 }
@@ -439,6 +496,21 @@ fn orbit(capture: &Capture, t: f32) -> Transform {
     let pitch = 12f32.to_radians();
     let dir = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
     Transform::from_translation(capture.focus + dir * capture.distance).looking_at(capture.focus, Vec3::Y)
+}
+
+/// The camera at `frame`: still for the shake and fell clips, so the trees are what moves,
+/// orbiting for the others.
+fn camera_at(capture: &Capture, frame: u32) -> Transform {
+    match capture.scene {
+        Scene::Shake => orbit(capture, 0.5),
+        // From +x, square to both falls; the sun stands behind the camera's left shoulder.
+        Scene::Fell => {
+            let pitch = 14f32.to_radians();
+            let dir = Vec3::new(pitch.cos(), pitch.sin(), 0.0);
+            Transform::from_translation(capture.focus + dir * capture.distance).looking_at(capture.focus, Vec3::Y)
+        }
+        _ => orbit(capture, frame as f32 / (TOTAL_FRAMES - 1) as f32),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -481,9 +553,7 @@ fn drive(
             age.0 = next;
         }
     }
-    // The shake clip holds the camera still, so the trees' swing is the only motion.
-    let t = if matches!(capture.scene, Scene::Shake) { 0.5 } else { frame as f32 / (TOTAL_FRAMES - 1) as f32 };
-    **camera = orbit(&capture, t);
+    **camera = camera_at(&capture, frame);
     if matches!(capture.scene, Scene::Seasons) {
         // From late summer through autumn, leaf fall and the snow into the next summer.
         let t = frame as f32 / (TOTAL_FRAMES - 1) as f32;
@@ -508,6 +578,17 @@ fn drive(
             None => (capture.focus.xz(), Vec2::ZERO),
         };
         shakes.shake(TreeShake { at, radius, strength, direction, duration, ..default() }, &time);
+    }
+    // The fell clip's cuts, each once, at its frame.
+    while let Some(&(at_frame, tree, bearing)) = FELLS.get(capture.felled) {
+        if !matches!(capture.scene, Scene::Fell) || frame < at_frame {
+            break;
+        }
+        capture.felled += 1;
+        let (sin, cos) = bearing.to_radians().sin_cos();
+        if let Some(entity) = capture.entities[tree] {
+            commands.entity(entity).insert(FellTree { direction: Vec2::new(cos, sin), ..default() });
+        }
     }
     if matches!(capture.scene, Scene::Grove) && frame >= GUST_FRAME && !capture.gusted {
         capture.gusted = true;

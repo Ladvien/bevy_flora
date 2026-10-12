@@ -758,6 +758,7 @@ mod tests {
     }
 
     /// Per leaf, the number of vertices its cards have, of a mesh built with `foliage`.
+    #[cfg(feature = "textures")]
     fn vertices_per_leaf(points: &[LeafPoint], foliage: &FoliageParams) -> Vec<usize> {
         let mut firsts = Vec::new();
         let mesh = foliage_mesh_with(points, foliage, RenderStyle::Natural, Some(&mut firsts));

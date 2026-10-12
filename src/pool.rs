@@ -82,6 +82,8 @@ const FADE: f32 = 2.0;
 pub struct TreePool {
     /// What the variants were built from; variant `k` has the seed `params.seed + k`.
     pub params: TreeParams,
+    /// The age the variants were built at (`f32::INFINITY` for mature trees).
+    pub age: f32,
     /// How the levels of detail were made and where they switch.
     pub lod: LodSettings,
     /// Shared by the wood and the leaves of every variant at every level. Made by the plugin
@@ -148,7 +150,7 @@ pub struct PoolVariant {
 ///
 /// The children are drawn by distance (see [`LodDistances`]). The impostor casts
 /// no shadow; the three levels of detail do. (In the `forest` example, 100 000
-/// trees with a shadow-casting sun cost 7.4 ms a frame on an Apple M4 Pro, leaf shading and
+/// trees with a shadow-casting sun cost 7.5 ms a frame on an Apple M4 Pro, leaf shading and
 /// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
 /// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
 #[derive(Component, Clone, Debug)]
@@ -240,9 +242,20 @@ pub fn build_pool(
         .collect();
     TreePool {
         params: params.clone(),
+        age,
         lod: *lod,
         materials: None,
         variants,
+    }
+}
+
+impl TreePool {
+    /// The parameters of variant `variant` (taken modulo the number of variants, as a
+    /// [`PooledTree`] does): a `ProceduralTree` with them, at [`age`](Self::age), is the tree
+    /// the pool draws at level 0.
+    pub fn tree_params(&self, variant: u32) -> TreeParams {
+        let k = variant % self.variants.len() as u32;
+        TreeParams { seed: self.params.seed.wrapping_add(k as i32), ..self.params.clone() }
     }
 }
 
