@@ -5,6 +5,87 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.7.0] - 2026-10-11
+
+Bark. Trunks and branches wear bundled CC0 bark scans that follow the wood's growth: smooth young
+wood that turns fissured as it thickens, with the scan laid out in metres on the mature tree so a
+growing tree's bark never slides. A textured surface averages the preset colour, so far trees,
+impostors and the README clips keep their colour, and a pooled forest costs what it did. The API
+changes (new fields and parameters, below), hence the minor bump.
+
+### Added
+
+- **`BarkScan`** (14 scans: `Oak`, `Pine`, `Willow`, `Birch`, `Palm`, `Cedar`, `Zelkova`, `Maple`,
+  `KnottedPine`, `Sakura`, `PalmTree`, `Hackberry`, `Brown`, `Metasequoia`; `tile_size()` is the
+  real size of a scan's tile) and **`BarkParams`** (`scan`, `smooth_below`, `fissured_above`, radii
+  in metres: wood thinner than `smooth_below` shows the scan's average colour and no relief, wood
+  thicker than `fissured_above` the whole scan, a smoothstep in between), as
+  **`TreeParams::bark`**. Every preset picks the scan of its species; birch (0.10 / 0.40), palm
+  (0 / 0.05) and baobab (0.20 / 0.80) set their own radii, the rest 0.03 / 0.15. `BarkParams`'
+  default is no scan, so a `TreeParams` of your own stays plain colour until you set one.
+- **The `textures` feature (on by default)** compiles the scans in: 14 colour and normal maps,
+  512 px wide, 3.2 MB of JPEG, from Poly Haven and ambientCG, all CC0 1.0 (sources and authors in
+  `src/textures/CREDITS.md`, produced by `tools/prepare_textures.py`, which is not part of the
+  package). Without it every scan is absent and wood is plain colour as in 0.6. The crate now
+  asks `bevy` for its `jpeg` feature.
+- `FloraTextures` (a resource that decodes each scan on first use, builds the mipmaps on the CPU
+  and keeps the handles), `BarkTexture` (a scan's images and mean colour; `base_color` divides the
+  mean out of a preset colour) and `BarkLibrary` (the system parameter `rebuild_trees` and the
+  pool systems take). A scan that fails to decode logs one `warn!` naming the file and its trees
+  are plain colour.
+- `FloraExtension` and `GrowthExtension` gain `detail_color` and `detail_normal` (bindings 103,
+  104 and a sampler at 105); `FloraKey` gains `detail`; `FloraUniform` gains `bark` (the two radii)
+  and `bark_mean`. `SharedFlora` shares one material per bark scan and colour.
+
+### Changed
+
+- **Wood UVs are metric and anchored to the mature tree.** UV0 is in tiles of the scan: `v` is the
+  distance along the fully grown wood over the tile's length, `u` runs a whole number of tiles
+  around (at least one, so the seam is invisible). Every vertex keeps its texture coordinate at
+  every age, and the aged mesh the CPU path builds agrees with the mature mesh `GpuGrowth` shrinks
+  (a new test compares them, vertex by vertex, over every preset, age and piece). Wood meshes also
+  carry a second UV set: `uv1.x` is the vertex's own radius in metres (the shaders fade the bark in
+  with it; `GpuGrowth` computes it from the growth state in the vertex shader, so the bark fades in
+  as the wood thickens), `uv1.y` is 1. Collars carry on the tube's bark across the junction.
+- The normal map is applied in the fragment shader with a cotangent frame from screen-space
+  derivatives (the meshes have no tangents). The relief fades out toward the silhouette
+  (`smoothstep(0.05, 0.4, N.V)`): without that, crevices at grazing angles turned to black
+  speckle along trunk edges. Shadow and prepass shaders are unchanged.
+- API: `emit_ring` takes a `RingUv`, `emit_cap` the size of its disc in tiles, and `trunk_mesh`,
+  `tube_mesh`, `collar_mesh` and `root_segment` the tile size; struct literals of `TreeParams`,
+  `FloraExtension`, `GrowthExtension`, `FloraKey` and `FloraUniform` need the new fields.
+- Under the pipe model (`MeshParams::pipe_radius_enabled`) an aged node's radii are not its mature
+  radii scaled, so the tile count around a branch and the size of its cap follow the aged radii
+  over their growth: the bark of such a tree may re-tile by a tile while it grows and differs a
+  little from `GpuGrowth`'s. No preset uses the pipe model.
+
+### Measured
+
+Apple M4 Pro, release builds, against 0.6.2 built from the same source tree. bmb was loaded by
+other builds the whole time (load average 20+), so every comparison is interleaved runs of the two
+binaries, and the frame-time tables of earlier releases are not re-measured.
+
+- **Colour.** The region mean colour (the padded box of `lod_fidelity.py`) of every preset at
+  level 0, 60 m and at game zoom (22 m), 0.6.2 against 0.7.0: at most 0.04 levels of 255 apart in
+  any channel. On the wood pixels alone (those that changed) the mean is within 3% of 0.6.2's on
+  13 of 15 presets, 9% darker on the pine and 2% lighter on the spruce: bump-mapped crevices take
+  a little light.
+- **Levels of detail and impostors** (`lod_fidelity.sh`, 15 presets, two bearings, 12 distances):
+  the impostor's error against level 0 goes from 0.249 to 0.251 (region mean colour) and from
+  7.43 to 7.55 (mean pixel difference): the impostor is baked from the untextured preset colour
+  and level 0 now has bark. Levels 1 and 2 are unchanged to the third decimal.
+- **CPU against GPU growth** (`gallery` and `gallery --gpu`, `compare_gallery`): over all 319
+  scenarios the mean difference is 0.076 of 255 (0.6.2: 0.08), the worst a willow at 1.83 (2.2).
+  No `stats.tsv` flag, no warning or error in either log.
+- **Growth.** A 192-frame growth clip of the oak and of the maple, on both paths: the largest
+  frame-to-frame step is at most 1.10 times its neighbours' (limit 2), so bark neither pops nor
+  slides as the tree grows.
+- **Cost** (`forest --offscreen`, 1080p, one shadow-casting sun, wind on, 0.6.2 and 0.7.0
+  interleaved): 100 000 pooled oaks 7.45 ms against 7.41 ms (three runs each, within 1% of each
+  other); 500 `GpuGrowth` oaks 35.7 / 116 / 116 ms against 35.6 / 118 / 116 ms (the machine
+  changed state between runs, both binaries alike); 1 000 individual oaks 46.3 against 47.2 ms
+  (medians of 14 runs each, which ranged from 22 to 69 ms in both).
+
 ## [0.6.2] - 2026-10-11
 
 Trees keep their colour against the sun. Nothing changes where the sun is beside or behind the
@@ -591,6 +672,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.7.0]: https://github.com/Ladvien/bevy_flora/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/Ladvien/bevy_flora/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/Ladvien/bevy_flora/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Ladvien/bevy_flora/compare/v0.5.0...v0.6.0

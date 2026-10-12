@@ -39,8 +39,8 @@ use crate::params::TreeParams;
 use crate::pipeline::build_aged;
 use crate::pool::spawn_pooled_trees;
 use crate::shading::{
-    FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWind, FloraWindBuffer, SharedFlora, detect_flora_support,
-    flora_decided, sync_wind,
+    BarkLibrary, FloraMaterial, FloraMaterialSupport, FloraWind, FloraWindBuffer, SharedFlora, Surface,
+    detect_flora_support, flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
 
@@ -243,6 +243,7 @@ pub fn rebuild_trees(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut flora: ResMut<Assets<FloraMaterial>>,
     mut shared: ResMut<SharedFlora>,
+    mut bark: BarkLibrary,
     flora_support: Option<Res<FloraMaterialSupport>>,
     wind: Option<Res<FloraWindBuffer>>,
     support: Res<GpuGrowthSupport>,
@@ -298,10 +299,10 @@ pub fn rebuild_trees(
         match (render, existing) {
             (None, _) => {
                 let paint = if let Some(wind) = wind {
-                    let uniform = FloraUniform::new(params);
+                    let wood_bark = bark.of(params);
                     Paint::Flora {
-                        trunk: shared.resolve(&mut flora, params.trunk_color, uniform.wood(), false, wind),
-                        foliage: shared.resolve(&mut flora, params.foliage.color, uniform, true, wind),
+                        trunk: shared.resolve(&mut flora, &Surface::wood(params, wood_bark), wind),
+                        foliage: shared.resolve(&mut flora, &Surface::leaves(params), wind),
                     }
                 } else {
                     Paint::Standard {
@@ -349,9 +350,8 @@ pub fn rebuild_trees(
                     // An age-only rebuild cannot change the looks, so it resolves nothing.
                     Paint::Flora { .. } if tree.is_changed() => {
                         let wind = wind.expect("flora paint implies the wind buffer");
-                        let uniform = FloraUniform::new(params);
-                        let wood = shared.resolve(&mut flora, params.trunk_color, uniform.wood(), false, wind);
-                        let leaves = shared.resolve(&mut flora, params.foliage.color, uniform, true, wind);
+                        let wood = shared.resolve(&mut flora, &Surface::wood(params, bark.of(params)), wind);
+                        let leaves = shared.resolve(&mut flora, &Surface::leaves(params), wind);
                         if let Paint::Flora { trunk, foliage } = &mut render.paint {
                             if *trunk != wood {
                                 commands.entity(render.trunk).insert(MeshMaterial3d(wood.clone()));

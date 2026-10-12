@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::math::Vec3;
 
-use super::frame::{Class, position};
+use super::frame::{Class, position, wood_radius};
 use super::mesh::{GrowthData, build_growth_data};
 use super::state::{CONE, GrowthState, TOP_CAP};
 use crate::foliage::{foliage_mesh_with, leaf_points_for_node};
@@ -15,6 +15,9 @@ use crate::skeleton::{Skeleton, generate_skeleton};
 
 /// Metres a grown vertex may differ from the CPU mesher's.
 const TOLERANCE: f32 = 2e-4;
+
+/// Tiles a texture coordinate may differ by between the aged mesh and the mature one.
+const UV_TOLERANCE: f32 = 1e-3;
 
 const AGES: [f32; 7] = [0.3, 1.0, 2.5, 4.0, 6.0, 9.0, f32::INFINITY];
 
@@ -93,6 +96,41 @@ fn ageing_never_turns_or_bends_wood() {
     }
 }
 
+/// What [`assert_same_bark`] compares.
+#[derive(Clone, Copy)]
+struct BarkChecks {
+    /// The texture coordinates.
+    uv: bool,
+    /// The radius the bark fades in with.
+    radius: bool,
+}
+
+/// A vertex of the aged CPU wood (`cpu`, vertex `v`) and the same vertex of the mature mesh GPU
+/// growth shrinks (`gpu_vertex` of `gpu`, whose tags are `tags`) wear the same bark: the same
+/// texture coordinates, so bark never slides as a tree ages and both paths draw the same wood,
+/// and the radius the bark fades in with: the CPU mesh's `uv1.x` is what the vertex shader
+/// computes from the growth state (`wood_radius`).
+#[allow(clippy::too_many_arguments)]
+fn assert_same_bark(
+    what: &str,
+    cpu: &crate::mesh::MeshData,
+    v: usize,
+    gpu: &crate::mesh::MeshData,
+    tags: &[super::frame::Tag],
+    gpu_vertex: usize,
+    state: &GrowthState,
+    checks: BarkChecks,
+) {
+    if checks.uv {
+        let (a, b) = (cpu.uvs[v], gpu.uvs[gpu_vertex]);
+        assert!((a - b).abs().max_element() < UV_TOLERANCE, "{what}: uv {a:?} (aged) vs {b:?} (mature)");
+    }
+    if checks.radius {
+        let (r, s) = (cpu.uv1[v].x, wood_radius(&tags[gpu_vertex], state));
+        assert!((r - s).abs() < TOLERANCE, "{what}: radius {r} (built) vs {s} (grown)");
+    }
+}
+
 /// Vertices of `span` in a wood mesh.
 fn span_range(span: &WoodSpan) -> std::ops::Range<usize> {
     span.first as usize..(span.first + span.count) as usize
@@ -138,6 +176,14 @@ fn check_wood(name: &str, params: &TreeParams, full: &Skeleton, data: &GrowthDat
                 span.piece,
                 cpu.positions[v]
             );
+            // A primary's rounded base is narrower than the radius the shader scales it by.
+            let radius_matches = !matches!(span.piece, WoodPiece::Dome { .. });
+            let what = format!("{name} age {age}: node {id} {:?} vertex {j}", span.piece);
+            // Under the pipe model an aged tree's radii are not its mature ones scaled, which is
+            // what the bark layout (tiles around, cap size) is measured from, so only the
+            // radius itself must agree there.
+            let checks = BarkChecks { uv: !params.mesh.pipe_radius_enabled, radius: radius_matches };
+            assert_same_bark(&what, &cpu, v, &data.wood, &data.wood_tags, grown.first as usize + j, &state, checks);
         }
     }
 
@@ -186,6 +232,10 @@ fn check_trunk(
     // Rings are laid out the same.
     for j in 0..rings * ring_len {
         assert!(at(j).distance(built(j)) < TOLERANCE, "{name} age {age}: trunk ring vertex {j}");
+        let v = span.first as usize + j;
+        let checks = BarkChecks { uv: true, radius: true };
+        let what = format!("{name} age {age}: trunk ring vertex {j}");
+        assert_same_bark(&what, cpu, v, gpu_mesh, tags, grown.first as usize + j, state, checks);
     }
     let (mut cpu_at, mut gpu_at) = (rings * ring_len, rings * ring_len);
     if cpu_has_cone {
@@ -209,6 +259,12 @@ fn check_trunk(
             at(gpu_at + j).distance(built(cpu_at + j)) < TOLERANCE,
             "{name} age {age}: bottom cap vertex {j}"
         );
+        let v = span.first as usize + cpu_at + j;
+        // A cap's centre has no radius of its own: the mesh gives it the rim's at one angle, the
+        // shader the ring's without the root bulge.
+        let what = format!("{name} age {age}: bottom cap vertex {j}");
+        let checks = BarkChecks { uv: true, radius: j > 0 };
+        assert_same_bark(&what, cpu, v, gpu_mesh, tags, grown.first as usize + gpu_at + j, state, checks);
     }
     cpu_at += 1 + ring_len;
     gpu_at += 1 + ring_len;

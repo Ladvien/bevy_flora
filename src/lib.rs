@@ -88,6 +88,16 @@
 //! }
 //! ```
 //!
+//! # Bark
+//!
+//! Wood wears a bundled CC0 bark scan ([`BarkScan`], chosen per species by the presets in
+//! [`TreeParams::bark`]). The scan is laid out in metres on the mature tree, so a growing tree's
+//! bark never slides, and [`BarkParams`] fades it in as a branch thickens: smooth wood below
+//! `smooth_below` metres of radius, the whole scan above `fissured_above`. The scan's average
+//! colour is divided out of the base colour, so a textured tree keeps its preset colour. The
+//! images are compiled in by the default `textures` feature (about 3.2 MB); without it every scan
+//! is absent and wood is plain colour.
+//!
 //! # Building meshes without Bevy's ECS
 //!
 //! ```rust
@@ -122,8 +132,8 @@ pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
 pub use lod::{LodDistances, LodSettings, build_lods};
 pub use mesh::MeshData;
 pub use params::{
-    BranchParams, FoliageParams, FoliagePlacement, LeafOrientation, LeafShading, LeafStyle,
-    MeshParams, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
+    BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, LeafOrientation, LeafShading,
+    LeafStyle, MeshParams, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
 };
 pub use pipeline::{TreeMeshes, build_tree};
 pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeRender};

@@ -150,3 +150,16 @@ pub(crate) fn position(tag: &Tag, state: &GrowthState) -> Vec3 {
     }
     if p.on { p.anchor + p.scale * twisted(tag.offset, p.twist) } else { p.collapse }
 }
+
+/// Radius of `tag`'s wood vertex under `state`, in metres: what `grown_wood_radius` in the vertex
+/// shader computes (the scale of its offset; 0 for a leaf and for the apex of a mature pointed
+/// trunk). The bark fades in with it.
+#[cfg(test)]
+pub(crate) fn wood_radius(tag: &Tag, state: &GrowthState) -> f32 {
+    use super::state::CONE;
+    match tag.class {
+        Class::Leaf => 0.0,
+        Class::TrunkCone if state.trunk_flags & CONE != 0 => 0.0,
+        _ => placement(tag, state).scale,
+    }
+}

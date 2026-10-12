@@ -25,9 +25,22 @@ struct FloraUniform {
     leaf: vec4<f32>,
     // linear rgb of the light through a leaf, 0
     tint: vec4<f32>,
+    // wood thinner than x metres is smooth, thicker than y metres wears the whole bark, 0, 0
+    bark: vec4<f32>,
+    // the bark scan's average linear rgb, 0
+    bark_mean: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> flora: FloraUniform;
+
+// The surface's detail textures (bark): colour, normal, and the sampler both share. Bound only
+// when the material has them (`FLORA_DETAIL`, `FloraKey::detail`).
+@if(FLORA_DETAIL)
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var detail_color: texture_2d<f32>;
+@if(FLORA_DETAIL)
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var detail_normal: texture_2d<f32>;
+@if(FLORA_DETAIL)
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var detail_sampler: sampler;
 
 // The weather, the same for every tree (`FloraWindBuffer`, `wind_vectors` in shading/mod.rs):
 //   0: wind direction x, direction z, strength, speed
@@ -239,4 +252,47 @@ fn leaf_transmission(p: PbrInput, visibility: f32) -> vec3<f32> {
         p.material.base_color.rgb * flora.tint.rgb * flora.leaf.x,
         visibility,
     );
+}
+
+// Schüler's cotangent frame ("Followup: Normal Mapping Without Precomputed Tangents", 2006): the
+// tangent and bitangent of `uv` at `p` from screen-space derivatives (the meshes carry no
+// tangents), scaled to the same length. Columns: T (along u), B (along v), N.
+@if(FLORA_DETAIL)
+fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
+    let dp1 = dpdx(p);
+    let dp2 = dpdy(p);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let inv_max = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1.0e-30));
+    return mat3x3<f32>(t * inv_max, b * inv_max, n);
+}
+
+// The bark of a piece of wood, in place: the scan's colour (a ratio to its average, which the
+// material's base colour has divided out, so the tree keeps its colour) and its normal map, both
+// faded in with the wood's radius: smooth below `flora.bark.x` metres, the whole scan above
+// `flora.bark.y`. `uv`: the mesh's, in tiles of the scan; `radius`: the vertex's, in metres.
+@if(FLORA_DETAIL)
+fn bark_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, radius: f32) {
+    // Derivatives and samples before any branch.
+    let n = (*p).N;
+    let frame = cotangent_frame(n, (*p).world_position.xyz, uv);
+    let albedo = textureSample(detail_color, detail_sampler, uv).rgb;
+    let tangent_normal = textureSample(detail_normal, detail_sampler, uv).xyz * 2.0 - 1.0;
+    let m = smoothstep(flora.bark.x, max(flora.bark.y, flora.bark.x + 1.0e-4), radius);
+    // The map is OpenGL's (green points up the image) and v runs down it, so B is flipped.
+    let bumped = frame * vec3<f32>(tangent_normal.x, -tangent_normal.y, tangent_normal.z);
+    let bumped_length = length(bumped);
+    let perturbed = select(n, bumped / max(bumped_length, 1.0e-6), bumped_length > 1.0e-4);
+    // The relief fades out toward the silhouette: there the bumped normal turns away from the
+    // camera and the light, and the crevices turn to black speckle.
+    let facing = smoothstep(0.05, 0.4, dot(n, (*p).V));
+    (*p).N = normalize(mix(n, perturbed, m * facing));
+    let base = (*p).material.base_color;
+    // The base colour is the preset's over the scan's average, so smooth wood is the average
+    // and the whole scan is its own colour.
+    (*p).material.base_color = vec4<f32>(base.rgb * mix(flora.bark_mean.rgb, albedo, m), base.a);
 }
