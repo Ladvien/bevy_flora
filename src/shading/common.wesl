@@ -58,6 +58,9 @@ struct FloraUniform {
 //   3: gust front origin x, origin z, direction x, direction z
 //   4: gust front speed, width, strength, start time
 //   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, snow, 0
+//   6: the shakes (`TreeShakes`): the render time the last one ends (-1: none), 0, 0, 0
+//   7 + 2i, 8 + 2i for i in 0..8: shake i's (at x, at z, radius, strength) and (direction x,
+//      direction z, start time, duration); all zero for an empty slot
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
 
 // A leaf's own moment in the season, 0..1, from its phase (`sway.w`, one per leaf): it turns
@@ -169,6 +172,49 @@ fn gust_front(origin: vec3<f32>, time: f32) -> f32 {
     return front_shape.z * exp(-u * u);
 }
 
+// How fast a shaken tree swings, in swings a second for a tree 1 m tall: slower for taller trees
+// (by the square root of the height, as a pendulum), 1.2 a second for a 6 m tree.
+const SHAKE_SWINGS: f32 = 3.0;
+// How hard a shake makes the leaves rustle, per unit of its strength, on the scale of the wind.
+const SHAKE_RUSTLE: f32 = 0.8;
+
+// What the shakes under way (`TreeShakes`) do to the tree standing at `origin`: (x, z) the lean
+// they give it now, and how hard they make its leaves rustle. Each swings the tree first away
+// from where it happened (or along its direction), then back and forth, dying away to nothing at
+// its end; the nearer the tree, the harder. Nothing, and one comparison, once the last shake is
+// over (the header in slot 6).
+fn shake_at(origin: vec3<f32>, time: f32) -> vec3<f32> {
+    if time > flora_wind[6].x {
+        return vec3<f32>(0.0);
+    }
+    let swings = SHAKE_SWINGS * sqrt(max(flora.tree.x, 1.0e-4)) * (0.9 + 0.2 * tree_phase(origin));
+    var lean = vec2<f32>(0.0);
+    var rustle = 0.0;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let place = flora_wind[7u + 2u * i];
+        let how = flora_wind[8u + 2u * i];
+        let age = time - how.z;
+        if place.w <= 0.0 || age < 0.0 || age > how.w {
+            continue;
+        }
+        let off = origin.xz - place.xy;
+        let d = length(off);
+        let near = 1.0 - smoothstep(0.0, place.z, d);
+        if near <= 0.0 {
+            continue;
+        }
+        var dir = how.xy;
+        if dot(dir, dir) == 0.0 {
+            dir = select(vec2<f32>(1.0, 0.0), off / d, d > 1.0e-4);
+        }
+        let fade = 1.0 - age / how.w;
+        let amount = place.w * near * fade * fade;
+        lean = lean + dir * (amount * sin(6.2831853 * swings * age));
+        rustle = rustle + amount;
+    }
+    return vec3<f32>(lean, rustle);
+}
+
 // The leaf's movement in the tree's local space. `sway`: the leaf's direction scaled by how far
 // the vertex is from where the leaf is attached (xyz) and the leaf's phase (w).
 fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32) -> vec3<f32> {
@@ -177,7 +223,7 @@ fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32) -> vec3<f32> {
     let rate = flora_wind[2];
     let t = time * wind.w * 2.0 * rate.y * flora.response.w + sway.w + tree_phase(origin);
     let w = smooth_triangle_wave(vec4<f32>(t * 1.975, t * 0.793, 0.0, 0.0));
-    let strength = wind.z + gust_front(origin, time);
+    let strength = wind.z + gust_front(origin, time) + SHAKE_RUSTLE * shake_at(origin, time).z;
     return sway.xyz * (FLUTTER * motion.y * flora.response.y * strength * (w.x + w.y - 1.0));
 }
 
@@ -189,7 +235,8 @@ fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, ti
     let rate = flora_wind[2];
     let front = flora_wind[3];
     let bump = gust_front(origin, time);
-    if wind.z <= 0.0 && bump <= 0.0 {
+    let shake = shake_at(origin, time);
+    if wind.z <= 0.0 && bump <= 0.0 && shake.z <= 0.0 {
         return world;
     }
     let t = time * wind.w * rate.x * flora.response.z;
@@ -201,9 +248,12 @@ fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, ti
     let across = vec2<f32>(-wind.y, wind.x) * (wind.z * motion.w * (2.0 * g.z - 1.0));
     let push = down + across + front.zw * bump;
     let h = max(local_y, 0.0) * flora.tree.x;
-    let reach = MAIN_BEND * motion.x * flora.response.x * (scale_y / max(flora.tree.x, 1.0e-4)) * h * h;
+    // How far this vertex moves per unit of lean: the species' sway, more toward the top.
+    let lean = MAIN_BEND * flora.response.x * (scale_y / max(flora.tree.x, 1.0e-4)) * h * h;
+    let reach = lean * motion.x;
     let rel = world - origin;
-    let moved = rel + vec3<f32>(push.x, 0.0, push.y) * reach;
+    // A shake leans the tree whatever `FloraWind::bend` says: a still day has knocks too.
+    let moved = rel + vec3<f32>(push.x, 0.0, push.y) * reach + vec3<f32>(shake.x, 0.0, shake.y) * lean;
     // Bend, do not stretch.
     return origin + moved * (length(rel) / max(length(moved), 1.0e-6));
 }

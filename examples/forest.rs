@@ -6,7 +6,7 @@
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
-//!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
+//!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //! ```
@@ -75,7 +75,8 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_flora::{
     FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
-    ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
+    ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, TreeShake,
+    TreeShakes, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -147,6 +148,8 @@ struct Args {
     gust: Option<f32>,
     /// Change the wind's strength every frame, as a game with weather would.
     wind_animate: bool,
+    /// Knock the trees every few frames (`TreeShakes`), so every shake slot is always busy.
+    shake_animate: bool,
     /// Step the clock a fixed 1/60 s per frame and count the warmup in frames, so two runs of
     /// different code render the same image at the same frame.
     deterministic: bool,
@@ -176,7 +179,7 @@ fn usage() -> ! {
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
-         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
+         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]"
     );
@@ -203,6 +206,7 @@ fn parse_args() -> Args {
         wind_dir: None,
         gust: None,
         wind_animate: false,
+        shake_animate: false,
         deterministic: false,
         offscreen: false,
         screenshot: None,
@@ -292,6 +296,7 @@ fn parse_args() -> Args {
             }
             "--gust" => args.gust = Some(value(&mut it)),
             "--wind-animate" => args.wind_animate = true,
+            "--shake-animate" => args.shake_animate = true,
             "--deterministic" => args.deterministic = true,
             "--scatter" => {
                 let list = it.next().unwrap_or_else(|| usage());
@@ -627,12 +632,24 @@ fn drive(
     mut exit: MessageWriter<AppExit>,
     mut wind: ResMut<FloraWind>,
     time: Res<Time>,
+    mut shakes: ResMut<TreeShakes>,
+    mut knocks: Local<u32>,
 ) {
     let bench = &mut *bench;
     if bench.args.wind_animate && bench.phase != Phase::Loading {
         // Mutated every frame on purpose: the wind changes, so the shared wind buffer is written
         // every frame (and no material is touched).
         wind.strength = 0.6 + 0.3 * (time.elapsed_secs() * 1.7).sin();
+    }
+    if bench.args.shake_animate && bench.phase != Phase::Loading {
+        // A knock every sixth frame, wandering over the near half of the forest, so all eight
+        // shake slots are busy every frame: the worst case for the vertex stage.
+        *knocks += 1;
+        if knocks.is_multiple_of(6) {
+            let a = *knocks as f32 * 0.37;
+            let at = Vec2::new(a.cos(), a.sin()) * (bench.extent * 0.15);
+            shakes.shake(TreeShake { at, radius: 20.0, strength: 1.5, duration: 3.0, ..default() }, &time);
+        }
     }
     match bench.phase {
         Phase::Loading => {

@@ -151,6 +151,81 @@ impl FloraWind {
     }
 }
 
+/// A knock that shakes the trees near a point: an axe or a sword on a trunk, a character pushing
+/// through, a blast. Send it with [`TreeShakes::shake`].
+///
+/// Every tree whose trunk stands within `radius` of `at` swings, the nearest the most: first away
+/// from `at` (or along `direction`), then back and forth, dying away over `duration`, while its
+/// leaves rustle. It is the whole tree that sways, like a bend in the wind (each tree at its own
+/// pace), on every way a tree is drawn: [`ProceduralTree`](crate::ProceduralTree),
+/// [`GpuGrowth`](crate::GpuGrowth), pooled trees and their impostors. Nothing moves on the CPU:
+/// [`TreeShape`](crate::TreeShape) colliders stay where they are.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct TreeShake {
+    /// Where it happens, on the ground: world x and z.
+    pub at: Vec2,
+    /// Trees whose trunks stand closer to `at` than this many metres shake (at least 0.01): about
+    /// a metre singles out the tree that was hit, tens of metres reach a whole grove.
+    pub radius: f32,
+    /// How far the trees swing, on the scale of [`FloraWind::strength`]: 1 leans a tree about as
+    /// far as a strong wind does, before the swing dies away. Negative is treated as 0.
+    pub strength: f32,
+    /// Which way the trees swing first, world x and z; normalised when used. Zero pushes each tree
+    /// away from `at` (a tree standing exactly there is pushed along +x).
+    pub direction: Vec2,
+    /// Seconds until the shaking has died away (at least 0.01).
+    pub duration: f32,
+    /// Render time ([`Time::elapsed_secs_wrapped`], the shaders' `globals.time`) when it began;
+    /// set by [`TreeShakes::shake`].
+    pub start: f32,
+}
+
+impl Default for TreeShake {
+    fn default() -> Self {
+        Self { at: Vec2::ZERO, radius: 1.5, strength: 1.0, direction: Vec2::ZERO, duration: 2.5, start: 0.0 }
+    }
+}
+
+/// The trees being shaken (see [`TreeShake`]): up to [`TreeShakes::MAX`] at a time. Like
+/// [`FloraWind`] it lives in the shared buffer, so shaking costs one small buffer write and
+/// touches no material or mesh, and nothing at all while no shake is under way.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
+#[reflect(Resource)]
+pub struct TreeShakes {
+    shakes: Vec<TreeShake>,
+}
+
+impl TreeShakes {
+    /// How many shakes can be under way at once.
+    pub const MAX: usize = 8;
+
+    /// Shake the trees near `shake.at`, starting now. With [`MAX`](Self::MAX) shakes already
+    /// stored, it takes the place of the one that ends soonest, so a new knock always shows.
+    ///
+    /// The shaders time it with the render clock, [`Time::elapsed_secs_wrapped`], which starts
+    /// over every `Time::wrap_period` (an hour by default); a shake under way at that wrap stops.
+    pub fn shake(&mut self, mut shake: TreeShake, time: &Time) {
+        shake.start = time.elapsed_secs_wrapped();
+        if self.shakes.len() < Self::MAX {
+            self.shakes.push(shake);
+        } else if let Some(soonest) =
+            self.shakes.iter_mut().min_by(|a, b| (a.start + a.duration).total_cmp(&(b.start + b.duration)))
+        {
+            *soonest = shake;
+        }
+    }
+
+    /// Stop every shake at once.
+    pub fn clear(&mut self) {
+        self.shakes.clear();
+    }
+
+    /// The shakes under way: the plugin drops each one once it has died away.
+    pub fn iter(&self) -> impl Iterator<Item = &TreeShake> {
+        self.shakes.iter()
+    }
+}
+
 /// What the flora shaders read from a material: the species' response to the wind and the look
 /// of the leaves of the tree it belongs to. The wind itself is not here: it is the same for
 /// every tree and lives in [`FloraWindBuffer`].
@@ -279,14 +354,19 @@ impl FloraUniform {
     }
 }
 
-/// The six `Vec4`s of [`FloraWind`] and [`FloraSeason`] the shaders read, in the order of the
-/// shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend, flutter, gust
-/// strength, turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front` (origin x,
-/// origin z, direction x, direction z), `front_shape` (speed, width, strength, start time) and
-/// `season` (autumn, leaf fall, snow, 0); `front` and `front_shape` are zero without a
-/// [`GustFront`], or with one that has no direction. Directions are normalised and every value
-/// clamped to what the shaders can use.
-pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason) -> [Vec4; 6] {
+/// How many `Vec4`s the shared buffer holds: see [`wind_vectors`].
+pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX;
+
+/// The `Vec4`s of [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] the shaders read, in the order
+/// of the shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend,
+/// flutter, gust strength, turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front`
+/// (origin x, origin z, direction x, direction z), `front_shape` (speed, width, strength, start
+/// time), `season` (autumn, leaf fall, snow, 0), the shakes' header (the render time the last of
+/// them ends, -1 without any, 0, 0) and two per shake slot, (at x, at z, radius, strength) and
+/// (direction x, direction z, start, duration), all zero for an empty slot. `front` and
+/// `front_shape` are zero without a [`GustFront`], or with one that has no direction. Directions
+/// are normalised and every value clamped to what the shaders can use.
+pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason, shakes: &TreeShakes) -> [Vec4; WIND_VECTORS] {
     let d = wind.direction.normalize_or_zero();
     let (front, front_shape) = match wind.gust {
         Some(gust) if gust.direction.normalize_or_zero() != Vec2::ZERO => {
@@ -298,19 +378,28 @@ pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason) -> [Vec4; 6] 
         }
         _ => (Vec4::ZERO, Vec4::ZERO),
     };
-    [
+    let mut packed = [Vec4::ZERO; WIND_VECTORS];
+    packed[..6].copy_from_slice(&[
         Vec4::new(d.x, d.y, wind.strength.max(0.0), wind.speed.max(0.0)),
         Vec4::new(wind.bend.max(0.0), wind.flutter.max(0.0), wind.gust_strength.clamp(0.0, 1.0), wind.turbulence.max(0.0)),
         Vec4::new(wind.gust_frequency.max(0.0), wind.flutter_frequency.max(0.0), 0.0, 0.0),
         front,
         front_shape,
-        Vec4::new(
-            season.autumn.clamp(0.0, 1.0),
-            season.leaf_fall.clamp(0.0, 1.0),
-            season.snow.clamp(0.0, 1.0),
-            0.0,
-        ),
-    ]
+        Vec4::new(season.autumn.clamp(0.0, 1.0), season.leaf_fall.clamp(0.0, 1.0), season.snow.clamp(0.0, 1.0), 0.0),
+    ]);
+    // Shakes that cannot move anything are left out, and the header says when the last one ends,
+    // so the shaders skip them all, every vertex, once it has.
+    let mut last_end = -1.0f32;
+    let live = shakes.iter().filter(|s| s.strength > 0.0).take(TreeShakes::MAX);
+    for (i, shake) in live.enumerate() {
+        let duration = shake.duration.max(0.01);
+        let dir = shake.direction.normalize_or_zero();
+        packed[7 + 2 * i] = Vec4::new(shake.at.x, shake.at.y, shake.radius.max(0.01), shake.strength);
+        packed[8 + 2 * i] = Vec4::new(dir.x, dir.y, shake.start, duration);
+        last_end = last_end.max(shake.start + duration);
+    }
+    packed[6] = Vec4::new(last_end, 0.0, 0.0, 0.0);
+    packed
 }
 
 /// What a [`FloraExtension`] changes about the pipeline it is drawn with.
@@ -541,18 +630,18 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FloraMaterialSupport;
 
-/// The wind the flora shaders read: one storage buffer of six `Vec4`s (direction and strength,
-/// motion, rates and the [`GustFront`], packed from [`FloraWind`], and the [`FloraSeason`]), shared
-/// by every flora material (binding 102), so changing [`FloraWind`] or [`FloraSeason`]
-/// writes this buffer in place and touches no material. Hand it to the `wind` field of a
+/// The wind the flora shaders read: one storage buffer of `Vec4`s (direction and strength,
+/// motion, rates and the [`GustFront`], packed from [`FloraWind`], the [`FloraSeason`] and the
+/// [`TreeShakes`]), shared by every flora material (binding 102), so changing any of them writes
+/// this buffer in place and touches no material. Hand it to the `wind` field of a
 /// [`FloraExtension`], [`GrowthExtension`](crate::GrowthExtension) or
 /// [`ImpostorMaterial`](crate::ImpostorMaterial) you build yourself.
 #[derive(Resource, Clone, Debug)]
 pub struct FloraWindBuffer(pub Handle<ShaderBuffer>);
 
 impl FloraWindBuffer {
-    fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind, season: &FloraSeason) -> Self {
-        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind, season).map(|v| v.to_array()).to_vec())))
+    fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind, season: &FloraSeason, shakes: &TreeShakes) -> Self {
+        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind, season, shakes).map(|v| v.to_array()).to_vec())))
     }
 }
 
@@ -586,15 +675,16 @@ pub(crate) fn detect_flora_support(
     }
 }
 
-/// Write [`FloraWind`] and [`FloraSeason`] into the shared buffer, in place. Runs when either
-/// changed.
+/// Write [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] into the shared buffer, in place. Runs
+/// when any of them changed.
 pub(crate) fn sync_wind(
     wind: Res<FloraWind>,
     season: Res<FloraSeason>,
+    shakes: Res<TreeShakes>,
     buffer: Res<FloraWindBuffer>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let packed = wind_vectors(&wind, &season).map(|v| v.to_array());
+    let packed = wind_vectors(&wind, &season, &shakes).map(|v| v.to_array());
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
     if buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>()) == Some(&packed[..]) {
         return;
@@ -603,6 +693,18 @@ pub(crate) fn sync_wind(
     match shader_buffer.cast_slice_mut::<[f32; 4]>() {
         Some(slice) if slice.len() == packed.len() => slice.copy_from_slice(&packed),
         _ => *shader_buffer = ShaderBuffer::from(packed.to_vec()),
+    }
+}
+
+/// Drop the shakes that have died away, and those the render clock's wrap left in the future, so
+/// the shaders skip the shakes altogether once none is under way. Touches the resource (and so
+/// rewrites the buffer) only in a frame when one goes.
+pub(crate) fn expire_shakes(mut shakes: ResMut<TreeShakes>, time: Res<Time>) {
+    let now = time.elapsed_secs_wrapped();
+    let under_way = |shake: &TreeShake| shake.start <= now && now <= shake.start + shake.duration.max(0.01);
+    // Look before borrowing mutably: a mutable borrow marks the resource changed.
+    if !shakes.shakes.iter().all(under_way) {
+        shakes.shakes.retain(under_way);
     }
 }
 
@@ -615,10 +717,12 @@ pub(crate) fn sync_wind(
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<FloraWind>()
         .init_resource::<FloraSeason>()
+        .init_resource::<TreeShakes>()
         .init_resource::<SharedFlora>()
         .init_resource::<FloraTextures>()
         .register_type::<FloraWind>()
         .register_type::<FloraSeason>()
+        .register_type::<TreeShakes>()
         .register_type::<GustFront>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
         add_shaders(app);
@@ -662,7 +766,9 @@ fn add_wind_buffer(app: &mut App) {
     }
     let wind = *app.world().resource::<FloraWind>();
     let season = *app.world().resource::<FloraSeason>();
-    let buffer = FloraWindBuffer::new(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), &wind, &season);
+    let shakes = app.world().resource::<TreeShakes>().clone();
+    let buffer =
+        FloraWindBuffer::new(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), &wind, &season, &shakes);
     app.insert_resource(buffer);
 }
 
@@ -773,22 +879,26 @@ mod tests {
             turbulence: -1.0,
             gust: None,
         };
-        let [wind, motion, rate, front, front_shape, season] =
-            wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0, snow: 3.0 });
+        let [wind, motion, rate, front, front_shape, season, ..] =
+            wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0, snow: 3.0 }, &TreeShakes::default());
         // Direction normalised, a negative speed stopped, strength not capped, the rest clamped.
         assert_eq!(wind, Vec4::new(0.0, -1.0, 7.0, 0.0));
         assert_eq!(motion, Vec4::new(3.0, 2.0, 1.0, 0.0));
         assert_eq!(rate, Vec4::new(0.5, 4.0, 0.0, 0.0));
         assert_eq!((front, front_shape), (Vec4::ZERO, Vec4::ZERO));
         assert_eq!(season, Vec4::new(1.0, 0.0, 1.0, 0.0), "the season is clamped to 0..1");
-        let calm = FloraSeason::default();
-        assert_ne!(wind_vectors(&FloraWind { strength: 0.0, ..gale }, &calm), wind_vectors(&gale, &calm));
+        let (calm, still) = (FloraSeason::default(), TreeShakes::default());
+        assert_ne!(
+            wind_vectors(&FloraWind { strength: 0.0, ..gale }, &calm, &still),
+            wind_vectors(&gale, &calm, &still)
+        );
     }
 
     #[test]
     fn gust_front_is_packed_normalised_and_off_when_absent() {
         let pack = |gust: Option<GustFront>| {
-            let [.., front, front_shape, _] = wind_vectors(&FloraWind { gust, ..Default::default() }, &FloraSeason::default());
+            let [_, _, _, front, front_shape, ..] =
+                wind_vectors(&FloraWind { gust, ..Default::default() }, &FloraSeason::default(), &TreeShakes::default());
             (front, front_shape)
         };
 
@@ -913,7 +1023,48 @@ mod tests {
         let front = wind.gust.expect("the gust was launched");
         assert_eq!(front.start, time.elapsed_secs_wrapped());
         assert_eq!(front.start, 5.0);
-        let [.., front_shape, _] = wind_vectors(&wind, &FloraSeason::default());
+        let [_, _, _, _, front_shape, ..] = wind_vectors(&wind, &FloraSeason::default(), &TreeShakes::default());
         assert_eq!(front_shape.w, 5.0);
+    }
+
+    #[test]
+    fn a_shake_is_packed_and_a_new_one_always_gets_a_slot() {
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f32(10.0));
+        let calm = (FloraWind::default(), FloraSeason::default());
+        let pack = |shakes: &TreeShakes| wind_vectors(&calm.0, &calm.1, shakes);
+
+        // Nothing shaking: the header says so, and every slot is empty.
+        let none = pack(&TreeShakes::default());
+        assert_eq!(none[6].x, -1.0);
+        assert!(none[7..].iter().all(|v| *v == Vec4::ZERO));
+
+        let mut shakes = TreeShakes::default();
+        let hit = TreeShake { at: Vec2::new(3.0, -4.0), radius: 0.0, strength: 2.0, direction: Vec2::new(0.0, 5.0), duration: 3.0, start: -1.0 };
+        shakes.shake(hit, &time);
+        assert_eq!(shakes.iter().next().map(|s| s.start), Some(10.0), "stamped with the render clock");
+        let packed = pack(&shakes);
+        assert_eq!(packed[7], Vec4::new(3.0, -4.0, 0.01, 2.0), "radius kept above 0");
+        assert_eq!(packed[8], Vec4::new(0.0, 1.0, 10.0, 3.0), "direction normalised");
+        assert_eq!(packed[6].x, 13.0, "the header says when the last shake ends");
+
+        // A shake that cannot move anything takes no slot.
+        let mut idle = TreeShakes::default();
+        idle.shake(TreeShake { strength: 0.0, ..hit }, &time);
+        assert_eq!(pack(&idle)[6].x, -1.0);
+
+        // Full: a new shake replaces the one that ends soonest, so it always shows.
+        let mut full = TreeShakes::default();
+        for i in 0..TreeShakes::MAX {
+            full.shake(TreeShake { duration: 10.0 + i as f32, ..TreeShake::default() }, &time);
+        }
+        let newest = TreeShake { at: Vec2::new(99.0, 0.0), duration: 1.0, ..TreeShake::default() };
+        time.advance_by(Duration::from_secs_f32(1.0));
+        full.shake(newest, &time);
+        let durations: Vec<f32> = full.iter().map(|s| s.duration).collect();
+        assert_eq!(full.iter().count(), TreeShakes::MAX);
+        assert!(!durations.contains(&10.0), "the shortest-lived shake should have made room: {durations:?}");
+        assert!(full.iter().any(|s| s.at.x == 99.0 && s.start == 11.0));
+        assert_eq!(pack(&full)[6].x, 10.0 + 17.0, "the longest still ends last");
     }
 }

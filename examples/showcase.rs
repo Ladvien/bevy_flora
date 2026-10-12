@@ -4,14 +4,15 @@
 //! Controls: right-drag orbit, wheel zoom, `[`/`]` previous/next preset,
 //! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
 //! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`),
-//! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back.
+//! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back, `H` hit the tree (`TreeShakes`).
 
 use std::f32::consts::PI;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy_flora::{
-    FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset, TreeShape,
+    FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge, TreeGenerated, TreePreset, TreeShake,
+    TreeShakes, TreeShape,
 };
 
 #[derive(Resource)]
@@ -115,6 +116,8 @@ fn handle_keys(
     mut showcase: ResMut<Showcase>,
     mut commands: Commands,
     tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge, Option<&Growing>, Has<GpuGrowth>, Has<TreeShape>)>,
+    mut shakes: ResMut<TreeShakes>,
+    time: Res<Time>,
 ) {
     let (entity, mut tree, mut age, growing, gpu, shaped) = tree.into_inner();
     let count = TreePreset::ALL.len();
@@ -170,6 +173,11 @@ fn handle_keys(
     }
     if keys.just_pressed(KeyCode::KeyY) {
         showcase.year_running = !showcase.year_running;
+    }
+    if keys.just_pressed(KeyCode::KeyH) {
+        // An axe on the trunk: the tree (at the origin) swings, its neighbours would not.
+        let hit = TreeShake { at: Vec2::ZERO, radius: 1.0, strength: 2.0, direction: Vec2::X, ..default() };
+        shakes.shake(hit, &time);
     }
 }
 
@@ -238,7 +246,7 @@ fn update_hud(
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
          Space: toggle growing   R: restart   M: mature   G: rebuild\n\
          U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape\n\
-         Y: run the year (or stop it)",
+         Y: run the year (or stop it)   H: hit the tree",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),

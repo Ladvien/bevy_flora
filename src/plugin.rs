@@ -41,8 +41,9 @@ use crate::shape::TreeShape;
 use crate::pool::{fill_pooled_shapes, spawn_pooled_trees};
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWind, FloraWindBuffer, SharedFlora, TextureLibrary,
+    TreeShakes,
     detect_flora_support,
-    flora_decided, sync_wind,
+    expire_shakes, flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
 
@@ -182,9 +183,12 @@ impl bevy::app::Plugin for FloraPlugin {
                 (
                     detect_gpu_growth_support,
                     detect_flora_support,
-                    sync_wind.run_if(|wind: Res<FloraWind>, season: Res<FloraSeason>| {
-                        wind.is_changed() || season.is_changed()
-                    }),
+                    expire_shakes,
+                    sync_wind.run_if(
+                        |wind: Res<FloraWind>, season: Res<FloraSeason>, shakes: Res<TreeShakes>| {
+                            wind.is_changed() || season.is_changed() || shakes.is_changed()
+                        },
+                    ),
                     grow_trees,
                     sync_growth_mode,
                     rebuild_trees.run_if(flora_decided),
@@ -566,7 +570,8 @@ pub(crate) fn replace_mesh(
 mod tests {
     use super::*;
     use crate::presets::TreePreset;
-    use crate::shading::{GustFront, wind_vectors};
+    use crate::shading::{GustFront, TreeShake, wind_vectors};
+    use bevy::math::Vec2;
     use bevy::app::App;
     use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::render::storage::ShaderBuffer;
@@ -968,20 +973,20 @@ mod tests {
         }
         app.update();
         assert!(update_and_modified(&mut app).is_empty());
-        let season = FloraSeason::default();
-        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default(), &season).map(|v| v.to_array()));
+        let (season, still) = (FloraSeason::default(), TreeShakes::default());
+        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default(), &season, &still).map(|v| v.to_array()));
 
         app.world_mut().resource_mut::<FloraWind>().strength = 0.9;
         assert!(update_and_modified(&mut app).is_empty(), "a new strength modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season, &still).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[0][2], 0.9);
 
         // A gust front is wind too.
         app.world_mut().resource_mut::<FloraWind>().launch_gust(GustFront::default(), &Time::default());
         assert!(update_and_modified(&mut app).is_empty(), "a launched gust modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season, &still).map(|v| v.to_array()));
         assert!(wind_buffer(&app)[4][2] > 0.0);
 
         // Touching the resource without changing the wind writes nothing.
@@ -994,8 +999,40 @@ mod tests {
         *app.world_mut().resource_mut::<FloraSeason>() = FloraSeason::AUTUMN;
         assert!(update_and_modified(&mut app).is_empty(), "the season modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN).map(|v| v.to_array()));
+        let still = TreeShakes::default();
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &still).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[5][0], 1.0);
+
+        // So do the shakes.
+        // A long one, on the app's own clock: a debug build may spend seconds in a frame here.
+        let shake = TreeShake { at: Vec2::new(2.0, 1.0), duration: 1.0e4, ..TreeShake::default() };
+        let time = *app.world().resource::<Time>();
+        app.world_mut().resource_mut::<TreeShakes>().shake(shake, &time);
+        assert!(update_and_modified(&mut app).is_empty(), "a shake modified a material");
+        let shakes = app.world().resource::<TreeShakes>().clone();
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &shakes).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app)[7][0], 2.0);
+    }
+
+    #[test]
+    fn a_shake_that_has_died_away_is_dropped_and_the_shaders_skip_shakes_again() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let mut app = app();
+        app.insert_resource(FloraMaterialSupport);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
+        app.update();
+        let time = *app.world().resource::<Time>();
+        let knock = TreeShake { duration: 0.25, ..TreeShake::default() };
+        app.world_mut().resource_mut::<TreeShakes>().shake(knock, &time);
+        app.update();
+        assert_eq!(app.world().resource::<TreeShakes>().iter().count(), 1, "a shake under way was dropped");
+        assert!(wind_buffer(&app)[6][0] >= time.elapsed_secs_wrapped(), "the header says no shake is under way");
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<TreeShakes>().iter().count(), 0, "a finished shake was kept");
+        assert_eq!(wind_buffer(&app)[6][0], -1.0, "the shaders still look at the shakes");
     }
 
     #[test]

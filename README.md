@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.13 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.14 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.13"
+bevy_flora = "0.14"
 ```
 
 | feature | default | what it does |
@@ -308,6 +308,43 @@ A scattered winter forest under `FloraSeason::SNOW`: the spruces and pines keep 
 
 *`cargo run --release --example forest -- --trees 3000 --spacing 7 --scatter spruce:3,pine:2,birch:2,oak:1 --grove 50 --clearing 25 --season 1,1,1 --eye 25,9,-75 --at 0,6,-20 --fov 50 --wind 0 --deterministic --screenshot snow.png`*
 
+### Trees that react: `TreeShakes`
+
+A game hits trees. `TreeShakes` is a resource like `FloraWind`: `shake(TreeShake { at, radius, strength, direction, duration }, &time)` swings every tree whose trunk stands within `radius` metres of `at` (world x and z), the nearest the most, first away from `at` (or along `direction`), then back and forth, dying away over `duration` seconds, while its leaves rustle. About a metre of radius singles out the tree that was hit; tens of metres reach a whole grove. Each tree swings at its own pace, taller trees slower, and the whole tree bends as it does in the wind, on every way a tree is drawn: `ProceduralTree`, `GpuGrowth`, pooled trees and their impostors. Up to eight shakes run at once (`TreeShakes::MAX`; a new one takes the place of the one that ends soonest, so a knock always shows). They live in the wind's shared buffer, so a shake writes a few hundred bytes and touches no material, and while none is under way the shaders compare one number a vertex. A shake is drawn, not simulated: colliders (`TreeShape`) stay where they are.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::prelude::*;
+
+// An axe on the tree standing at `trunk`, swung along `swing`: a metre of radius singles it out.
+fn axe_hit(shakes: &mut TreeShakes, time: &Time, trunk: Vec3, swing: Vec3) {
+    let hit = TreeShake { at: trunk.xz(), radius: 1.0, strength: 2.0, direction: swing.xz(), ..default() };
+    shakes.shake(hit, time);
+}
+
+// A blast: every tree within 30 m swings away from it.
+fn blast(shakes: &mut TreeShakes, time: &Time, at: Vec3) {
+    shakes.shake(TreeShake { at: at.xz(), radius: 30.0, strength: 3.0, duration: 3.5, ..default() }, time);
+}
+
+#[derive(Component)]
+struct Player;
+
+// A character pushing through a thicket: a small knock where it is, a few times a second.
+fn brush(mut shakes: ResMut<TreeShakes>, time: Res<Time>, player: Single<&Transform, With<Player>>, mut wait: Local<f32>) {
+    *wait -= time.delta_secs();
+    if *wait <= 0.0 {
+        *wait = 0.3;
+        let knock = TreeShake { at: player.translation.xz(), radius: 2.0, strength: 0.6, duration: 1.5, ..default() };
+        shakes.shake(knock, &time);
+    }
+}
+```
+
+![The grown grove from a still camera: an axe hit swings the oak alone, another swings a birch, then a blast swings every tree outward and they settle back](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/shake.gif)
+
+*`cargo run --release --example capture_growth -- --shake`: an axe on the oak, one on a birch, then a blast at the grove's middle, in a light wind.*
+
 ### Gameplay: colliders, growth events, the prelude
 
 A game wants a tree's shape in a handful of primitives, not twenty thousand triangles. Insert `TreeShape::default()` next to a `ProceduralTree` (or a `PooledTree`) and the plugin keeps it up to date: three capsules up the trunk that taper with it (the lowest has the trunk's radius at hip height, so a walking character meets what it sees), one capsule for every stretch of wood at least `limb_radius` thick (6 cm by default; `TreeShape::with_limb_radius`), and a box around the leaves, all in the tree's local space. A growing tree's shape grows with it on both the CPU and the `GpuGrowth` path, and it is written only when it changes, so `Changed<TreeShape>` is the cue to rebuild colliders. `WoodCapsule::to_primitive` gives Bevy's `Capsule3d` and where it sits, which is what most physics engines' capsule colliders take. Building the shape costs about as much as ageing the skeleton (6 to 9 microseconds a tree on an Apple M4 Pro), which is why it is opt-in. `TreeMature` is sent once when a `Growing` tree reaches maturity, and `use bevy_flora::prelude::*;` brings in the plugin, the components, the presets and parameters, the wind and the shapes.
@@ -376,6 +413,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Looks.** `TreeParams::style` draws a tree as `Natural`, `Painterly` (leaf normals point out of each clump's own centre: rounded masses) or `Toon` (banded light and an ink rim); impostors and pools follow.
 - **Seasons.** `FloraSeason` turns deciduous trees to their autumn colour (`FoliageParams::autumn`), sheds their leaves one by one and lays snow on every tree, shadows, pools, impostors and `GpuGrowth` included, at no cost per tree; `FloraSeason::of_year` drives a whole year from one number.
 - **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
+- **Trees that react.** `TreeShakes` swings the trees near a hit, a passing character or a blast and rustles their leaves, on every way a tree is drawn, for one small buffer write and nothing per tree while nothing shakes.
 - **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.4 ms a frame, leaf shading, wind and seasons included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 24 ms a frame), but each keeps its own meshes, so use a pool beyond that.
 - **Planting forests.** `Scatter` says where the trees stand: trunks at least a spacing apart and otherwise irregular (Poisson disc), species in groves with bending borders, each tree its own yaw, size and variant, and a density per spot for roads and clearings; deterministic per seed.
 
@@ -383,12 +421,12 @@ assert!(tree.skeleton.nodes.len() > 1);
 
 | example | what it shows |
 |---|---|
-| `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU, `C` draws the gameplay shape, `Y` runs the year (`FloraSeason::of_year`, 40 s a year). |
+| `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU, `C` draws the gameplay shape, `Y` runs the year (`FloraSeason::of_year`, 40 s a year), `H` hits the tree (`TreeShakes`). |
 | `gallery` | Renders 382 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, four deciduous presets and the pine turning, turned, half bare, bare and under snow) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
 | `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>[,<snow>]`, which `forest` takes too). The clock is fixed, so runs repeat. |
-| `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, or with `--seasons` the same grove fully grown through a year (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
-| `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--season <autumn>,<leaf fall>[,<snow>]` sets the season; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
+| `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, or with `--shake` the grove knocked by `TreeShakes` (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
+| `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--shake-animate` knocks the trees every few frames (every shake slot busy), `--season <autumn>,<leaf fall>[,<snow>]` sets the season; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
 
 ```sh
 cargo run --release --example showcase

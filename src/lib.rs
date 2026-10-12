@@ -139,6 +139,23 @@
 //! }
 //! ```
 //!
+//! # Trees that react
+//!
+//! [`TreeShakes`] swings the trees near a point (an axe on a trunk, a character pushing through,
+//! a blast): [`TreeShakes::shake`] a [`TreeShake`], and every tree within its radius swings away
+//! and back, dying away, while its leaves rustle, on every way a tree is drawn. Like the wind it
+//! lives in the shared buffer: no material changes, and nothing per tree while nothing shakes.
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::{TreeShake, TreeShakes};
+//!
+//! // An axe on the tree standing at the origin.
+//! fn chop(mut shakes: ResMut<TreeShakes>, time: Res<Time>) {
+//!     shakes.shake(TreeShake { at: Vec2::ZERO, radius: 1.0, strength: 2.0, ..default() }, &time);
+//! }
+//! ```
+//!
 //! # Gameplay shapes
 //!
 //! A [`TreeShape`] on a tree (opt-in: insert `TreeShape::default()`) is kept up to date by the
@@ -197,20 +214,21 @@ pub use scatter::{Scatter, ScatterPoint, poisson_disc};
 pub use shading::{
     FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWind,
     FloraWindBuffer, GustFront,
-    SharedFlora,
+    SharedFlora, TreeShake, TreeShakes,
 };
 pub use shape::{TreeShape, WoodCapsule};
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 /// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
-/// growth components, the presets and parameters, the wind, the season, the gameplay shape and the
-/// forest scatter.
+/// growth components, the presets and parameters, the wind, the season, the shakes, the gameplay
+/// shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront,
         LeafScan,
         LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, ScatterPoint, TreeAge,
-        TreeGenerated, TreeMature, TreeParams, TreePool, TreePreset, TreeShape, WindResponse, WoodCapsule, build_pool,
+        TreeGenerated, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, WindResponse,
+        WoodCapsule, build_pool,
     };
 }
 
