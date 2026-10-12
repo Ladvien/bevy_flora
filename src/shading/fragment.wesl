@@ -67,7 +67,7 @@ fn fragment(
         out.color.a
     );
 @if(FLORA_TOON)
-    out.color = vec4<f32>(out.color.rgb * toon_rim(pbr_input.N, pbr_input.V), out.color.a);
+    out.color = vec4<f32>(out.color.rgb * toon_rim(pbr_input.world_normal, pbr_input.V), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

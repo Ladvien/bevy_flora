@@ -18,13 +18,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.8 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.9 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.8"
+bevy_flora = "0.9"
 ```
 
 | feature | default | what it does |
@@ -96,7 +96,7 @@ Main-world cost per frame with every tree growing (a headless `App`, release bui
 | willow | 25.4 ms | 0.90 ms |
 | oak, 2 smoothing passes | 69.8 ms | 0.70 ms |
 
-Shadows follow the growth (the prepass shares the vertex shader), and the grown frames match the CPU path: over all 319 gallery scenarios the mean difference between the two renders is 0.07 of 255 (39 PNGs are byte-identical, the worst is `extreme_lagthick_6` at 1.25). What differs, and why, is listed on `GpuGrowth` in the docs: smoothing is computed once on the mature mesh and deformed, side counts stay at the mature count, `AllBranches` leaves keep their mature positions, and the `Mesh` assets (picking, physics, culling) are the mature tree. It needs storage buffers in the vertex stage, so not WebGL2; there the trees grow on the CPU.
+Shadows follow the growth (the prepass shares the vertex shader), and the grown frames match the CPU path: over all 357 gallery scenarios the mean difference between the two renders is 0.07 of 255 (47 PNGs are byte-identical, the worst is a toon maple at 1.33). What differs, and why, is listed on `GpuGrowth` in the docs: smoothing is computed once on the mature mesh and deformed, side counts stay at the mature count, `AllBranches` leaves keep their mature positions, and the `Mesh` assets (picking, physics, culling) are the mature tree. It needs storage buffers in the vertex stage, so not WebGL2; there the trees grow on the CPU.
 
 ### Drawing a forest: `TreePool`
 
@@ -268,9 +268,9 @@ assert!(tree.skeleton.nodes.len() > 1);
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU. |
-| `gallery` | Renders 319 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
+| `gallery` | Renders 357 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
-| `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA. The clock is fixed, so runs repeat. |
+| `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too). The clock is fixed, so runs repeat. |
 | `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple) or, with `--grove`, a grove of mixed species with a gust front crossing it (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
 | `forest` | The forest-scale benchmark: up to 100 000 trees on a grid under a shadow-casting sun, drawn from a `TreePool` (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
 

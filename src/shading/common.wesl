@@ -251,11 +251,14 @@ fn leaf_transmission(p: PbrInput, visibility: f32) -> vec3<f32> {
 // Toon lighting (`RenderStyle::Toon`, `FLORA_TOON` or the impostor's `params.y`), in place of
 // `apply_pbr_lighting`: each directional light's N.L is cut into three bands (0.15 shaded, 0.55
 // middle from N.L > 0, 1.0 lit from N.L > 0.5), times its colour, its shadow and the surface's
-// colour, plus the ambient light. Point and spot lights do not light a toon. Returns the
-// exposed colour `apply_pbr_lighting` would.
+// colour, plus the ambient light, all on the surface's own (geometric, painterly) normal. Point and
+// spot lights do not light a toon. Returns the exposed colour `apply_pbr_lighting` would.
 const TOON_PI: f32 = 3.14159265358979;
 
 fn toon_lighting(p: PbrInput) -> vec4<f32> {
+    // The geometric normal, not the one the detail maps perturbed: the bands would break up into
+    // the leaf scan's veins and the bark's crevices.
+    let n = p.world_normal;
     let base = p.material.base_color;
     let view_z = dot(vec4<f32>(
         view_bindings::view.view_from_world[0].z,
@@ -268,7 +271,7 @@ fn toon_lighting(p: PbrInput) -> vec4<f32> {
     let n_directional_lights = view_bindings::lights.n_directional_lights;
     for (var i: u32 = 0u; i < n_directional_lights; i = i + 1u) {
         let light = &view_bindings::lights.directional_lights[i];
-        let n_dot_l = dot(p.N, (*light).direction_to_light);
+        let n_dot_l = dot(n, (*light).direction_to_light);
         let band = select(select(0.15, 0.55, n_dot_l > 0.0), 1.0, n_dot_l > 0.5);
         var shadow = p.directional_shadow_factor;
         if (p.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
@@ -278,7 +281,7 @@ fn toon_lighting(p: PbrInput) -> vec4<f32> {
         sum = sum + (*light).color.rgb * (band * shadow);
     }
     let ambient = ambient_light(
-        p.world_position, p.N, p.V, saturate(dot(p.N, p.V)), base.rgb, vec3<f32>(0.0), 1.0, p.diffuse_occlusion
+        p.world_position, n, p.V, saturate(dot(n, p.V)), base.rgb, vec3<f32>(0.0), 1.0, p.diffuse_occlusion
     );
     return vec4<f32>(view_bindings::view.exposure * (base.rgb * sum / TOON_PI + ambient), base.a);
 }
