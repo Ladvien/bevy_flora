@@ -394,6 +394,8 @@ pub struct LeafShading {
     /// Multiplies the leaf colour for the light coming through it.
     pub transmission_tint: Color,
     /// Perceptual roughness of the upper side; the lower side is 0.3 rougher, capped at 1.
+    /// The gloss fades as the camera turns to face the sun, where a crown glows through its
+    /// leaves instead of reflecting the sun off them (which turned treetops white).
     pub roughness: f32,
     /// How visible the midrib and side veins are (0–1); leaf-shaped cards only.
     pub veins: f32,

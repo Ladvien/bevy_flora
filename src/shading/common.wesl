@@ -174,6 +174,21 @@ fn transmitted_light(
         + ambient_light(P, -N, -V, 1.0, through, vec3<f32>(0.0), 1.0, vec3<f32>(visibility));
 }
 
+// How much of a leaf's specular reflection to keep, seen along `V` (from the surface toward the
+// camera): all of it unless the camera looks toward a directional light, none when it looks
+// straight into it. A leaf card stands for a leaf, or a cluster of needles, whose many small
+// surfaces would scatter the sun's glint; a flat card seen against the sun reflects all of it
+// into the camera at once, and the crown's top turns white, as if it were snow or dead. Facing
+// the sun, a crown glows green through its leaves (`transmitted_light`) instead. Lit from the
+// side or from behind the camera nothing changes.
+fn leaf_gloss_toward_light(V: vec3<f32>) -> f32 {
+    var toward = 0.0;
+    for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
+        toward = max(toward, -dot(V, view_bindings::lights.directional_lights[i].direction_to_light));
+    }
+    return 1.0 - smoothstep(0.4, 0.8, toward);
+}
+
 // The surface of a leaf card, in place: veins, hue of the underside, gloss, crown occlusion.
 // `uv`: the card's own (0..1 across and from base to tip), `shade`: x is 1 on the upper side,
 // y is how much of the sky the leaf sees.
@@ -207,6 +222,7 @@ fn leaf_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, shade: vec2<f32>) {
 
     (*p).material.base_color = vec4<f32>(color, (*p).material.base_color.a);
     (*p).material.perceptual_roughness = select(min(flora.leaf.y + 0.3, 1.0), flora.leaf.y, upper);
+    (*p).material.reflectance = (*p).material.reflectance * leaf_gloss_toward_light((*p).V);
     (*p).diffuse_occlusion = (*p).diffuse_occlusion * shade.y;
     (*p).specular_occlusion = (*p).specular_occlusion * shade.y;
 }
