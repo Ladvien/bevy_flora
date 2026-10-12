@@ -216,26 +216,26 @@ fn shake_at(origin: vec3<f32>, time: f32) -> vec3<f32> {
 }
 
 // The leaf's movement in the tree's local space. `sway`: the leaf's direction scaled by how far
-// the vertex is from where the leaf is attached (xyz) and the leaf's phase (w).
-fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32) -> vec3<f32> {
+// the vertex is from where the leaf is attached (xyz) and the leaf's phase (w); `shake`:
+// `shake_at(origin, time)`, which the caller works out once for both this and `wind_bend`.
+fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32, shake: vec3<f32>) -> vec3<f32> {
     let wind = flora_wind[0];
     let motion = flora_wind[1];
     let rate = flora_wind[2];
     let t = time * wind.w * 2.0 * rate.y * flora.response.w + sway.w + tree_phase(origin);
     let w = smooth_triangle_wave(vec4<f32>(t * 1.975, t * 0.793, 0.0, 0.0));
-    let strength = wind.z + gust_front(origin, time) + SHAKE_RUSTLE * shake_at(origin, time).z;
+    let strength = wind.z + gust_front(origin, time) + SHAKE_RUSTLE * shake.z;
     return sway.xyz * (FLUTTER * motion.y * flora.response.y * strength * (w.x + w.y - 1.0));
 }
 
 // `world` bent downwind with the tree. `local_y`: the vertex's height in the tree's own units,
-// `scale_y`: the tree's scale along y.
-fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, time: f32) -> vec3<f32> {
+// `scale_y`: the tree's scale along y, `shake`: `shake_at(origin, time)`.
+fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, time: f32, shake: vec3<f32>) -> vec3<f32> {
     let wind = flora_wind[0];
     let motion = flora_wind[1];
     let rate = flora_wind[2];
     let front = flora_wind[3];
     let bump = gust_front(origin, time);
-    let shake = shake_at(origin, time);
     if wind.z <= 0.0 && bump <= 0.0 && shake.z <= 0.0 {
         return world;
     }
