@@ -23,6 +23,7 @@
 use std::f32::consts::{SQRT_2, TAU};
 
 use bevy::math::{Quat, Rect, Vec2, Vec3};
+use bevy::reflect::Reflect;
 use bevy::transform::components::Transform;
 
 use crate::rng::SeededRng;
@@ -43,7 +44,8 @@ const GROVE_RAGGEDNESS: f32 = 0.35;
 const GROVE_BEND: f32 = 0.5;
 
 /// How to spread trees over an area. Build one with [`Scatter::new`] and set what differs.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Scatter {
     /// The ground to cover: world x along the rectangle's x, world z along its y.
     pub area: Rect,
@@ -110,7 +112,8 @@ impl Scatter {
 }
 
 /// One tree of a [`Scatter`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScatterPoint {
     /// Where the trunk stands: world x and z.
     pub position: Vec2,

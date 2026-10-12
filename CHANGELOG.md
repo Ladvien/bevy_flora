@@ -5,6 +5,42 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.12.0] - 2026-10-12
+
+Planting forests. A new `scatter` module says where a forest's trees stand, so a game no longer
+places them on a grid. Nothing is drawn differently. The API only grows (a new module and two
+types in the prelude); the minor bump is for the feature.
+
+### Added
+
+- **`Scatter`** and **`ScatterPoint`** (`scatter` module, in the prelude): trunks at least
+  `spacing` apart and otherwise irregular (Bridson's Poisson-disc sampling; every spot of the
+  area within about two spacings of a trunk), species by weight (`species`), in groves about
+  `grove_size` wide whose borders bend (the nearest grove centre after a smooth value-noise warp)
+  or tree by tree at 0, and every tree its own yaw, uniform scale (`scale`, 0.85 to 1.15 by
+  default) and variant draw (taken modulo the pool's variants by `PooledTree`).
+  `Scatter::points_where` takes a density per spot (0 for a road, a lake or a clearing, a
+  fraction for open woodland) and only ever removes trees: a tree it keeps is the one `points`
+  gives. `ScatterPoint::transform(ground)` gives the tree's `Transform`. Pure CPU, deterministic
+  per seed, `Reflect`, and serde with the `serde` feature. **`poisson_disc`** gives the bare
+  points.
+- `forest --scatter <preset[:weight]>,...` plants one pool per species with `Scatter`, about
+  `--trees` of them, with `--grove <m>` (default 50; 0 mixes them tree by tree) and
+  `--clearing <m>`; it logs how long the placement took. The README shows one (`docs/scatter.jpg`).
+
+### Measured
+
+- **Placement** (Apple M4 Pro, release): 90 733 trees over a 3 km square, four species in 60 m
+  groves, take 0.18 to 0.20 s, once; the trunks' disc is most of it (one species without groves,
+  0.19 s).
+- **Nothing else moves.** All 377 gallery renders are byte-identical to 0.11.0's, the three README
+  clips frame-identical, and 100 000 pooled oaks on the benchmark's grid take 7.37 ms against
+  0.11.0's 7.35 (interleaved pairs).
+- **Looks.** A 3 000-tree forest of oak, birch, maple and pine (3:2:2:1) in 60 m groves around a
+  25 m clearing was looked at from the air, from 45 m and at eye level in summer and autumn: the
+  stands read as groves with curved borders and no grid rows; mixing tree by tree reads as salt
+  and pepper, as expected.
+
 ## [0.11.0] - 2026-10-12
 
 Seasons. Deciduous trees turn their autumn colour and shed their leaves, one leaf at a time, from
@@ -967,6 +1003,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.12.0]: https://github.com/Ladvien/bevy_flora/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Ladvien/bevy_flora/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Ladvien/bevy_flora/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Ladvien/bevy_flora/compare/v0.9.0...v0.9.1
