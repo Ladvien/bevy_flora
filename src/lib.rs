@@ -67,6 +67,11 @@
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
+//! [`Scatter`] says where the trees of a forest stand: trunks at least a spacing apart and
+//! otherwise irregular (Poisson-disc sampling), species in groves with bending borders, every
+//! tree its own yaw, size and variant, and a density per spot for clearings and roads. It is
+//! pure CPU and deterministic per seed; see [`scatter`].
+//!
 //! # Leaf shading and wind
 //!
 //! The plugin draws trees with [`FloraMaterial`]: a darker, glossier upper side of
@@ -164,6 +169,7 @@ pub mod plugin;
 pub mod pool;
 pub mod presets;
 pub mod rng;
+pub mod scatter;
 pub mod shading;
 pub mod skeleton;
 pub mod shape;
@@ -186,6 +192,7 @@ pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, T
 pub use pool::{PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
+pub use scatter::{Scatter, ScatterPoint, poisson_disc};
 pub use shading::{
     FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWind,
     FloraWindBuffer, GustFront,
@@ -195,13 +202,14 @@ pub use shape::{TreeShape, WoodCapsule};
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 /// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
-/// growth components, the presets and parameters, the wind, the season and the gameplay shape.
+/// growth components, the presets and parameters, the wind, the season, the gameplay shape and the
+/// forest scatter.
 pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront,
         LeafScan,
-        LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeGenerated, TreeMature,
-        TreeParams, TreePool, TreePreset, TreeShape, WindResponse, WoodCapsule, build_pool,
+        LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, ScatterPoint, TreeAge,
+        TreeGenerated, TreeMature, TreeParams, TreePool, TreePreset, TreeShape, WindResponse, WoodCapsule, build_pool,
     };
 }
 

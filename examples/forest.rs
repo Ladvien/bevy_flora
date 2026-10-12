@@ -8,10 +8,13 @@
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
-//!     [--season <autumn>,<leaf fall>]
+//!     [--season <autumn>,<leaf fall>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //! ```
 //!
-//! Trees stand on a square grid with a deterministic jitter and a random yaw. A
+//! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
+//! `--scatter oak:3,birch:1,...`, where `Scatter` puts them: trunks at least `--spacing` apart,
+//! the species in groves `--grove` metres wide (0 mixes them tree by tree), one pool per species,
+//! about `--trees` of them, around a clearing `--clearing` metres wide. A
 //! fixed camera 30 m above one corner looks across the grid toward its centre,
 //! so near, mid and far trees are all on screen. The window is 1920x1080 with
 //! vsync off and one shadow-casting directional light.
@@ -72,7 +75,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_flora::{
     FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
-    ProceduralTree, RenderStyle, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
+    ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -152,6 +155,12 @@ struct Args {
     screenshot: Option<PathBuf>,
     /// How far deciduous trees have turned and shed their leaves.
     season: FloraSeason,
+    /// Species and their shares, to spread with `Scatter` instead of the grid.
+    scatter: Option<Vec<(TreePreset, f32)>>,
+    /// How wide a grove of one species grows (`Scatter::grove_size`), with `--scatter`.
+    grove: f32,
+    /// Radius of a clearing at the centre, with `--scatter`.
+    clearing: f32,
 }
 
 impl Args {
@@ -169,7 +178,7 @@ fn usage() -> ! {
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
-         [--season <autumn>,<leaf fall>]"
+         [--season <autumn>,<leaf fall>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]"
     );
     std::process::exit(2);
 }
@@ -198,6 +207,9 @@ fn parse_args() -> Args {
         offscreen: false,
         screenshot: None,
         season: FloraSeason::SUMMER,
+        scatter: None,
+        grove: 50.0,
+        clearing: 0.0,
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -281,6 +293,20 @@ fn parse_args() -> Args {
             "--gust" => args.gust = Some(value(&mut it)),
             "--wind-animate" => args.wind_animate = true,
             "--deterministic" => args.deterministic = true,
+            "--scatter" => {
+                let list = it.next().unwrap_or_else(|| usage());
+                let species = list
+                    .split(',')
+                    .map(|item| {
+                        let (name, weight) = item.split_once(':').unwrap_or((item, "1"));
+                        let preset = TreePreset::ALL.into_iter().find(|p| p.name() == name).unwrap_or_else(|| usage());
+                        (preset, weight.parse::<f32>().unwrap_or_else(|_| usage()))
+                    })
+                    .collect();
+                args.scatter = Some(species);
+            }
+            "--grove" => args.grove = value(&mut it),
+            "--clearing" => args.clearing = value(&mut it),
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -331,6 +357,10 @@ struct Bench {
     frames: Vec<f32>,
     /// Offscreen target for `--screenshot`.
     target: Handle<Image>,
+    /// The side of the square the trees cover, in metres.
+    extent: f32,
+    /// How many trees were placed.
+    placed: u32,
 }
 
 /// Marks a tree the benchmark spawned.
@@ -390,6 +420,8 @@ fn main() {
             cpu_start: None,
             warm_frames: 0,
             target: Handle::default(),
+            extent: 0.0,
+            placed: 0,
         })
         .add_systems(Startup, setup)
         .add_systems(Update, drive)
@@ -411,9 +443,11 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut pools: ResMut<Assets<TreePool>>,
 ) {
-    let (side, extent) = grid(bench.args.trees, bench.args.spacing);
+    let placing = Instant::now();
+    let (trees, extent) = placements(&bench.args);
+    let placing = placing.elapsed().as_secs_f32() * 1000.0;
+    bench.extent = extent;
     let half = extent * 0.5;
-    let spacing = bench.args.spacing;
 
     commands.spawn((
         DirectionalLight {
@@ -469,10 +503,21 @@ fn setup(
         camera.insert(RenderTarget::Image(bench.target.clone().into()));
     }
 
-    let mut base = bench.args.preset.params();
-    base.seed = 1;
-    base.style = bench.args.style;
-    let pool = (bench.args.mode == Mode::Pool).then(|| {
+    // One species, or one per `--scatter` entry: a pool each in pool mode.
+    let bases: Vec<TreeParams> = bench
+        .args
+        .scatter
+        .as_ref()
+        .map_or_else(|| vec![bench.args.preset], |species| species.iter().map(|&(preset, _)| preset).collect())
+        .into_iter()
+        .map(|preset| {
+            let mut base = preset.params();
+            base.seed = 1;
+            base.style = bench.args.style;
+            base
+        })
+        .collect();
+    let pools: Vec<Handle<TreePool>> = if bench.args.mode == Mode::Pool {
         let mut lod = LodSettings::default();
         if let Some([lod1, lod2, impostor]) = bench.args.lod {
             lod.distances = LodDistances {
@@ -485,58 +530,82 @@ fn setup(
             lod.distances.impostor = f32::INFINITY;
         }
         let started = Instant::now();
-        let pool = build_pool(
-            &base,
-            VARIANTS,
-            f32::INFINITY,
-            &lod,
-            &mut meshes,
-        );
+        let built: Vec<_> = bases
+            .iter()
+            .map(|base| pools.add(build_pool(base, VARIANTS, f32::INFINITY, &lod, &mut meshes)))
+            .collect();
         eprintln!(
-            "forest: built a pool of {VARIANTS} variants in {:.2} s",
+            "forest: built {} pool(s) of {VARIANTS} variants in {:.2} s",
+            built.len(),
             started.elapsed().as_secs_f32()
         );
-        pools.add(pool)
-    });
-    for i in 0..bench.args.trees {
-        let mut rng = SeededRng::new(i as i32);
-        let jitter = spacing / 3.0;
-        let x = (i % side) as f32 * spacing - half + rng.range(-jitter, jitter);
-        let z = (i / side) as f32 * spacing - half + rng.range(-jitter, jitter);
-        let yaw = rng.range(0.0, std::f32::consts::TAU);
-        let transform = Transform::from_xyz(x, 0.0, z).with_rotation(Quat::from_rotation_y(yaw));
-        match &pool {
-            None => {
-                let mut params: TreeParams = base.clone();
-                params.seed = base.seed.wrapping_add((i % VARIANTS) as i32);
-                let mut tree = commands.spawn((ProceduralTree(params), transform, ForestTree));
-                match bench.args.mode {
-                    Mode::Gpu => {
-                        tree.insert(GpuGrowth);
-                    }
-                    // Young enough to keep growing for as long as the run takes.
-                    Mode::GpuLive => {
-                        tree.insert((GpuGrowth, TreeAge(3.0), Growing { rate: 0.01 }));
-                    }
-                    // The same, rebuilding the meshes on the CPU every frame.
-                    Mode::CpuLive => {
-                        tree.insert((TreeAge(3.0), Growing { rate: 0.01 }));
-                    }
-                    _ => {}
-                }
+        built
+    } else {
+        Vec::new()
+    };
+    bench.placed = trees.len() as u32;
+    eprintln!("forest: placed {} trees over {extent:.0} m in {placing:.1} ms", trees.len());
+    for (transform, species, variant) in trees {
+        let base = &bases[species];
+        if let Some(pool) = pools.get(species) {
+            commands.spawn((PooledTree { pool: pool.clone(), variant }, transform, ForestTree));
+            continue;
+        }
+        let mut params: TreeParams = base.clone();
+        params.seed = base.seed.wrapping_add(variant as i32);
+        let mut tree = commands.spawn((ProceduralTree(params), transform, ForestTree));
+        match bench.args.mode {
+            Mode::Gpu => {
+                tree.insert(GpuGrowth);
             }
-            Some(pool) => {
-                commands.spawn((
-                    PooledTree {
-                        pool: pool.clone(),
-                        variant: i % VARIANTS,
-                    },
-                    transform,
-                    ForestTree,
-                ));
+            // Young enough to keep growing for as long as the run takes.
+            Mode::GpuLive => {
+                tree.insert((GpuGrowth, TreeAge(3.0), Growing { rate: 0.01 }));
             }
+            // The same, rebuilding the meshes on the CPU every frame.
+            Mode::CpuLive => {
+                tree.insert((TreeAge(3.0), Growing { rate: 0.01 }));
+            }
+            _ => {}
         }
     }
+}
+
+/// Where the trees stand (transform, species, variant) and the side of the square they cover:
+/// a jittered grid, or with `--scatter` a `Scatter` sized to hold about `--trees` trees.
+fn placements(args: &Args) -> (Vec<(Transform, usize, u32)>, f32) {
+    let spacing = args.spacing;
+    let Some(species) = &args.scatter else {
+        let (side, extent) = grid(args.trees, spacing);
+        let half = extent * 0.5;
+        let trees = (0..args.trees)
+            .map(|i| {
+                let mut rng = SeededRng::new(i as i32);
+                let jitter = spacing / 3.0;
+                let x = (i % side) as f32 * spacing - half + rng.range(-jitter, jitter);
+                let z = (i / side) as f32 * spacing - half + rng.range(-jitter, jitter);
+                let yaw = rng.range(0.0, std::f32::consts::TAU);
+                (Transform::from_xyz(x, 0.0, z).with_rotation(Quat::from_rotation_y(yaw)), 0, i % VARIANTS)
+            })
+            .collect();
+        return (trees, extent);
+    };
+    // Poisson-disc trunks take about 1 / 0.68 spacing² each.
+    let extent = (args.trees as f32 / 0.68).sqrt() * spacing;
+    let half = extent * 0.5;
+    let scatter = Scatter {
+        seed: 1,
+        species: species.iter().map(|&(_, weight)| weight).collect(),
+        grove_size: args.grove,
+        ..Scatter::new(Rect::new(-half, -half, half, half), spacing)
+    };
+    let clearing = args.clearing;
+    let trees = scatter
+        .points_where(|at| if at.length() < clearing { 0.0 } else { 1.0 })
+        .into_iter()
+        .map(|tree| (tree.transform(0.0), tree.species, tree.variant % VARIANTS))
+        .collect();
+    (trees, extent)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -561,14 +630,14 @@ fn drive(
             if unfinished.is_empty() {
                 eprintln!(
                     "forest: {} trees ready after {:.1} s",
-                    bench.args.trees,
+                    bench.placed,
                     bench.loaded.elapsed().as_secs_f32()
                 );
                 bench.loaded = Instant::now();
                 bench.phase = Phase::Warmup;
                 if let Some(speed) = bench.args.gust {
-                    // From the grid's -x edge, along +x, across every tree.
-                    let (_, extent) = grid(bench.args.trees, bench.args.spacing);
+                    // From the forest's -x edge, along +x, across every tree.
+                    let extent = bench.extent;
                     wind.launch_gust(
                         GustFront {
                             origin: Vec2::new(-extent * 0.5, 0.0),
@@ -653,7 +722,7 @@ fn report(bench: &Bench) {
         "forest {} {} {} trees: {:.2} ms/frame ({:.1} fps), p95 {:.2} ms, median {:.2} ms, min {:.2} ms, cpu {} ms/frame",
         bench.args.mode.name(),
         bench.args.preset.name(),
-        bench.args.trees,
+        bench.placed,
         mean * 1000.0,
         1.0 / mean,
         p95 * 1000.0,
