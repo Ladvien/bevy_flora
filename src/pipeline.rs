@@ -1,6 +1,6 @@
 //! One call from parameters + age to CPU meshes.
 
-use crate::foliage::{collect_leaf_points, foliage_mesh};
+use crate::foliage::{collect_leaf_points, foliage_mesh_styled};
 use crate::mesh::MeshData;
 use crate::mesh::branch::{apply_pipe_radius, skeleton_mesh};
 use crate::params::TreeParams;
@@ -59,7 +59,7 @@ pub(crate) fn build_aged(full: &Skeleton, params: &TreeParams, age: f32) -> Tree
         if points.is_empty() {
             MeshData::default()
         } else {
-            foliage_mesh(&points, &params.foliage)
+            foliage_mesh_styled(&points, &params.foliage, params.style)
         }
     } else {
         MeshData::default()

@@ -15,7 +15,9 @@ import bevy_pbr::render::{
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing, calculate_view},
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 };
-import package::shading::common::{flora, wind_bend, oct_decode, transmitted_light, leaf_gloss_toward_light};
+import package::shading::common::{
+    flora, wind_bend, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
+};
 
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -126,7 +128,13 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     p.directional_shadow_factor = baked.b;
 
     var out: FragmentOutput;
-    out.color = apply_pbr_lighting(p);
+    // The material's `params.y` is the render style: 2 is toon.
+    let toon = params.y > 1.5;
+    if toon {
+        out.color = toon_lighting(p);
+    } else {
+        out.color = apply_pbr_lighting(p);
+    }
     let through = color.rgb * flora.tint.rgb * flora.leaf.x * baked.a;
     out.color = vec4<f32>(
         out.color.rgb + view.exposure * transmitted_light(
@@ -134,6 +142,9 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         ),
         color.a,
     );
+    if toon {
+        out.color = vec4<f32>(out.color.rgb * toon_rim(N, p.V), out.color.a);
+    }
     out.color = main_pass_post_lighting_processing(p, out.color);
     return out;
 }

@@ -7,7 +7,7 @@
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--deterministic]
-//!     [--offscreen] [--screenshot <path>]
+//!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw. A
@@ -71,7 +71,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_flora::{
     FloraPlugin, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings, PooledTree,
-    ProceduralTree, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
+    ProceduralTree, RenderStyle, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -118,6 +118,8 @@ struct Args {
     trees: u32,
     mode: Mode,
     preset: TreePreset,
+    /// How the trees are drawn.
+    style: RenderStyle,
     frames: usize,
     warmup: Duration,
     spacing: f32,
@@ -163,7 +165,7 @@ fn usage() -> ! {
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--deterministic] \
-         [--offscreen] [--screenshot <path>]"
+         [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]"
     );
     std::process::exit(2);
 }
@@ -173,6 +175,7 @@ fn parse_args() -> Args {
         trees: 10_000,
         mode: Mode::Pool,
         preset: TreePreset::Oak,
+        style: RenderStyle::Natural,
         frames: 600,
         warmup: Duration::from_secs(5),
         spacing: 8.0,
@@ -216,6 +219,14 @@ fn parse_args() -> Args {
                     .into_iter()
                     .find(|p| p.name() == name)
                     .unwrap_or_else(|| usage());
+            }
+            "--style" => {
+                args.style = match it.next().as_deref() {
+                    Some("natural") => RenderStyle::Natural,
+                    Some("painterly") => RenderStyle::Painterly,
+                    Some("toon") => RenderStyle::Toon,
+                    _ => usage(),
+                }
             }
             "--frames" => args.frames = value(&mut it),
             "--warmup-secs" => args.warmup = Duration::from_secs_f32(value(&mut it)),
@@ -448,6 +459,7 @@ fn setup(
 
     let mut base = bench.args.preset.params();
     base.seed = 1;
+    base.style = bench.args.style;
     let pool = (bench.args.mode == Mode::Pool).then(|| {
         let mut lod = LodSettings::default();
         if let Some([lod1, lod2, impostor]) = bench.args.lod {

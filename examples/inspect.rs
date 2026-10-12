@@ -6,6 +6,7 @@
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
+//!     [--style <natural|painterly|toon>]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -44,8 +45,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FloraPlugin, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree, TreeAge, TreePool, TreePreset,
-    build_pool, build_tree,
+    FloraPlugin, FloraWind, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreePool,
+    TreePreset, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -82,6 +83,7 @@ struct Args {
     level: Option<u32>,
     /// No tree: the background the tree's pixels are measured against.
     empty: bool,
+    style: RenderStyle,
     msaa: bool,
 }
 
@@ -90,7 +92,7 @@ fn usage() -> ! {
         "usage: inspect --out <dir> [--preset <name>] [--mode pool|tree] [--age <a>] [--seed <n>] \
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
-         [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]"
+         [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>]"
     );
     std::process::exit(2);
 }
@@ -120,6 +122,7 @@ fn parse_args() -> Args {
         impostors: true,
         level: None,
         empty: false,
+        style: RenderStyle::Natural,
         msaa: true,
     };
     let mut have_out = false;
@@ -187,6 +190,14 @@ fn parse_args() -> Args {
             "--no-impostors" => args.impostors = false,
             "--level" => args.level = Some(value(&mut it)),
             "--empty" => args.empty = true,
+            "--style" => {
+                args.style = match it.next().as_deref() {
+                    Some("natural") => RenderStyle::Natural,
+                    Some("painterly") => RenderStyle::Painterly,
+                    Some("toon") => RenderStyle::Toon,
+                    _ => usage(),
+                }
+            }
             "--no-msaa" => args.msaa = false,
             _ => usage(),
         }
@@ -293,6 +304,7 @@ fn setup(
 
     let mut params = shoot.args.preset.params();
     params.seed = shoot.args.seed;
+    params.style = shoot.args.style;
     let mature = build_tree(&params, shoot.args.age);
     shoot.height = mature
         .trunk

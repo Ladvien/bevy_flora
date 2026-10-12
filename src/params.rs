@@ -376,7 +376,8 @@ pub struct FoliageParams {
     /// Modulate density by crown height.
     pub use_crown_density: bool,
     /// How far leaf normals bend from each card's own facing toward pointing out of the crown
-    /// (0 = flat cards, 1 = a soft round crown); baked into the mesh.
+    /// (0 = flat cards, 1 = a soft round crown); baked into the mesh. The painterly and toon
+    /// styles ([`RenderStyle`]) ignore it: their normals point out of each leaf's own clump.
     pub normal_bend: f32,
     /// Per-leaf brightness variation (0–0.5): each leaf's colour is scaled by a factor in 1 ± this.
     pub color_variation: f32,
@@ -579,6 +580,24 @@ impl Default for BarkParams {
     }
 }
 
+/// A stylised way to draw a tree, derived from its skeleton: see [`TreeParams::style`].
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RenderStyle {
+    /// Physically based lighting on crown-bent normals (the crown shades as one soft volume).
+    #[default]
+    Natural,
+    /// Painterly clumps: the leaves of each primary branch (or leader, or split) shade as one
+    /// soft clump of their own: every leaf's normal is bent fully toward pointing out of its
+    /// clump's centre, not the crown's, so a crown reads as a cluster of rounded masses with a
+    /// lit side and a shaded side each. Lighting is as in [`RenderStyle::Natural`].
+    Painterly,
+    /// Toon shading: each directional light's `N·L` is cut into three bands (shaded, middle and
+    /// lit), light through backlit leaves is kept, and an ink rim darkens the surface toward its
+    /// silhouette. Leaves keep the painterly clumps' normals.
+    Toon,
+}
+
 /// Complete description of a tree.
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -603,6 +622,8 @@ pub struct TreeParams {
     pub trunk_color: Color,
     /// Surface detail of the wood: a bundled bark scan that fades in as a branch thickens.
     pub bark: BarkParams,
+    /// How the tree is drawn: naturally lit, as painted clumps, or as a toon with an ink rim.
+    pub style: RenderStyle,
 }
 
 impl Default for TreeParams {
@@ -618,6 +639,7 @@ impl Default for TreeParams {
             wind: WindResponse::default(),
             trunk_color: Color::srgb(0.545, 0.271, 0.075),
             bark: BarkParams::default(),
+            style: RenderStyle::Natural,
         }
     }
 }

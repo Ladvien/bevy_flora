@@ -219,7 +219,7 @@ impl Source<'_> {
         if kept.is_empty() {
             MeshData::default()
         } else {
-            foliage_mesh_coarse(&kept, &self.params.foliage)
+            foliage_mesh_coarse(&kept, &self.params.foliage, self.params.style)
         }
     }
 

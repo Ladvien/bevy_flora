@@ -41,7 +41,7 @@ use bevy::window::WindowResolution;
 use bevy_flora::{
     CrownShape, FloraPlugin, FloraWind, FoliagePlacement, GpuGrowth, GpuGrowthSupport, LeafOrientation, LeafStyle,
     MeshData,
-    NodeKind, ProceduralTree, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
+    NodeKind, ProceduralTree, RenderStyle, TreeAge, TreeMeshes, TreeParams, TreePreset, TrunkTermination, build_tree,
 };
 
 const WINDOW: UVec2 = UVec2::new(1280, 960);
@@ -312,6 +312,23 @@ fn scenarios() -> Vec<Scenario> {
         params.trunk.twist = 180.0;
         params.branches.twist = 90.0;
         add(format!("wobble_{}", p.name()), params, inf);
+    }
+
+    // The painterly and toon looks on every preset, and while growing (CPU and GPU meshes bake
+    // their clumps from different leaves).
+    for (name, style) in [("painterly", RenderStyle::Painterly), ("toon", RenderStyle::Toon)] {
+        for p in TreePreset::ALL {
+            let mut params = preset(p);
+            params.style = style;
+            add(format!("{name}_{}", p.name()), params, inf);
+        }
+        for p in [TreePreset::Oak, TreePreset::Maple] {
+            for age in [2.0, 5.0] {
+                let mut params = preset(p);
+                params.style = style;
+                add(format!("{name}young_{}_{age}", p.name()), params, age);
+            }
+        }
     }
 
     // Growth series at odd ages for drooping and forking presets.

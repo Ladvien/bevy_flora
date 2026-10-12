@@ -248,6 +248,46 @@ fn leaf_transmission(p: PbrInput, visibility: f32) -> vec3<f32> {
     );
 }
 
+// Toon lighting (`RenderStyle::Toon`, `FLORA_TOON` or the impostor's `params.y`), in place of
+// `apply_pbr_lighting`: each directional light's N.L is cut into three bands (0.15 shaded, 0.55
+// middle from N.L > 0, 1.0 lit from N.L > 0.5), times its colour, its shadow and the surface's
+// colour, plus the ambient light. Point and spot lights do not light a toon. Returns the
+// exposed colour `apply_pbr_lighting` would.
+const TOON_PI: f32 = 3.14159265358979;
+
+fn toon_lighting(p: PbrInput) -> vec4<f32> {
+    let base = p.material.base_color;
+    let view_z = dot(vec4<f32>(
+        view_bindings::view.view_from_world[0].z,
+        view_bindings::view.view_from_world[1].z,
+        view_bindings::view.view_from_world[2].z,
+        view_bindings::view.view_from_world[3].z
+    ), p.world_position);
+
+    var sum = vec3<f32>(0.0);
+    let n_directional_lights = view_bindings::lights.n_directional_lights;
+    for (var i: u32 = 0u; i < n_directional_lights; i = i + 1u) {
+        let light = &view_bindings::lights.directional_lights[i];
+        let n_dot_l = dot(p.N, (*light).direction_to_light);
+        let band = select(select(0.15, 0.55, n_dot_l > 0.0), 1.0, n_dot_l > 0.5);
+        var shadow = p.directional_shadow_factor;
+        if (p.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
+                && ((*light).flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
+            shadow = shadow * fetch_directional_shadow(i, p.world_position, p.world_normal, view_z, p.frag_coord.xy);
+        }
+        sum = sum + (*light).color.rgb * (band * shadow);
+    }
+    let ambient = ambient_light(
+        p.world_position, p.N, p.V, saturate(dot(p.N, p.V)), base.rgb, vec3<f32>(0.0), 1.0, p.diffuse_occlusion
+    );
+    return vec4<f32>(view_bindings::view.exposure * (base.rgb * sum / TOON_PI + ambient), base.a);
+}
+
+// The toon's ink: 1 where the surface faces the camera, darker (0.35) toward its silhouette.
+fn toon_rim(N: vec3<f32>, V: vec3<f32>) -> f32 {
+    return mix(0.35, 1.0, smoothstep(0.05, 0.3, abs(dot(N, V))));
+}
+
 // Schüler's cotangent frame ("Followup: Normal Mapping Without Precomputed Tangents", 2006): the
 // tangent and bitangent of `uv` at `p` from screen-space derivatives (the meshes carry no
 // tangents), scaled to the same length. Columns: T (along u), B (along v), N.
