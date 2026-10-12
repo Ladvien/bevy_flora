@@ -171,13 +171,16 @@ fn venation_image() -> Image {
         chain.extend_from_slice(&level);
         (w, h) = (nw, nh);
     }
+    // `Image::new` takes the base level alone (debug builds check its length); the chain replaces
+    // the data afterwards, as for the scans' images.
     let mut image = Image::new(
         Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
         TextureDimension::D2,
-        chain,
+        chain[..width * height].to_vec(),
         TextureFormat::R8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
+    image.data = Some(chain);
     image.texture_descriptor.mip_level_count = levels;
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::ClampToEdge,

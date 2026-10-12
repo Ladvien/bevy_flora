@@ -73,8 +73,9 @@ two binaries.
   7.55 to 7.39 (mean pixel difference); level 1 from 0.248 to 0.210 and level 2 from 0.378 to
   0.350.
 - **CPU against GPU growth** (`gallery` and `gallery --gpu`, `compare_gallery`): over all 319
-  scenarios the mean difference is 0.066 of 255 (0.7.0: 0.076), the worst a maple under the pipe
-  model at 1.25 (1.83). No `stats.tsv` flag, no warning or error in either log.
+  scenarios the mean difference is 0.066 of 255 (0.7.0: 0.076), the worst `extreme_lagthick_6` at
+  1.25 (a willow at 1.83). 39 PNGs are byte-identical. No `stats.tsv` flag, no warning or error in
+  either log.
 - **Growth.** A 192-frame growth clip of the oak and of the maple, on both paths: the largest
   frame-to-frame step is at most 1.11 times its neighbours' (limit 2), so leaves neither pop nor
   change shape as the tree grows.
