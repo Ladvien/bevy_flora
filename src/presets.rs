@@ -182,6 +182,7 @@ fn oak() -> TreeParams {
             rotation_variation: 0.6,
             use_crown_density: true,
             color: Color::srgb(0.176, 0.314, 0.086),
+            scan: Some(LeafScan::Oak),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -356,6 +357,7 @@ fn willow() -> TreeParams {
             rotation_variation: 0.8,
             use_crown_density: true,
             color: Color::srgb(0.565, 0.690, 0.376),
+            scan: Some(LeafScan::Willow),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -443,6 +445,7 @@ fn birch() -> TreeParams {
             rotation_variation: 0.5,
             use_crown_density: true,
             color: Color::srgb(0.486, 0.804, 0.486),
+            scan: Some(LeafScan::Birch),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -704,6 +707,7 @@ fn bonsai() -> TreeParams {
             rotation_variation: 0.7,
             use_crown_density: true,
             color: Color::srgb(0.208, 0.369, 0.231),
+            scan: Some(LeafScan::Bonsai),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -791,6 +795,7 @@ fn maple() -> TreeParams {
             rotation_variation: 0.6,
             use_crown_density: true,
             color: Color::srgb(0.133, 0.322, 0.133),
+            scan: Some(LeafScan::Maple),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -971,6 +976,7 @@ fn poplar() -> TreeParams {
             rotation_variation: 0.45,
             use_crown_density: true,
             color: Color::srgb(0.404, 0.545, 0.306),
+            scan: Some(LeafScan::Poplar),
             ..Default::default()
         },
         growth: GrowthParams::default(),
@@ -1232,6 +1238,7 @@ fn japanese_maple() -> TreeParams {
             rotation_variation: 0.65,
             use_crown_density: true,
             color: Color::srgb(0.698, 0.133, 0.133),
+            scan: Some(LeafScan::JapaneseMaple),
             ..Default::default()
         },
         growth: GrowthParams::default(),

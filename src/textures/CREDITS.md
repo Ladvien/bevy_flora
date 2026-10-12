@@ -21,3 +21,10 @@ originals, produced by `tools/prepare_textures.py`.
 | bark/hackberry_color.jpg, bark/hackberry_normal.jpg | chinese_hackberry_bark (Poly Haven) | Charlotte Baglioni | <https://polyhaven.com/a/chinese_hackberry_bark> | CC0 1.0 | 1.8 x 3.6 |
 | bark/brown_color.jpg, bark/brown_normal.jpg | bark_brown_02 (Poly Haven) | Rob Tuytel | <https://polyhaven.com/a/bark_brown_02> | CC0 1.0 | 1.0 x 1.0 |
 | bark/metasequoia_color.jpg, bark/metasequoia_normal.jpg | metasequoia_bark (Poly Haven) | Charlotte Baglioni | <https://polyhaven.com/a/metasequoia_bark> | CC0 1.0 | 1.94 x 1.94 |
+| leaves/oak_color.jpg, leaves/oak_normal.jpg | LeafSet016 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet016> | CC0 1.0 | n/a (leaf atlas) |
+| leaves/willow_color.jpg, leaves/willow_normal.jpg | LeafSet013 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet013> | CC0 1.0 | n/a (leaf atlas) |
+| leaves/birch_color.jpg, leaves/birch_normal.jpg | LeafSet014 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet014> | CC0 1.0 | n/a (leaf atlas) |
+| leaves/bonsai_color.jpg, leaves/bonsai_normal.jpg | LeafSet022 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet022> | CC0 1.0 | n/a (leaf atlas) |
+| leaves/maple_color.jpg, leaves/maple_normal.jpg | LeafSet010 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet010> | CC0 1.0 | n/a (leaf atlas) |
+| leaves/poplar_color.jpg, leaves/poplar_normal.jpg | LeafSet024 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet024> | CC0 1.0 | n/a (leaf atlas) |
+| leaves/japanese_maple_color.jpg, leaves/japanese_maple_normal.jpg | LeafSet021 (ambientCG) | ambientCG | <https://ambientcg.com/a/LeafSet021> | CC0 1.0 | n/a (leaf atlas) |

@@ -16,7 +16,7 @@ use crate::plugin::{
     Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, build_in_batches,
     replace_mesh,
 };
-use crate::shading::{BarkLibrary, FloraWindBuffer, Surface};
+use crate::shading::{FloraWindBuffer, Surface, TextureLibrary};
 use crate::skeleton::generate_skeleton;
 
 /// What a tree that grows on the GPU draws with.
@@ -114,12 +114,14 @@ fn sync_growth(materials: &mut Assets<GrowthMaterial>, handle: &Handle<GrowthMat
         && (material.base.base_color != surface.color
             || material.extension.flora != surface.uniform
             || material.extension.detail_color != detail_color
-            || material.extension.detail_normal != detail_normal)
+            || material.extension.detail_normal != detail_normal
+            || material.extension.venation != surface.venation)
     {
         material.base.base_color = surface.color;
         material.extension.flora = surface.uniform;
         material.extension.detail_color = detail_color;
         material.extension.detail_normal = detail_normal;
+        material.extension.venation = surface.venation.clone();
     }
 }
 
@@ -132,7 +134,7 @@ pub(crate) fn rebuild_gpu_trees(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     support: Res<GpuGrowthSupport>,
     wind: Res<FloraWindBuffer>,
-    mut bark: BarkLibrary,
+    mut textures: TextureLibrary,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
@@ -196,9 +198,8 @@ pub(crate) fn rebuild_gpu_trees(
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
                 }
-                let wood_bark = bark.of(params);
-                sync_growth(&mut materials, &paint.trunk, &Surface::wood(params, wood_bark));
-                sync_growth(&mut materials, &paint.foliage, &Surface::leaves(params));
+                sync_growth(&mut materials, &paint.trunk, &textures.wood(params));
+                sync_growth(&mut materials, &paint.foliage, &textures.leaves(params));
                 match (&mut render.foliage, leaves) {
                     (Some((child, handle)), Some(leaves)) => {
                         replace_mesh(&mut commands, &mut meshes, *child, handle, leaves);
@@ -228,8 +229,8 @@ pub(crate) fn rebuild_gpu_trees(
                 progress = state.trunk_progress;
                 let nodes = buffers.add(state_buffer(&state));
 
-                let trunk_material = materials.add(growth_material(&nodes, &Surface::wood(params, bark.of(params)), &wind));
-                let foliage_material = materials.add(growth_material(&nodes, &Surface::leaves(params), &wind));
+                let trunk_material = materials.add(growth_material(&nodes, &textures.wood(params), &wind));
+                let foliage_material = materials.add(growth_material(&nodes, &textures.leaves(params), &wind));
                 let trunk_mesh = meshes.add(wood);
                 let trunk = commands
                     .spawn((

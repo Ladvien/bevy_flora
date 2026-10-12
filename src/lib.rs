@@ -95,8 +95,17 @@
 //! bark never slides, and [`BarkParams`] fades it in as a branch thickens: smooth wood below
 //! `smooth_below` metres of radius, the whole scan above `fissured_above`. The scan's average
 //! colour is divided out of the base colour, so a textured tree keeps its preset colour. The
-//! images are compiled in by the default `textures` feature (about 3.2 MB); without it every scan
-//! is absent and wood is plain colour.
+//! images are compiled in by the default `textures` feature (about 3.7 MB with the leaf scans);
+//! without it every scan is absent and wood is plain colour.
+//!
+//! # Leaf scans and grown veins
+//!
+//! A [`FoliageParams::scan`] ([`LeafScan`]) cuts leaf cards to the real outline of a bundled leaf
+//! scan (one of four leaves of an atlas, by a hash of the leaf's own random draws) and the leaf
+//! shader wears the atlas's colour and normal map on them. Leaves without a scan keep the
+//! procedural outline and get veins grown by space colonisation ([`venation`]), drawn from one
+//! small image every such leaf shares. Both need the `textures` feature only for the scans: the
+//! veins are grown at run time.
 //!
 //! # Building meshes without Bevy's ECS
 //!
@@ -123,6 +132,8 @@ pub mod presets;
 pub mod rng;
 pub mod shading;
 pub mod skeleton;
+mod textures;
+pub mod venation;
 
 pub use crown::CrownShape;
 pub use foliage::LeafPoint;
@@ -132,7 +143,7 @@ pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
 pub use lod::{LodDistances, LodSettings, build_lods};
 pub use mesh::MeshData;
 pub use params::{
-    BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, LeafOrientation, LeafShading,
+    BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, LeafOrientation, LeafScan, LeafShading,
     LeafStyle, MeshParams, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
 };
 pub use pipeline::{TreeMeshes, build_tree};

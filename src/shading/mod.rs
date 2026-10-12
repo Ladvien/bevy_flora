@@ -45,6 +45,7 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use bevy::time::Time;
 
+use crate::foliage::uses_scan;
 use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{LeafStyle, TreeParams};
@@ -53,7 +54,7 @@ mod share;
 pub use share::SharedFlora;
 
 mod textures;
-pub use textures::{BarkLibrary, BarkTexture, FloraTextures};
+pub use textures::{BarkTexture, FloraTextures, LeafTexture, TextureLibrary};
 
 /// A gust that sweeps across the world: a band of stronger wind, `width` metres deep, moving
 /// along `direction` at `speed`. Launch it with [`FloraWind::launch_gust`].
@@ -240,6 +241,8 @@ pub struct FloraKey {
     pub leaf: bool,
     /// Detail textures (bark): see [`FloraExtension::detail_color`]. True when both maps are set.
     pub detail: bool,
+    /// Leaf veins from an image: see [`FloraExtension::venation`].
+    pub venation: bool,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -266,11 +269,21 @@ pub struct FloraExtension {
     /// The normal map of the surface's detail (tangent space, OpenGL convention).
     #[texture(104)]
     pub detail_normal: Option<Handle<Image>>,
+    /// The image of leaf veins (`R8`, the card's UVs address it): the veins of a leaf without a
+    /// scan, drawn by the leaf shader, or `None` for none. See
+    /// [`FloraTextures::venation`].
+    #[texture(106)]
+    #[sampler(107)]
+    pub venation: Option<Handle<Image>>,
 }
 
 impl From<&FloraExtension> for FloraKey {
     fn from(extension: &FloraExtension) -> Self {
-        Self { leaf: extension.leaf, detail: extension.detail_color.is_some() && extension.detail_normal.is_some() }
+        Self {
+            leaf: extension.leaf,
+            detail: extension.detail_color.is_some() && extension.detail_normal.is_some(),
+            venation: extension.venation.is_some(),
+        }
     }
 }
 
@@ -310,6 +323,12 @@ pub(crate) fn specialize_flora(
     layout: &MeshVertexBufferLayoutRef,
     key: FloraKey,
 ) -> Result<(), SpecializedMeshPipelineError> {
+    if key.venation
+        && layout.0.contains(Mesh::ATTRIBUTE_UV_0.id)
+        && let Some(fragment) = descriptor.fragment.as_mut()
+    {
+        fragment.shader_defs.push("FLORA_VENATION".into());
+    }
     if key.detail
         && layout.0.contains(Mesh::ATTRIBUTE_UV_0.id)
         && layout.0.contains(Mesh::ATTRIBUTE_UV_1.id)
@@ -343,11 +362,12 @@ pub(crate) fn flora_base(color: Color) -> StandardMaterial {
 }
 
 /// What a flora material is made of, besides the wind: its base colour, the uniform the shaders
-/// read, whether it is for leaves, and the bark it wears. Two trees with equal surfaces share a
-/// material ([`SharedFlora`]).
+/// read, whether it is for leaves, and the textures it wears (bark, a leaf scan's atlas, or the
+/// image of leaf veins). Two trees with equal surfaces share a material ([`SharedFlora`]).
 #[derive(Clone, Debug)]
 pub(crate) struct Surface {
-    /// The material's base colour: for scanned wood the preset colour over the scan's average.
+    /// The material's base colour: for scanned wood or leaves the preset colour over the
+    /// scan's average.
     pub color: Color,
     /// What the flora shaders read.
     pub uniform: FloraUniform,
@@ -355,6 +375,10 @@ pub(crate) struct Surface {
     pub leaf: bool,
     /// The bark scan wood wears, with its images.
     pub bark: Option<BarkTexture>,
+    /// The leaf scan leaves wear, with its atlas.
+    pub leaf_scan: Option<LeafTexture>,
+    /// The image of leaf veins a leaf without a scan wears.
+    pub venation: Option<Handle<Image>>,
 }
 
 impl Surface {
@@ -366,17 +390,34 @@ impl Surface {
             uniform.bark_mean = Vec4::new(bark.mean.red, bark.mean.green, bark.mean.blue, 0.0);
         }
         let color = bark.as_ref().map_or(params.trunk_color, |bark| bark.base_color(params.trunk_color));
-        Self { color, uniform, leaf: false, bark }
+        Self { color, uniform, leaf: false, bark, leaf_scan: None, venation: None }
     }
 
-    /// The leaves of a tree with `params`.
-    pub(crate) fn leaves(params: &TreeParams) -> Self {
-        Self { color: params.foliage.color, uniform: FloraUniform::new(params), leaf: true, bark: None }
+    /// The leaves of a tree with `params`, wearing `leaf_scan`'s atlas, or `venation`'s veins.
+    /// Cards cut to a scan's outline have the real leaf's veins in the atlas, so the uniform
+    /// draws none of its own on them, whether or not the atlas could be loaded.
+    pub(crate) fn leaves(
+        params: &TreeParams,
+        leaf_scan: Option<LeafTexture>,
+        venation: Option<Handle<Image>>,
+    ) -> Self {
+        let mut uniform = FloraUniform::new(params);
+        if uses_scan(&params.foliage) {
+            uniform.leaf.z = 0.0;
+        }
+        let color = leaf_scan.as_ref().map_or(params.foliage.color, |scan| scan.base_color(params.foliage.color));
+        Self { color, uniform, leaf: true, bark: None, leaf_scan, venation }
     }
 
     /// The colour and normal maps the material binds, if it has them.
     pub(crate) fn detail(&self) -> (Option<Handle<Image>>, Option<Handle<Image>>) {
-        (self.bark.as_ref().map(|bark| bark.color.clone()), self.bark.as_ref().map(|bark| bark.normal.clone()))
+        if let Some(bark) = &self.bark {
+            (Some(bark.color.clone()), Some(bark.normal.clone()))
+        } else if let Some(scan) = &self.leaf_scan {
+            (Some(scan.color.clone()), Some(scan.normal.clone()))
+        } else {
+            (None, None)
+        }
     }
 }
 
@@ -390,6 +431,7 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
             leaf: surface.leaf,
             detail_color,
             detail_normal,
+            venation: surface.venation.clone(),
         },
     }
 }
@@ -605,6 +647,80 @@ mod tests {
 
         // No direction, no front.
         assert_eq!(pack(Some(GustFront { direction: Vec2::ZERO, ..front })), (Vec4::ZERO, Vec4::ZERO));
+    }
+
+    /// The surfaces of `params`'s wood and leaves, resolved through the library in a bare world
+    /// that has image assets.
+    fn surfaces(params: &TreeParams, images: bool) -> (Surface, Surface) {
+        use bevy::ecs::system::SystemState;
+        let mut world = World::new();
+        world.init_resource::<FloraTextures>();
+        if images {
+            world.init_resource::<Assets<Image>>();
+        }
+        let mut state = SystemState::<TextureLibrary>::new(&mut world);
+        let mut library = state.get_mut(&mut world).expect("the library's resources exist");
+        (library.wood(params), library.leaves(params))
+    }
+
+    #[test]
+    fn leaves_wear_a_scan_or_the_vein_image_never_both_and_veins_only_where_a_card_is_a_leaf() {
+        // The oak's cards are cut to a scanned leaf: its real veins are in the atlas, so none
+        // are drawn, whether or not the atlas loaded (without the `textures` feature the card
+        // is procedural again and draws its veins).
+        let oak = TreePreset::Oak.params();
+        let (_, leaves) = surfaces(&oak, true);
+        if cfg!(feature = "textures") {
+            assert!(leaves.leaf_scan.is_some() && leaves.venation.is_none());
+            assert_eq!(leaves.uniform.leaf.z, 0.0);
+            assert_ne!(leaves.color, oak.foliage.color, "the scan's mean is divided out of the colour");
+            assert!(leaves.detail().0.is_some() && leaves.detail().1.is_some());
+        } else {
+            assert!(leaves.leaf_scan.is_none() && leaves.venation.is_some());
+            assert!(leaves.uniform.leaf.z > 0.0);
+        }
+
+        // A leaf card without a scan has veins grown by space colonisation, in one image all
+        // trees share.
+        let dragon = TreePreset::DragonTree.params();
+        assert_eq!(dragon.foliage.scan, None);
+        let (_, a) = surfaces(&dragon, true);
+        assert!(a.leaf_scan.is_none() && a.venation.is_some() && a.uniform.leaf.z > 0.0);
+        assert_eq!(a.color, dragon.foliage.color);
+
+        // Needles and cluster spheres are not leaf-shaped: no veins, no image.
+        let (_, needles) = surfaces(&TreePreset::Pine.params(), true);
+        assert!(needles.venation.is_none() && needles.leaf_scan.is_none() && needles.uniform.leaf.z == 0.0);
+
+        // Without veins to draw there is no image either.
+        let mut plain = dragon.clone();
+        plain.foliage.shading.veins = 0.0;
+        assert!(surfaces(&plain, true).1.venation.is_none());
+
+        // Nothing is made without image assets.
+        let (wood, leaves) = surfaces(&oak, false);
+        assert!(wood.bark.is_none() && leaves.leaf_scan.is_none() && leaves.venation.is_none());
+        assert_eq!(wood.color, oak.trunk_color);
+    }
+
+    #[test]
+    fn trees_of_other_seeds_share_their_materials_and_other_scans_do_not() {
+        use crate::shading::SharedFlora;
+        let mut shared = SharedFlora::default();
+        let mut materials = Assets::<FloraMaterial>::default();
+        let wind = FloraWindBuffer(Handle::default());
+        let mut resolve = |surface: &Surface| shared.resolve(&mut materials, surface, &wind);
+        let (mut oak, other) = (TreePreset::Oak.params(), TreePreset::Maple.params());
+        let (wood, leaves) = surfaces(&oak, true);
+        oak.seed += 1;
+        let (wood_again, leaves_again) = surfaces(&oak, true);
+        // A different seed is the same look.
+        assert_eq!(resolve(&wood), resolve(&wood_again));
+        assert_eq!(resolve(&leaves), resolve(&leaves_again));
+        // A different species is not.
+        let (other_wood, other_leaves) = surfaces(&other, true);
+        assert_ne!(resolve(&wood), resolve(&other_wood));
+        assert_ne!(resolve(&leaves), resolve(&other_leaves));
     }
 
     #[test]

@@ -46,11 +46,19 @@ pub struct GrowthExtension {
     /// [`FloraExtension::detail_normal`](crate::FloraExtension::detail_normal).
     #[texture(104)]
     pub detail_normal: Option<Handle<Image>>,
+    /// The image of leaf veins; see [`FloraExtension::venation`](crate::FloraExtension::venation).
+    #[texture(106)]
+    #[sampler(107)]
+    pub venation: Option<Handle<Image>>,
 }
 
 impl From<&GrowthExtension> for FloraKey {
     fn from(extension: &GrowthExtension) -> Self {
-        Self { leaf: extension.leaf, detail: extension.detail_color.is_some() && extension.detail_normal.is_some() }
+        Self {
+            leaf: extension.leaf,
+            detail: extension.detail_color.is_some() && extension.detail_normal.is_some(),
+            venation: extension.venation.is_some(),
+        }
     }
 }
 
@@ -70,6 +78,7 @@ pub(crate) fn growth_material(
             leaf: surface.leaf,
             detail_color,
             detail_normal,
+            venation: surface.venation.clone(),
         },
     }
 }
