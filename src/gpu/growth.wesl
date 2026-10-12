@@ -11,6 +11,9 @@ import bevy_pbr::render::{
 import package::gpu::growth_common::{GrowthAttrs, grown_position, grown_wood_radius, leaf_growth_scale};
 import package::shading::common::{flutter_offset, wind_bend};
 
+@if(FLORA_LEAF)
+import package::shading::common::{leaf_has_fallen, leaf_autumn_tint, FALLEN_LEAF_CLIP};
+
 @vertex
 fn vertex(
     vertex_no_morph: Vertex,
@@ -40,6 +43,11 @@ fn vertex(
         1.0
     );
     out.position = position_world_to_clip(out.world_position.xyz);
+@if(FLORA_LEAF) {
+    if leaf_has_fallen(sway) {
+        out.position = FALLEN_LEAF_CLIP;
+    }
+}
 
 @if(VERTEX_UVS_A)
     out.uv = vertex.uv;
@@ -52,8 +60,11 @@ fn vertex(
 @if(VERTEX_UVS_B && !FLORA_LEAF)
     out.uv_b = vec2<f32>(grown_wood_radius(growth_attrs), vertex.uv_b.y);
 
-@if(VERTEX_COLORS)
+    // A deciduous tree's leaves turn their autumn colour, each at its own moment.
+@if(VERTEX_COLORS && !FLORA_LEAF)
     out.color = vertex.color;
+@if(VERTEX_COLORS && FLORA_LEAF)
+    out.color = vec4<f32>(vertex.color.rgb * leaf_autumn_tint(sway), vertex.color.a);
 
 @if(VERTEX_OUTPUT_INSTANCE_INDEX)
     out.instance_index = vertex_no_morph.instance_index;

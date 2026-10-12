@@ -5,6 +5,58 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.11.0] - 2026-10-12
+
+Seasons. Deciduous trees turn their autumn colour and shed their leaves, one leaf at a time, from
+one global resource that costs nothing per tree to change every frame. Summer, the default, draws
+exactly what 0.10.0 drew. The API grows (`FoliageParams` and `FloraUniform` gain a field, the
+shared wind buffer a sixth vector), hence the minor bump.
+
+### Added
+
+- **`FloraSeason`** (a resource, in the prelude): `autumn`, how far the leaves have turned (0
+  summer green, 1 every leaf in its autumn colour), and `leaf_fall`, the share fallen (1 bare).
+  `SUMMER`, `AUTUMN` and `WINTER`, and `FloraSeason::of_year(t)`, which drives a year from one
+  number (green until 0.55, turning to 0.75, falling from 0.7 to 0.9, bare through the winter, in
+  leaf again and green by 0.05; a test walks the year so no leaf turns green on the tree or comes
+  back in its autumn colour).
+- **`FoliageParams::autumn`** (`Option<Color>`, default `None`: evergreen). The oak (russet), willow
+  and birch (gold), bonsai (orange-red), maple (scarlet-orange), poplar (yellow), baobab (gold) and
+  Japanese maple (crimson) presets carry one; the pine, spruce, cypress, palm, redwood, dragon tree
+  and dead tree ignore the season.
+- Every leaf turns at its own moment and falls in the order the leaves turned. A fallen leaf is
+  clipped in the vertex shader, so it leaves the shadows too; this works on growing trees,
+  `GpuGrowth`, pools' levels of detail and their shadows. Impostors keep their summer bake and
+  turn in patches of a few texels, blending to the patches' average where a pixel spans several
+  (so a far forest does not shimmer), and thin their leaves' coverage as they fall, keeping the
+  wood.
+- The season lives in the shared wind buffer (`FloraWindBuffer`, now six `Vec4`s), so changing it
+  writes 96 bytes in place and modifies no material, as the wind does.
+- Examples: `inspect --season <autumn>,<leaf fall>`, `forest --season`, `capture_growth --seasons`
+  (the grove through a year: `docs/seasons.gif` in the README), `showcase` key `Y` runs the year,
+  and 20 gallery scenarios (maple, oak, birch, willow and pine, each turning, turned, half bare and
+  bare): 377 in all.
+
+### Changed
+
+- A leaf's flutter phase (`ATTRIBUTE_LEAF_SWAY.w`) is a hash of its colour and hue draws instead of
+  its position. The position moves while a tree grows, so a growing tree's leaves changed phase
+  every age step and did not match `GpuGrowth`'s; now a leaf keeps its phase at every age, which
+  also keeps its autumn moment. Flutter looks the same; each leaf just flutters at another moment.
+- API: `FloraUniform` gains `autumn`; `FoliageParams` gains `autumn`.
+
+### Measured
+
+- **Look.** The 357 scenarios of 0.10.0 render with the trees' pixels identical to 0.10.0's (only
+  the overlay's "n/377" counter differs); the pine's four season renders equal its summer one. CPU
+  against `--gpu` over all 377: mean of means 0.069 of 255, worst `toonyoung_maple_5` at 1.31, as
+  in 0.10.0; the 20 season scenarios are 0.000 apart. The impostor's mid-autumn far field changed
+  by 13 to 15 levels between two camera positions 0.3 m apart with one patch's moment per pixel,
+  7 to 8 with the blend, which is what a summer or fully turned forest gives (6.6 to 8.5).
+- **Cost** (medians of three interleaved runs, Apple M4 Pro, 1080p, offscreen): 100 000 pooled
+  oaks 7.33 ms in 0.10.0, 7.40 ms now; 1 000 individual `ProceduralTree` oaks 23.4 and 23.6 ms.
+  Half bare, the individual oaks take 22.1 ms (fallen leaves draw no pixels and no shadow).
+
 ## [0.10.0] - 2026-10-12
 
 Gameplay. A tree can now carry a simple shape for colliders, picking and line of sight that
@@ -915,6 +967,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.11.0]: https://github.com/Ladvien/bevy_flora/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Ladvien/bevy_flora/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Ladvien/bevy_flora/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Ladvien/bevy_flora/compare/v0.8.0...v0.9.0

@@ -397,6 +397,11 @@ pub struct FoliageParams {
     /// [`LeafStyle::SingleQuad`], [`LeafStyle::StarBurst`]) use it. Without the crate's `textures`
     /// feature every scan is absent.
     pub scan: Option<LeafScan>,
+    /// The colour the leaves turn in autumn, or `None` for an evergreen. With a colour, the
+    /// leaves turn as [`FloraSeason::autumn`](crate::FloraSeason::autumn) rises, each at its own
+    /// moment, and drop as [`FloraSeason::leaf_fall`](crate::FloraSeason::leaf_fall) rises, in the
+    /// order they turned. Drawn by the flora shaders; plain materials ignore it.
+    pub autumn: Option<Color>,
 }
 
 impl Default for FoliageParams {
@@ -422,6 +427,7 @@ impl Default for FoliageParams {
             color: Color::srgb(0.133, 0.545, 0.133),
             shading: LeafShading::default(),
             scan: None,
+            autumn: None,
         }
     }
 }

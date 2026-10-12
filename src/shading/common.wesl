@@ -29,6 +29,9 @@ struct FloraUniform {
     bark: vec4<f32>,
     // the bark scan's average linear rgb, 0
     bark_mean: vec4<f32>,
+    // a turned leaf's colour multiplier (the autumn colour over the leaf colour), 1; zero for an
+    // evergreen and for wood
+    autumn: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> flora: FloraUniform;
@@ -54,7 +57,33 @@ struct FloraUniform {
 //   2: gust frequency, flutter frequency, 0, 0
 //   3: gust front origin x, origin z, direction x, direction z
 //   4: gust front speed, width, strength, start time
+//   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, 0, 0
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
+
+// A leaf's own moment in the season, 0..1, from its phase (`sway.w`, one per leaf): it turns
+// around `autumn` = its moment and falls once `leaf fall` passes it, so the first to turn fall
+// first. Spread so that the season's early part is a few leaves, not none.
+fn leaf_season_moment(sway: vec4<f32>) -> f32 {
+    return fract(sway.w * 7.31 + 0.137);
+}
+
+// Whether a deciduous tree's leaf has fallen this season: its vertex is then put outside the
+// clip volume, so the leaf draws nothing, in the main pass and in the shadow maps alike.
+fn leaf_has_fallen(sway: vec4<f32>) -> bool {
+    return flora.autumn.w > 0.5 && leaf_season_moment(sway) < flora_wind[5].y;
+}
+
+// Where a fallen leaf's vertices go: past the right edge of the clip volume, so all three
+// corners of each of its triangles are clipped.
+const FALLEN_LEAF_CLIP: vec4<f32> = vec4<f32>(2.0, 2.0, 0.5, 1.0);
+
+// What a leaf's vertex colour is multiplied by this season: 1 in summer, the autumn colour over
+// the leaf colour (`flora.autumn.rgb`) once it has turned, a short blend while it turns.
+fn leaf_autumn_tint(sway: vec4<f32>) -> vec3<f32> {
+    let moment = leaf_season_moment(sway) * 0.8;
+    let turn = smoothstep(moment, moment + 0.2, flora_wind[5].x) * flora.autumn.w;
+    return mix(vec3<f32>(1.0), flora.autumn.rgb, turn);
+}
 
 fn smooth_curve(x: vec4<f32>) -> vec4<f32> {
     return x * x * (3.0 - 2.0 * x);

@@ -8,6 +8,9 @@ import bevy_pbr::{
 import bevy_render::globals::Globals;
 import package::shading::common::{flutter_offset, wind_bend};
 
+@if(FLORA_LEAF)
+import package::shading::common::{leaf_has_fallen, FALLEN_LEAF_CLIP};
+
 // The prepass's view bind group (view, globals, previous view); `bevy_pbr` has no WESL
 // declaration of it.
 @group(0) @binding(1) var<uniform> globals: Globals;
@@ -36,6 +39,11 @@ fn vertex(
 @if(UNCLIPPED_DEPTH_ORTHO_EMULATION) {
     out.unclipped_depth = out.position.z;
     out.position.z = min(out.position.z, 1.0);
+}
+@if(FLORA_LEAF) {
+    if leaf_has_fallen(sway) {
+        out.position = FALLEN_LEAF_CLIP;
+    }
 }
 
 @if(VERTEX_UVS_A)
