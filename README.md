@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.33 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.34 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.33"
+bevy_flora = "0.34"
 ```
 
 | feature | default | what it does |
@@ -706,7 +706,7 @@ fn burn_the_player(fire: Res<FloraFire>, players: Query<&Transform, With<Player>
 }
 ```
 
-`char_at` and `heat_at` read the grid between the cell centres, as the shaders do: to hurt what stands in the fire, make a burnt tree worthless, or scorch the game's own ground (the clip below colours its ground by `char_at`). `extinguish` puts the fire out where rain or water falls, keeping the char, and `scorch` lays an old burn down with no fire, for a level that starts burnt. `FireSpread` (`FloraFire::with_spread`) sets how fast the fire moves, how long a spot burns and its embers glow, how far a tree's fire reaches and whether the ground itself burns; `FloraFire::with_cells` sets the size of the cells (smaller cells burn along finer lines). The same fire lit the same way on the same clock burns the same way (`FloraFire::seed` makes its front ragged).
+`char_at` and `heat_at` read the grid between the cell centres, as the shaders do: to hurt what stands in the fire, make a burnt tree worthless, or scorch the game's own ground (the clip below colours its ground by `char_at`). A tree the fire burns through (the char where its trunk stands passes `BURNT`, 0.95) is reported once with a `TreeBurnt` message and marked `Burnt`: insert `Burnt` on the burnt trees of a save, with the fire's restored grid, and loading reports none of them. `extinguish` puts the fire out where rain or water falls, keeping the char, and `scorch` lays an old burn down with no fire, for a level that starts burnt. `FireSpread` (`FloraFire::with_spread`) sets how fast the fire moves, how long a spot burns and its embers glow, how far a tree's fire reaches and whether the ground itself burns; `FloraFire::with_cells` sets the size of the cells (smaller cells burn along finer lines). The same fire lit the same way on the same clock burns the same way (`FloraFire::seed` makes its front ragged).
 
 ![The grove at dusk from a still camera: a fire lit on its right runs through it on the wind, each crown scorching and flaring orange as its leaves burn away, the trunks blackening with glowing seams, the ground going to ash under them, until bare black trees stand on a burnt clearing and their embers cool](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/fire.gif)
 
@@ -880,6 +880,14 @@ fn restore(commands: &mut Commands, saved: &[SavedTree]) {
 }
 ```
 
+### Everything at once: the playground
+
+`examples/playground.rs` is a small first-person game built on the crate, to read as an example of wiring its gameplay APIs together: walk among an apple tree, an oak and a ring of mixed trees, strike a trunk with an axe (`FloraIndex::cast_ray` finds it, `TreeNotch` deepens, the fourth blow fells it with `FellTree`), buck the fallen tree (`BuckTree`), shake a tree (`TreeShakes`) and gather the apples that fall (`FallenFruit`), pick apples off it (`TreeFruit::nearest`, `pick`), light a fire (`FloraFire`, counting `TreeBurnt`), call the rain (`FloraWetness`), move the year on (`FloraSeason::of_year`), and save and load all of it (`FellTree::lying`, `TreeFruit::with_picked`, `Burnt`, `FloraFire::restore`). Every action reads a `Controls` resource, so `--demo` plays a script through the same systems and records it.
+
+![First person among apple trees: walking up to an apple tree, shaking it so apples fall into the grass, picking apples off it, turning to an oak, striking it four times so it falls away, stepping back in the rain as it is bucked into logs beside its stump; a counter of apples and logs at the top](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/playground.gif)
+
+*`cargo run --release --example playground -- --demo`; without `--demo` it is yours to play: `W` `A` `S` `D` walk, right mouse look, left click axe, `F` shake, `E` pick, `B` buck, `G` fire, `R` rain, `Y` a month on, `F5` save, `F9` load.*
+
 ### Without the plugin
 
 `build_tree` is a pure function from parameters and age to CPU meshes and the aged skeleton, so you can bake trees offline, feed your own renderer, or build colliders from the skeleton:
@@ -916,7 +924,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Saving and loading.** A felled tree comes back lying where it fell (`FellTree::lying`), picked fruit stays picked (`TreeFruit::with_picked`), and a fire's grid is restored as it was, still burning (`FloraFire::restore`).
 - **Trees that react.** `TreeShakes` swings the trees near a hit, a passing character or a blast and rustles their leaves, on every way a tree is drawn, for one small buffer write and nothing per tree while nothing shakes. Hits knock leaves off and felled trees shed them as they land: they tumble down, drift with the wind and lie on the ground a while, moved on the GPU; `DropLeaves` drops them from any tree.
 - **Picking fruit.** `TreeFruit` lists a fruiting tree's fruit, finds the one nearest a hand and picks it off the tree until the next blossom; shakes knock fruit loose to fall, bounce and lie on the ground as `FallenFruit` entities for the game to pick up.
-- **Fire.** `FloraFire` spreads a fire through the trees from where the game lights it, faster downwind and stopped where nothing burns: leaves scorch, flare and burn away, wood chars from the ground up with glowing seams, on every way a tree is drawn; the game reads the fire back to hurt what stands in it or scorch its own ground.
+- **Fire.** `FloraFire` spreads a fire through the trees from where the game lights it, faster downwind and stopped where nothing burns: leaves scorch, flare and burn away, wood chars from the ground up with glowing seams, on every way a tree is drawn; the game reads the fire back to hurt what stands in it or scorch its own ground, and hears of each tree it burns through (`TreeBurnt`).
 - **Walking through undergrowth.** `FoliagePusher` on the player or an NPC: the leaves and thin stems it walks through bend out of its way and close up behind it, shadows included, while trunks stay put.
 - **Felling.** `TreeNotch` cuts an axe's notch into a standing trunk, deeper with each blow; `FellTree` cuts a tree, pooled ones included, at its notch if it has one: it falls about the hinge of the cut, lands on its limbs with a bounce (`TreeLanded`), and leaves a `TreeStump`; every cut face shows end grain. `BuckTree` then cuts its trunk into `TreeLog`s lying on the ground, each with a capsule for its collider.
 - **Trees from files.** `TreeParams` is an asset: `ProceduralTreeAsset` draws a tree from a handle, and every tree sharing it follows edits; with the `ron` feature trees load from `.tree.ron` files and rebuild when the file is saved.
@@ -935,6 +943,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 | `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, with `--shake` the grove knocked by `TreeShakes`, with `--fell` an oak notched by an axe and felled among a few trees, with `--fire` the grove burning at dusk, with `--push` a body walking through a patch of shrubs, with `--chop` a woodcutter felling a row of trees one after another, each found by `FloraIndex`, or with `--harvest` an apple tree shaken and another picked into a basket (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
 | `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`; `--undergrowth shrub:2.5` adds a patchy layer of shrubs 2.5 m apart and clear of the trunks), on flat ground or on rolling hills (`--terrain <relief>`: every tree at its footing on a `FloraGround`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), built in the frame or in the background (`--background`), in full or at levels of detail (`--tree-lod`: `TreeLod`), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--shake-animate` knocks the trees every few frames (every shake slot busy), `--leaf-fall-animate <s>` runs an autumn every `s` seconds (leaves always falling), `--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]` sets the season, `--fire <x>,<z>[,<radius>]` lights a `FloraFire` over the forest there (`--fire armed`: one that burns nothing), `--push <x>,<z>` stands a `FoliagePusher` there; `--see-through <x,y,z>[,<radius>]` stands a player in the forest for the camera to see through to (`SeeThroughTrees`) and `--prepass <none|depth|all>` gives the camera prepasses; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
 | `tree_file` | (`--features ron`) A tree from `examples/assets/trees/maple.tree.ron` (`--tree <path>` for another file); with `file_watcher` too it rebuilds when the file is saved, and a load error shows on screen while the last good tree stays. `--export <preset>` prints a preset as a tree file, `--screenshot <path>` saves the tree and exits. |
+| `playground` | A first-person sandbox where the gameplay APIs meet: chop, buck, shake, pick, burn, soak and save the trees (see "Everything at once: the playground"); `--demo` plays and records a scripted eight seconds. |
 
 ```sh
 cargo run --release --example showcase

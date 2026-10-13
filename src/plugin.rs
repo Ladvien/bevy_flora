@@ -46,7 +46,10 @@ use crate::params::TreeParams;
 use crate::pipeline::{aged_skeleton, build_aged};
 use crate::see_through::{SeeThroughTrees, arm_see_through, sync_see_through};
 use crate::push::{FoliagePusher, PushSlots, arm_push, sync_pushers};
-use crate::fire::{FireRebind, arm_fire, burn, fire_burns, fire_changed, fire_rebinds, rebind_fire, sync_fire};
+use crate::fire::{
+    Burnt, FireRebind, FloraFire, TreeBurnt, arm_fire, burn, fire_burns, fire_changed, fire_rebinds, rebind_fire,
+    report_burnt, sync_fire,
+};
 use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
 use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees};
@@ -218,6 +221,7 @@ impl bevy::app::Plugin for FloraPlugin {
         app.add_message::<TreeGenerated>()
             .add_message::<TreeMature>()
             .add_message::<DropLeaves>()
+            .add_message::<TreeBurnt>()
             .init_resource::<FallingLeaves>()
             .init_resource::<FallCaches>()
             .init_resource::<SeasonShed>()
@@ -231,6 +235,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<FoliagePusher>()
             .register_type::<TreeLod>()
             .register_type::<FallingLeaves>()
+            .register_type::<Burnt>()
             .add_systems(
                 bevy::app::Update,
                 (
@@ -286,6 +291,7 @@ impl bevy::app::Plugin for FloraPlugin {
                 (
                     rebind_fire.run_if(fire_rebinds),
                     burn.run_if(fire_burns),
+                    report_burnt.run_if(resource_exists_and_changed::<FloraFire>),
                     sync_fire.run_if(fire_changed),
                     arm_fire,
                 )
