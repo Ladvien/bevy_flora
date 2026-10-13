@@ -9,7 +9,8 @@
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
-//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>]
+//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background]
+//!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -42,6 +43,9 @@
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame. `--background` builds those trees off the main thread
 //! (`BuildInBackground`): they appear a few frames after the start instead of in its first frame.
+//! `--see-through <x,y,z>[,<radius>]` stands a red stand-in for the player at that point (its
+//! height above the ground) and puts `SeeThroughTrees` on the camera; `--prepass depth` or
+//! `--prepass all` gives the camera a depth prepass, or depth, normal and motion-vector ones.
 //!
 //! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
 //! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
@@ -86,8 +90,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
     BuildInBackground, FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances,
-    LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset,
-    TreeShake, TreeShakes, build_pool,
+    LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees, TreeAge, TreeParams,
+    TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -186,6 +190,11 @@ struct Args {
     undergrowth: Option<(TreePreset, f32)>,
     /// Rolling hills about this many metres high instead of flat ground (`FloraGround`).
     terrain: Option<f32>,
+    /// A player stand-in at this point (above the ground) that the camera sees through the trees
+    /// to (`SeeThroughTrees`), and the radius of the clear view.
+    see_through: Option<(Vec3, f32)>,
+    /// The camera's prepasses: 0 none, 1 depth, 2 depth, normal and motion vectors.
+    prepass: u8,
 }
 
 impl Args {
@@ -204,7 +213,8 @@ fn usage() -> ! {
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
-         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background]"
+         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] \
+         [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>]"
     );
     std::process::exit(2);
 }
@@ -240,6 +250,8 @@ fn parse_args() -> Args {
         clearing: 0.0,
         undergrowth: None,
         terrain: None,
+        see_through: None,
+        prepass: 0,
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -346,6 +358,23 @@ fn parse_args() -> Args {
                 args.undergrowth = Some((preset, spacing.parse::<f32>().unwrap_or_else(|_| usage())));
             }
             "--terrain" => args.terrain = Some(value(&mut it)),
+            "--see-through" => {
+                let list = it.next().unwrap_or_else(|| usage());
+                let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
+                args.see_through = match parts[..] {
+                    [x, y, z] => Some((Vec3::new(x, y, z), 1.5)),
+                    [x, y, z, radius] => Some((Vec3::new(x, y, z), radius)),
+                    _ => usage(),
+                };
+            }
+            "--prepass" => {
+                args.prepass = match it.next().as_deref() {
+                    Some("none") => 0,
+                    Some("depth") => 1,
+                    Some("all") => 2,
+                    _ => usage(),
+                };
+            }
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -558,6 +587,23 @@ fn setup(
             Some(TextureFormat::Rgba8UnormSrgb),
         ));
         camera.insert(RenderTarget::Image(bench.target.clone().into()));
+    }
+    // `--prepass`: the camera's prepasses, as TAA, SSAO or depth of field would add them.
+    if bench.args.prepass >= 1 {
+        camera.insert(bevy::core_pipeline::prepass::DepthPrepass);
+    }
+    if bench.args.prepass >= 2 {
+        camera.insert((bevy::core_pipeline::prepass::NormalPrepass, bevy::core_pipeline::prepass::MotionVectorPrepass));
+    }
+    // `--see-through`: a stand-in for the player at the target, which the camera keeps in view.
+    if let Some((target, radius)) = bench.args.see_through {
+        let target = target + Vec3::Y * ground.height(target.xz());
+        camera.insert(SeeThroughTrees { target, radius });
+        commands.spawn((
+            Mesh3d(meshes.add(Capsule3d::new(0.3, 1.1))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.85, 0.12, 0.08), ..default() })),
+            Transform::from_translation(target),
+        ));
     }
 
     // One species, or one per `--scatter` entry, then the undergrowth's: a pool each in pool mode.

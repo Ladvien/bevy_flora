@@ -5,6 +5,50 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.22.0] - 2026-10-13
+
+Seeing the player through the trees. A third-person or top-down camera keeps the player in
+view in a forest: the trees between them dither out. Nothing is drawn differently while no
+camera does. `FloraExtension`, `GrowthExtension`, `FloraKey` and `ImpostorMaterial` gain a field,
+which breaks struct literals, hence the minor bump.
+
+### Added
+
+- **`SeeThroughTrees { target, radius }`** (a component for the camera, in the prelude): the
+  parts of trees between the camera and `target` dither out, in a cone around the line of sight
+  `radius` wide at the target and a third of that at the camera, which closes over the last tenth
+  of the way so nothing behind the target is cut. Only that camera's views cut: shadow maps keep
+  the whole trees (the cut tree's shadow still falls on the player), and so do other cameras.
+  Every way a tree is drawn takes part (`ProceduralTree`, `GpuGrowth`, pooled levels, impostors),
+  and so do the camera's prepasses: with a `DepthPrepass`, or depth, normal and motion-vector
+  prepasses, the image is the same as without them, so TAA, SSAO and depth of field leave no
+  holes. One camera at a time. With plain `StandardMaterial`s there is no fade.
+- `FloraExtension::see_through`, `GrowthExtension::see_through`, `ImpostorMaterial::see_through`
+  and `FloraKey::see_through`: set by the plugin on every flora material while a camera has
+  `SeeThroughTrees`, so that otherwise no pipeline carries the fade's discard. `ImpostorMaterial`
+  has pipeline data of its own now, `ImpostorKey`.
+- `forest --see-through <x,y,z>[,<radius>]` (a stand-in for the player and the component on the
+  camera) and `forest --prepass <none|depth|all>`.
+- README: "Seeing the player: `SeeThroughTrees`", with `docs/see_through.jpg`.
+
+### Changed
+
+- The shared buffer (`FloraWindBuffer`) holds two more vectors, the fade's, after the shakes.
+
+### Measured
+
+- **Look.** While no camera sees through, the 424 gallery scenarios render as in 0.21.0 (a mean
+  difference of 0.000 of 255) and the five clips frame for frame. With the fade, a forest seen by
+  a third-person camera (`ProceduralTree`, `GpuGrowth` and pooled, each with no prepass, a depth
+  prepass, and depth, normal and motion-vector prepasses) shows the same image with and without
+  the prepasses, and differs from the image without the fade only inside the cone.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.21.0, two runs
+  each): without the fade 100 000 pooled oaks take 7.41 and 7.50 ms (0.21.0: 7.49 and 7.64) and
+  1 000 individual oaks 24.51 and 24.53 ms (24.52 and 24.48). With a camera seeing through,
+  100 000 pooled oaks 7.43 and 7.52 ms, 1 000 individual oaks 27.06 and 27.03 ms (+10%: a discard
+  keeps the GPU from rejecting hidden fragments early), and 33.39 and 33.12 ms with a depth
+  prepass (30.53 and 30.55 without the fade).
+
 ## [0.21.0] - 2026-10-13
 
 Trees built in the background. A game that plants trees while it runs (a streamed chunk, a
@@ -1437,6 +1481,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.22.0]: https://github.com/Ladvien/bevy_flora/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Ladvien/bevy_flora/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/Ladvien/bevy_flora/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/Ladvien/bevy_flora/compare/v0.18.0...v0.19.0

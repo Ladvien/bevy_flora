@@ -23,6 +23,9 @@ import package::shading::common::{
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
+@if(FLORA_SEE_THROUGH)
+import package::shading::common::see_through;
+
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var albedo: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var atlas_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var surface: texture_2d<f32>;
@@ -91,6 +94,8 @@ const BLOSSOM_COVER: f32 = 0.8;
 fn fragment(in: VertexOutput) -> FragmentOutput {
 @if(VISIBILITY_RANGE_DITHER)
     visibility_range_dither(in.position, in.visibility_range_dither);
+@if(FLORA_SEE_THROUGH)
+    see_through(in.world_position.xyz, in.position.xy, view.world_position);
 
     var color = textureSample(albedo, atlas_sampler, in.uv);
     let baked = textureSample(surface, atlas_sampler, in.uv);

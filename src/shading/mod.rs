@@ -23,7 +23,7 @@
 //! [`GpuGrowth`](crate::GpuGrowth), [`TreePool`](crate::TreePool) and its impostors).
 
 use bevy::app::App;
-use bevy::asset::{Asset, AssetApp, AssetServer, Assets, Handle, embedded_asset};
+use bevy::asset::{Asset, AssetApp, AssetServer, Assets, Handle, embedded_asset, load_embedded_asset};
 use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
@@ -33,22 +33,23 @@ use bevy::math::{Vec2, Vec4};
 use bevy::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
-    MaterialPlugin, PbrPlugin, StandardMaterial,
+    MaterialPlugin, MeshPipelineKey, PbrPlugin, StandardMaterial,
 };
 use bevy::reflect::Reflect;
 use bevy::render::RenderApp;
 use bevy::render::render_resource::{
-    AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    AsBindGroup, Face, FragmentState, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
 use bevy::render::renderer::RenderDevice;
 use bevy::render::storage::ShaderBuffer;
-use bevy::shader::ShaderRef;
+use bevy::shader::{ShaderDefVal, ShaderRef};
 use bevy::time::Time;
 
 use crate::foliage::uses_scan;
 use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{LeafStyle, RenderStyle, TreeParams};
+use crate::see_through::{SEE_THROUGH_SLOT, SeeThroughCapsule};
 
 mod share;
 pub use share::SharedFlora;
@@ -377,8 +378,9 @@ impl FloraUniform {
     }
 }
 
-/// How many `Vec4`s the shared buffer holds: see [`wind_vectors`].
-pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX;
+/// How many `Vec4`s the shared buffer holds: see [`wind_vectors`], and after them the two of the
+/// see-through fade (`see_through::SEE_THROUGH_SLOT`).
+pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + 2;
 
 /// The `Vec4`s of [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] the shaders read, in the order
 /// of the shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend,
@@ -441,6 +443,8 @@ pub struct FloraKey {
     pub venation: bool,
     /// The look: see [`FloraExtension::style`].
     pub style: RenderStyle,
+    /// The see-through fade: see [`FloraExtension::see_through`].
+    pub see_through: bool,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -477,6 +481,10 @@ pub struct FloraExtension {
     /// the fragment stage with bands and an ink rim; the other styles are lit as ever (the
     /// painterly look is in the normals of the mesh).
     pub style: RenderStyle,
+    /// Whether the see-through fade ([`SeeThroughTrees`](crate::SeeThroughTrees)) cuts this
+    /// material. The plugin sets it on every flora material while a camera has one and clears it
+    /// when none has, so that otherwise no pipeline carries the fade's discard.
+    pub see_through: bool,
 }
 
 impl From<&FloraExtension> for FloraKey {
@@ -486,6 +494,7 @@ impl From<&FloraExtension> for FloraKey {
             detail: extension.detail_color.is_some() && extension.detail_normal.is_some(),
             venation: extension.venation.is_some(),
             style: extension.style,
+            see_through: extension.see_through,
         }
     }
 }
@@ -513,7 +522,7 @@ impl MaterialExtension for FloraExtension {
         layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        specialize_flora(descriptor, layout, key.bind_group_data)
+        specialize_flora(descriptor, layout, key.bind_group_data, key.mesh_key)
     }
 }
 
@@ -525,7 +534,11 @@ pub(crate) fn specialize_flora(
     descriptor: &mut RenderPipelineDescriptor,
     layout: &MeshVertexBufferLayoutRef,
     key: FloraKey,
+    mesh_key: MeshPipelineKey,
 ) -> Result<(), SpecializedMeshPipelineError> {
+    if key.see_through {
+        add_see_through(descriptor, mesh_key);
+    }
     if key.venation
         && layout.0.contains(Mesh::ATTRIBUTE_UV_0.id)
         && let Some(fragment) = descriptor.fragment.as_mut()
@@ -557,6 +570,44 @@ pub(crate) fn specialize_flora(
     let sway = layout.0.get_layout(&[ATTRIBUTE_LEAF_SWAY.at_shader_location(11)])?;
     descriptor.vertex.buffers[0].attributes.extend(sway.attributes);
     Ok(())
+}
+
+/// The see-through fade's part of a pipeline ([`SeeThroughTrees`](crate::SeeThroughTrees)): in
+/// the main pass, the fragment stage's discard; in a camera's prepasses, a fragment stage that
+/// discards the same fragments (`see_through_prepass.wesl`: Bevy's prepass fragment with the
+/// discard first, made where a depth-only prepass has none), so a depth prepass keeps no depth
+/// where the main pass cut the tree. A directional light's shadow cascades are left as they are;
+/// a point or spot light's shadow pipeline cannot be told from a depth-only camera prepass here,
+/// so the shaders cut only in the view drawn from the fading camera's position.
+fn add_see_through(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipelineKey) {
+    let prepass = descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
+    if !prepass {
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push("FLORA_SEE_THROUGH".into());
+        }
+        return;
+    }
+    if mesh_key.intersects(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO | MeshPipelineKey::DEFERRED_PREPASS) {
+        return;
+    }
+    let Some(shader) = crate::see_through::prepass_fragment() else { return };
+    match descriptor.fragment.as_mut() {
+        Some(fragment) => {
+            fragment.shader = shader;
+            fragment.shader_defs.push("FLORA_SEE_THROUGH".into());
+        }
+        None => {
+            let mut shader_defs = descriptor.vertex.shader_defs.clone();
+            shader_defs.push("FLORA_SEE_THROUGH".into());
+            descriptor.fragment = Some(FragmentState {
+                shader,
+                shader_defs,
+                entry_point: Some("fragment".into()),
+                targets: Vec::new(),
+                ..Default::default()
+            });
+        }
+    }
 }
 
 /// The base of a flora material: the leaf shader lights the surface itself, which only the
@@ -649,6 +700,7 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
             detail_normal,
             venation: surface.venation.clone(),
             style: surface.style,
+            see_through: false,
         },
     }
 }
@@ -713,10 +765,14 @@ pub(crate) fn sync_wind(
     wind: Res<FloraWind>,
     season: Res<FloraSeason>,
     shakes: Res<TreeShakes>,
+    capsule: Res<SeeThroughCapsule>,
     buffer: Res<FloraWindBuffer>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let packed = wind_vectors(&wind, &season, &shakes).map(|v| v.to_array());
+    let mut packed = wind_vectors(&wind, &season, &shakes).map(|v| v.to_array());
+    // The see-through fade's slots are written by `sync_see_through`; keep them.
+    packed[SEE_THROUGH_SLOT] = capsule.0[0].to_array();
+    packed[SEE_THROUGH_SLOT + 1] = capsule.0[1].to_array();
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
     if buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>()) == Some(&packed[..]) {
         return;
@@ -750,6 +806,7 @@ pub(crate) fn build(app: &mut App) {
     app.init_resource::<FloraWind>()
         .init_resource::<FloraSeason>()
         .init_resource::<TreeShakes>()
+        .init_resource::<SeeThroughCapsule>()
         .init_resource::<SharedFlora>()
         .init_resource::<FloraTextures>()
         .register_type::<FloraWind>()
@@ -810,6 +867,10 @@ fn add_shaders(app: &mut App) {
     embedded_asset!(app, "vertex.wesl");
     embedded_asset!(app, "prepass.wesl");
     embedded_asset!(app, "fragment.wesl");
+    // Not named by any material: `specialize_flora` puts it in a camera's prepasses while a
+    // camera sees through the trees.
+    embedded_asset!(app, "see_through_prepass.wesl");
+    crate::see_through::set_prepass_fragment(load_embedded_asset!(app, "see_through_prepass.wesl"));
 }
 
 #[cfg(test)]

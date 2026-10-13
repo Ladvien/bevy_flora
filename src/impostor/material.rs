@@ -34,6 +34,7 @@ use crate::shading::{FloraUniform, FloraWindBuffer};
 /// No shadows and no prepasses; it cross-fades with a
 /// [`VisibilityRange`](bevy::camera::visibility::VisibilityRange) like any mesh.
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
+#[bind_group_data(ImpostorKey)]
 pub struct ImpostorMaterial {
     /// The colour atlas: views side by side, with mipmaps; alpha is coverage.
     #[texture(0)]
@@ -53,6 +54,9 @@ pub struct ImpostorMaterial {
     /// The weather, shared by every flora material: [`FloraWindBuffer`](crate::FloraWindBuffer).
     #[storage(102, read_only)]
     pub wind: Handle<ShaderBuffer>,
+    /// Whether the see-through fade ([`SeeThroughTrees`](crate::SeeThroughTrees)) cuts this
+    /// impostor; the plugin sets it while a camera has one.
+    pub see_through: bool,
 }
 
 impl ImpostorMaterial {
@@ -72,7 +76,21 @@ impl ImpostorMaterial {
             params: Vec4::new(views as f32, style as u32 as f32, 0.0, 0.0),
             flora,
             wind: wind.0.clone(),
+            see_through: false,
         }
+    }
+}
+
+/// What an [`ImpostorMaterial`] changes about the pipeline it is drawn with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ImpostorKey {
+    /// The see-through fade: see [`ImpostorMaterial::see_through`].
+    pub see_through: bool,
+}
+
+impl From<&ImpostorMaterial> for ImpostorKey {
+    fn from(material: &ImpostorMaterial) -> Self {
+        Self { see_through: material.see_through }
     }
 }
 
@@ -104,11 +122,16 @@ impl Material for ImpostorMaterial {
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         // The quad turns to face the camera whatever its winding looks like
         // under the tree's own transform (a mirrored tree flips it).
         descriptor.primitive.cull_mode = None;
+        if key.bind_group_data.see_through
+            && let Some(fragment) = descriptor.fragment.as_mut()
+        {
+            fragment.shader_defs.push("FLORA_SEE_THROUGH".into());
+        }
         Ok(())
     }
 }

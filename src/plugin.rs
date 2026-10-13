@@ -40,6 +40,7 @@ use crate::gpu::{GpuGrowth, GpuGrowthSupport};
 use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bakes};
 use crate::params::TreeParams;
 use crate::pipeline::{aged_skeleton, build_aged};
+use crate::see_through::{SeeThroughTrees, arm_see_through, sync_see_through};
 use crate::shape::TreeShape;
 use crate::pool::{fill_pooled_shapes, spawn_pooled_trees};
 use crate::shading::{
@@ -205,6 +206,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<TreeAge>()
             .register_type::<Growing>()
             .register_type::<BuildInBackground>()
+            .register_type::<SeeThroughTrees>()
             .add_systems(
                 bevy::app::Update,
                 (
@@ -239,6 +241,12 @@ impl bevy::app::Plugin for FloraPlugin {
                     fill_pooled_shapes,
                 )
                     .chain(),
+            )
+            // After transform propagation: the shaders cut only in the view drawn from where the
+            // fading camera is this frame.
+            .add_systems(
+                bevy::app::PostUpdate,
+                (arm_see_through, sync_see_through).after(bevy::transform::TransformSystems::Propagate),
             );
         // Before `gpu`: its shaders import the flora library.
         crate::shading::build(app);
