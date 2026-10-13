@@ -15,8 +15,8 @@ use crate::background::{BuildInBackground, PendingBuild};
 use crate::felling::Felled;
 use crate::params::TreeParams;
 use crate::plugin::{
-    FLOWERS_SPAWN, Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh,
-    build_in_batches, replace_mesh, sync_leaf_child,
+    CoarseLevel, FLOWERS_SPAWN, Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender,
+    TreeTrunkMesh, build_in_batches, replace_mesh, sync_leaf_child,
 };
 use crate::shading::{FloraWindBuffer, Surface, TextureLibrary};
 use crate::skeleton::{Skeleton, generate_skeleton};
@@ -80,8 +80,10 @@ pub(crate) fn sync_growth_mode(
         let wanted = gpu && support.0;
         if wanted != matches!(render.paint, Paint::Growth(_)) {
             commands.entity(render.trunk).despawn();
-            for (child, _) in render.foliage.iter().chain(&render.flowers) {
-                commands.entity(*child).despawn();
+            let coarse = render.lod.iter().flat_map(|(_, levels)| levels.iter().flat_map(CoarseLevel::children));
+            let level0 = render.foliage.iter().chain(&render.flowers).map(|child| child.0);
+            for child in level0.chain(coarse) {
+                commands.entity(child).despawn();
             }
             commands.entity(entity).remove::<TreeRender>();
         }
@@ -288,6 +290,7 @@ pub(crate) fn rebuild_gpu_trees(
                     mature_at: full.mature_at(&params.growth),
                     age,
                     full,
+                    lod: None,
                 });
             }
         }

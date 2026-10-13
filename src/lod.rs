@@ -9,8 +9,13 @@
 //! silhouette of the crown is kept: a coarse level stays inside level 0's
 //! bounding box (to a centimetre) and keeps the wood and the leaves that reach
 //! furthest in each direction.
+//!
+//! A [`TreePool`](crate::TreePool) draws its trees at these levels, and [`TreeLod`] draws a
+//! single [`ProceduralTree`](crate::ProceduralTree) at them.
 
+use bevy::ecs::prelude::{Component, ReflectComponent};
 use bevy::math::Vec3;
+use bevy::reflect::Reflect;
 
 use crate::foliage::{FoliageMeshes, LeafPoint, collect_leaf_points, foliage_meshes_coarse};
 use crate::mesh::branch::{Coarseness, skeleton_mesh_coarse};
@@ -21,7 +26,7 @@ use crate::skeleton::{Node, Skeleton, generate_skeleton};
 /// How far from the camera each level of detail takes over, in metres: level 1
 /// from `lod1`, level 2 from `lod2`, the impostor from `impostor`. Each switch
 /// cross-fades over a couple of metres.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct LodDistances {
     /// Distance at which level 0 hands over to level 1.
     pub lod1: f32,
@@ -48,7 +53,7 @@ impl Default for LodDistances {
 /// smoothing, closes a steep branch's base with a flat disc, halves the trunk's
 /// height segments (at least 2) per level, and gives a bent branch at most 4
 /// (level 1) or 3 (level 2) rings.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct LodSettings {
     /// Level 1 drops branches thinner than this at their base, in metres, and
     /// everything that grows from them.
@@ -63,7 +68,7 @@ pub struct LodSettings {
     /// Sides of the trunk and the branch tubes at each level. A node that has
     /// fewer sides at level 0 keeps them; the level 0 entry is not used.
     pub radial_segments: [u32; 3],
-    /// Where the levels switch when the tree is placed from a pool.
+    /// Where the levels switch, for a pool's trees and a tree with [`TreeLod`].
     pub distances: LodDistances,
 }
 
@@ -80,6 +85,33 @@ impl Default for LodSettings {
     }
 }
 
+/// Draw a [`ProceduralTree`](crate::ProceduralTree) at three levels of detail, as a pool draws
+/// its trees: the full tree up close, then [`build_lods`]' coarser levels from
+/// `distances.lod1` and `distances.lod2` on (30 and 80 m by default), cross-fading over a couple of
+/// metres. Individual trees have no impostor: level 2 is drawn at every distance beyond `lod2`
+/// (`distances.impostor` is not used). Without it a tree is drawn in full at every distance.
+/// 1 000 oaks draw at 6.5 ms a frame with it and 24 ms without (1080p, Apple M4 Pro).
+///
+/// The coarse levels are rebuilt whenever the tree is (a new age of a [`Growing`](crate::Growing)
+/// tree included), from the same skeleton: 200 oaks growing on the CPU take 14 ms a frame with it
+/// and 10 ms without. Its children are the full tree's (see [`TreeRender`](crate::TreeRender)) plus
+/// a wood and a leaf entity per coarse level ([`TreeLodMesh`](crate::plugin::TreeLodMesh)), whose
+/// leaves carry a flowering tree's flowers. A tree grown on the GPU ([`GpuGrowth`](crate::GpuGrowth))
+/// ignores it, and a felled tree drops its coarse levels when it is cut.
+///
+/// ```rust,no_run
+/// use bevy::prelude::*;
+/// use bevy_flora::prelude::*;
+///
+/// fn plant(mut commands: Commands) {
+///     let lod = LodSettings { distances: LodDistances { lod1: 20.0, lod2: 50.0, ..default() }, ..default() };
+///     commands.spawn((ProceduralTree(TreePreset::Maple.params()), TreeLod(lod), Transform::default()));
+/// }
+/// ```
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct TreeLod(pub LodSettings);
+
 /// Three levels of detail of the tree `params` describes at `age`
 /// (`f32::INFINITY` for the mature tree). Index 0 is the full tree, 2 the
 /// coarsest; see [`LodSettings`] for what each level drops.
@@ -90,6 +122,12 @@ impl Default for LodSettings {
 pub fn build_lods(params: &TreeParams, age: f32, lod: &LodSettings) -> [TreeMeshes; 3] {
     let full = generate_skeleton(params);
     let fine = build_aged(&full, params, age);
+    let [lod1, lod2] = coarse_levels(&fine, params, lod);
+    [fine, lod1, lod2]
+}
+
+/// Levels 1 and 2 of the tree whose level 0 (`build_aged`'s output for `params`) is `fine`.
+pub(crate) fn coarse_levels(fine: &TreeMeshes, params: &TreeParams, lod: &LodSettings) -> [TreeMeshes; 2] {
     let points = if params.foliage.enabled {
         collect_leaf_points(
             &fine.skeleton,
@@ -102,10 +140,10 @@ pub fn build_lods(params: &TreeParams, age: f32, lod: &LodSettings) -> [TreeMesh
         Vec::new()
     };
     let source = Source {
-        fine: &fine,
+        fine,
         points: &points,
         params,
-        bounds: bounds(&fine),
+        bounds: bounds(fine),
         reaching_nodes: reaching_nodes(&fine.skeleton),
         reaching_leaves: extremes(points.len(), |i| points[i].position, |i| points[i].position),
     };
@@ -121,7 +159,7 @@ pub fn build_lods(params: &TreeParams, age: f32, lod: &LodSettings) -> [TreeMesh
         lod.lod2_leaf_keep,
         lod.radial_segments[2],
     );
-    [fine, lod1, lod2]
+    [lod1, lod2]
 }
 
 /// The full tree and what the coarse levels are chosen from.

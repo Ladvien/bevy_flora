@@ -17,7 +17,7 @@
 //! once it has landed. Its [`TreeShape`](crate::TreeShape) turns with it but is not cut.
 
 use bevy::asset::{Assets, Handle};
-use bevy::camera::visibility::Visibility;
+use bevy::camera::visibility::{Visibility, VisibilityRange};
 use bevy::ecs::prelude::*;
 use bevy::image::Image;
 use bevy::math::{Quat, Vec2, Vec3, Vec3Swizzles};
@@ -34,7 +34,7 @@ use crate::mesh::cut::cut;
 use crate::mesh::branch::bark_tile;
 use crate::mesh::trunk::{trunk_mesh_with, trunk_pieces};
 use crate::pipeline::{aged_skeleton, build_aged};
-use crate::plugin::{Growing, Paint, ProceduralTree, TreeAge, TreeRender, paint_child};
+use crate::plugin::{CoarseLevel, Growing, Paint, ProceduralTree, TreeAge, TreeRender, paint_child};
 use crate::shape::WoodCapsule;
 use crate::pool::{PooledShapeFilled, PooledTree, PooledTreeSpawned, TreePool};
 use crate::shading::{FloraMaterial, FloraWindBuffer, SharedFlora, TextureLibrary, TreeShake, TreeShakes};
@@ -263,6 +263,17 @@ pub(crate) fn start_felling(
         if built.trunk.is_empty() {
             commands.entity(entity).remove::<FellTree>();
             continue;
+        }
+        // A tree drawn at levels of detail falls in full: its coarse levels go, and its own
+        // children are drawn at every distance.
+        if let Some((_, levels)) = &render.lod {
+            for child in levels.iter().flat_map(CoarseLevel::children) {
+                commands.entity(child).despawn();
+            }
+            let level0 = render.foliage.iter().chain(&render.flowers).map(|child| child.0);
+            for child in std::iter::once(render.trunk).chain(level0) {
+                commands.entity(child).remove::<VisibilityRange>();
+            }
         }
 
         let scale = transform.scale.y.max(1.0e-4);
