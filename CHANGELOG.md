@@ -5,6 +5,38 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.42.0] - 2026-10-13
+
+`FloraIndex` tells undergrowth from trees and answers in an order set by the forest (issue #73): a
+game filtered out its junipers and ferns by height and ordered ties by `Entity`, whose numbers follow
+the order of spawning. `TreeParams` gained a field, so struct literals of it that list every field
+need it (a minor release). On crates.io this is the release after 0.36.0 (crates.io takes only a
+few versions of a crate a day): it carries 0.37.0 to 0.41.0 too, entered below, each also released
+on GitHub.
+
+### Added
+
+- `TreeParams::undergrowth`: a plant of the forest floor rather than a tree, true for the `Shrub`,
+  `Juniper` and `Fern` presets (nothing about how they are drawn changes; `.tree.ron` files without
+  it load as before, false).
+- `IndexedTree::undergrowth`: the indexed plant's flag, to filter on where only trees count.
+
+### Changed
+
+- `FloraIndex::within` answers in an order that depends only on where the trees stand: each cell
+  keeps its trees by position (x, then z), and the cells are walked in order. `nearest` breaks a
+  tie the same way. The lying wood (`obstacles_within`) is kept the same way.
+
+### Measured
+
+- **Look.** Nothing that draws changed: the 491 gallery scenarios (but the CPU toon maple and oak at
+  a mean of 0.000 of 255), the eleven clips (the chop clip's woodcutter asks `nearest` for each tree)
+  and a pooled forest's screenshot are 0.41.0's byte for byte, no `ERROR`.
+- **Cost** (`forest --trees 100000 --mode pool --offscreen --deterministic`, Apple M4 Pro, three
+  pairs in alternating order with 0.41.0): ready after 2.1 to 2.2 s both, the longest loading frame
+  189 to 195 ms against 191 to 195, then 7.88 to 7.95 ms a frame against 7.90 to 8.08: keeping each
+  cell's few trees in order costs the load nothing to see.
+
 ## [0.41.0] - 2026-10-13
 
 Stumps, logs and fallen trunks for a game's collision (issue #72): a stump told only which tree it
@@ -2557,6 +2589,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.42.0]: https://github.com/Ladvien/bevy_flora/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/Ladvien/bevy_flora/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/Ladvien/bevy_flora/compare/v0.39.1...v0.40.0
 [0.39.1]: https://github.com/Ladvien/bevy_flora/compare/v0.39.0...v0.39.1

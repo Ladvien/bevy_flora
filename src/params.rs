@@ -733,6 +733,11 @@ pub struct TreeParams {
     pub crown: CrownStyle,
     /// How the wood is meshed: round and smooth (the default) or flat-shaded prisms ([`TrunkStyle`]).
     pub trunk_style: TrunkStyle,
+    /// A plant of the forest floor (a shrub, a juniper, a fern) rather than a tree: nothing in how
+    /// it is drawn changes, but [`FloraIndex`](crate::FloraIndex) tells it apart
+    /// ([`IndexedTree::undergrowth`](crate::IndexedTree::undergrowth)), so a game's axe, collision
+    /// or AI can pass it by. True for the `Shrub`, `Juniper` and `Fern` presets.
+    pub undergrowth: bool,
 }
 
 impl TreeParams {
@@ -773,6 +778,7 @@ impl Default for TreeParams {
             style: RenderStyle::Natural,
             crown: CrownStyle::Leaves,
             trunk_style: TrunkStyle::Round,
+            undergrowth: false,
         }
     }
 }
