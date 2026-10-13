@@ -231,6 +231,9 @@ pub struct PoolVariant {
     /// The variant's skeleton, at the pool's age: where its branches are, for gameplay (perches,
     /// fruit, nests) or a shape of your own.
     pub skeleton: Skeleton,
+    /// What the variant leaves when cut: its stump, its fallen tree and its logs. `None` unless the
+    /// pool was built with [`build_pool_with_deadfall`].
+    pub deadfall: Option<crate::deadfall::Deadfall>,
 }
 
 /// A tree placed from a [`TreePool`]. Static: it has the age the pool was built
@@ -304,10 +307,30 @@ pub fn build_pool(
     lod: &LodSettings,
     meshes: &mut Assets<Mesh>,
 ) -> TreePool {
-    assemble_pool(params, age, lod, build_pool_parts(params, variants, age, lod), meshes)
+    assemble_pool(params, age, lod, build_pool_parts(params, variants, age, lod, None), meshes)
 }
 
-/// One variant as the build makes it, before its meshes are assets.
+/// [`build_pool`] that also cuts every variant for [`PooledDeadfall`](crate::PooledDeadfall)s:
+/// the stump, the part that lies and the logs of a bucked tree, as `deadfall` says
+/// ([`DeadfallSettings`](crate::DeadfallSettings)). Costs a few more meshes a variant, and is not
+/// available in the background ([`BackgroundPools`] builds pools without deadfall).
+///
+/// # Panics
+///
+/// As [`build_pool`].
+pub fn build_pool_with_deadfall(
+    params: &TreeParams,
+    variants: u32,
+    age: f32,
+    lod: &LodSettings,
+    deadfall: &crate::deadfall::DeadfallSettings,
+    meshes: &mut Assets<Mesh>,
+) -> TreePool {
+    let parts = build_pool_parts(params, variants, age, lod, Some((deadfall, &mut *meshes)));
+    assemble_pool(params, age, lod, parts, meshes)
+}
+
+/// One variant as the build makes it, before its meshes are assets (the deadfall's already are).
 struct BuiltVariant {
     lods: [Mesh; 3],
     leaves: [Option<Mesh>; 3],
@@ -316,21 +339,33 @@ struct BuiltVariant {
     radius: f32,
     shape: TreeShape,
     skeleton: Skeleton,
+    deadfall: Option<crate::deadfall::Deadfall>,
 }
 
 /// The work of a pool but for its assets: every variant's levels of detail as meshes, their
-/// bounds, shapes and skeletons. It needs no world, so [`BackgroundPools`] runs it off the main
-/// thread.
-fn build_pool_parts(params: &TreeParams, variants: u32, age: f32, lod: &LodSettings) -> Vec<BuiltVariant> {
+/// bounds, shapes and skeletons. It needs no world unless `deadfall` is given (the settings and
+/// the assets to add its meshes to), so [`BackgroundPools`] runs it off the main thread.
+fn build_pool_parts(
+    params: &TreeParams,
+    variants: u32,
+    age: f32,
+    lod: &LodSettings,
+    mut deadfall: Option<(&crate::deadfall::DeadfallSettings, &mut Assets<Mesh>)>,
+) -> Vec<BuiltVariant> {
     build_variants(params, variants.max(1), age, lod)
         .into_iter()
-        .map(|lods| {
+        .enumerate()
+        .map(|(k, lods)| {
             assert!(
                 !lods[0].trunk.is_empty(),
                 "build_pool: a tree of age {age} has no wood yet, so there is nothing to draw"
             );
             let (height, radius) = reach(&lods[0]);
             let bounds = lods.each_ref().map(bounds_of);
+            let cut = deadfall.as_mut().map(|(settings, meshes)| {
+                let variant_params = TreeParams { seed: params.seed.wrapping_add(k as i32), ..params.clone() };
+                crate::deadfall::build_deadfall(&variant_params, &lods, settings, |data| meshes.add(data.into_bevy_mesh()))
+            });
             let [fine, middle, coarse] = lods;
             // A flowering tree's flowers go in its leaf mesh: a pooled tree's flowers are hidden
             // by the shaders out of season, not left out (a pool's trees are mostly the coarser
@@ -352,6 +387,7 @@ fn build_pool_parts(params: &TreeParams, variants: u32, age: f32, lod: &LodSetti
                 radius,
                 shape,
                 skeleton: fine.skeleton,
+                deadfall: cut,
             }
         })
         .collect()
@@ -379,6 +415,7 @@ fn assemble_pool(
                 radius: part.radius,
                 shape: part.shape,
                 skeleton: part.skeleton,
+                deadfall: part.deadfall,
             }
         })
         .collect();
@@ -434,7 +471,7 @@ impl BackgroundPools<'_> {
             .typed::<TreePool>();
         let (built_from, built_with) = (params.clone(), *lod);
         let task = AsyncComputeTaskPool::get_or_init(TaskPool::default)
-            .spawn(async move { build_pool_parts(&built_from, variants, age, &built_with) });
+            .spawn(async move { build_pool_parts(&built_from, variants, age, &built_with, None) });
         self.pending.builds.push(PendingPool { handle: handle.clone(), params: params.clone(), age, lod: *lod, task });
         handle
     }
@@ -957,13 +994,13 @@ pub(crate) fn sync_shadow_casting(
     quieted: Query<
         &Children,
         (
-            Or<(With<PooledTree>, With<ProceduralTree>)>,
+            Or<(With<PooledTree>, With<ProceduralTree>, With<crate::deadfall::PooledDeadfall>)>,
             With<NotShadowCaster>,
             Or<(Added<NotShadowCaster>, Changed<Children>)>,
         ),
     >,
     mut removed: RemovedComponents<NotShadowCaster>,
-    casting: Query<&Children, (Or<(With<PooledTree>, With<ProceduralTree>)>, Without<NotShadowCaster>)>,
+    casting: Query<&Children, (Or<(With<PooledTree>, With<ProceduralTree>, With<crate::deadfall::PooledDeadfall>)>, Without<NotShadowCaster>)>,
     meshes: Query<(Has<NotShadowCaster>, Has<MeshMaterial3d<ImpostorMaterial>>, Has<CastingImpostor>), With<Mesh3d>>,
 ) {
     for children in &quieted {
