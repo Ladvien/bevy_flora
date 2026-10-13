@@ -5,6 +5,46 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.29.0] - 2026-10-13
+
+Finding trees. The plugin keeps a `FloraIndex` of every standing tree, pooled ones included, by
+where its trunk stands: which tree is nearest the woodcutter, which ones stand in the blast, which
+trunk the axe, the arrow or the player's look meets, in microseconds among 100 000 trees. New API
+only, hence a minor release.
+
+### Added
+
+- **`FloraIndex`**, a resource the plugin inserts and keeps up to date: every `ProceduralTree` (a
+  `ProceduralTreeAsset` tree once its asset has loaded) and every `PooledTree` (once its
+  `TreePool` exists) as its trunk (`IndexedTree { entity, base, axis, height, base_radius,
+  top_radius }`, a cone in world space), at the age it shows and where it stands after transform
+  propagation. A tree moved, rebuilt or grown is updated that frame; a felled or despawned one
+  leaves it. Queries: `nearest(at, max)` and `within(at, radius)` by the bark at the trunk's foot
+  (world x and z), `cast_ray(ray, max)` for the first trunk a ray meets (`TreeHit { tree, point,
+  normal, distance }`; crowns and leaves do not stop it), `get`, `iter`, `len`. A grid of 8 m
+  cells (`FloraIndex::CELL`): a query costs the trees near it. `FloraIndex`, `IndexedTree` and
+  `TreeHit` in the crate root, `FloraIndex` in the prelude.
+- Examples: `capture_growth --chop`, a woodcutter felling a row of trees one after another, each
+  the nearest standing tree `FloraIndex` gives it, a ring on the tree it is after
+  (`docs/chop.gif`).
+- README: "Finding trees: `FloraIndex`", with `docs/chop.gif`.
+
+### Measured
+
+- **Look.** The 424 gallery scenarios render as in 0.28.0 on the CPU and with `--gpu` (a mean
+  difference of 0.000 of 255, no `ERROR`), and so do the growth, grove, seasons, fire and push
+  clips frame for frame; the shake and fell clips drop other leaves of the same trees.
+- **Queries** (100 000 pooled oaks on a 2.5 m grid, release, Apple M4 Pro): `nearest` within 5 m
+  1.6 µs, `cast_ray` over 50 m 0.55 µs, `within` 20 m (about 210 trees) 8 µs.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.28.0): 1 000
+  individual oaks 24.50 and 24.64 ms (0.28.0: 23.97 and 24.54), 100 000 pooled oaks 7.57 and
+  7.75 ms (7.66 and 7.65), the CPU time per frame alike: keeping the index costs nothing a frame
+  measures once the trees stand still.
+- **Found and fixed before release.** The clip's first take framed the whole grove from the
+  shake clip's camera: the woodcutter started at the bottom edge and its first tree was the small
+  Japanese maple there, half out of the picture; the clip now has a row of four trees across the
+  view, each falling to the left.
+
 ## [0.28.0] - 2026-10-13
 
 Before the saw, the axe. A `TreeNotch` carves an axe's wedge out of a standing trunk, deeper with
@@ -1779,6 +1819,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.29.0]: https://github.com/Ladvien/bevy_flora/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/Ladvien/bevy_flora/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/Ladvien/bevy_flora/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/Ladvien/bevy_flora/compare/v0.25.0...v0.26.0

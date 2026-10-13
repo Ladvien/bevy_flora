@@ -288,6 +288,28 @@
 //! [`TreeMature`] is sent once when a [`Growing`] tree reaches maturity. The [`prelude`] has the
 //! types a game usually needs.
 //!
+//! # Finding trees
+//!
+//! The [`FloraIndex`] resource holds every standing tree, pooled ones included, as its trunk,
+//! by where it stands, kept up to date by the plugin: [`FloraIndex::nearest`] a point,
+//! [`FloraIndex::within`] a radius, and [`FloraIndex::cast_ray`] for the trunk a ray meets (an
+//! axe's swing, an arrow, the player's look). A query costs the trees near it, not all of them.
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::{FloraIndex, TreeShake, TreeShakes};
+//!
+//! // A blast at `at` swings the trees around it; the nearest one is the woodcutter's next.
+//! fn blast(index: Res<FloraIndex>, mut shakes: ResMut<TreeShakes>, time: Res<Time>) {
+//!     let at = Vec2::new(10.0, -4.0);
+//!     if index.within(at, 8.0).next().is_some() {
+//!         shakes.shake(TreeShake { at, radius: 8.0, ..default() }, &time);
+//!     }
+//!     let next = index.nearest(at, 30.0).map(|tree| tree.entity);
+//!     info!("the nearest tree: {next:?}");
+//! }
+//! ```
+//!
 //! # Seeing the player through the trees
 //!
 //! [`SeeThroughTrees`] on a third-person or top-down camera dithers out the parts of trees between
@@ -321,6 +343,7 @@ mod gpu;
 pub mod ground;
 pub mod growth;
 pub mod impostor;
+pub mod index;
 pub mod lod;
 pub mod mesh;
 pub mod params;
@@ -348,6 +371,7 @@ pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
 pub use growth::GrowthParams;
+pub use index::{FloraIndex, IndexedTree, TreeHit};
 pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
 pub use mesh::MeshData;
@@ -380,7 +404,8 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
-        FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams, FoliagePusher, GpuGrowth, Growing, GustFront,
+        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWind, FoliageParams, FoliagePusher, GpuGrowth, Growing,
+        GustFront,
         LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
         TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,

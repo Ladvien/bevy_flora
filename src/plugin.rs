@@ -265,7 +265,7 @@ impl bevy::app::Plugin for FloraPlugin {
             // fading camera is this frame, and push foliage from where the pushers are this frame.
             .add_systems(
                 bevy::app::PostUpdate,
-                (arm_see_through, sync_see_through, arm_push, sync_pushers)
+                (arm_see_through, sync_see_through, arm_push, sync_pushers, crate::index::index_trees)
                     .after(bevy::transform::TransformSystems::Propagate),
             )
             // The fire steps after transform propagation (its fuel is where the trees stand this
@@ -310,6 +310,7 @@ impl bevy::app::Plugin for FloraPlugin {
         crate::pool::build(app);
         crate::tree_asset::build(app);
         crate::felling::build(app);
+        crate::index::build(app);
     }
 
     fn finish(&self, app: &mut bevy::app::App) {

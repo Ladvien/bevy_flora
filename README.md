@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.28 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.29 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.28"
+bevy_flora = "0.29"
 ```
 
 | feature | default | what it does |
@@ -745,6 +745,43 @@ fn on_mature(mut mature: MessageReader<TreeMature>, mut commands: Commands) {
 
 *`cargo run --release --example inspect -- --out target/shape --preset oak --mode tree --colliders --distance 13 --eye 2 --look 0.45 --yaw 30`*
 
+### Finding trees: `FloraIndex`
+
+Which tree did the axe hit, which one is nearest the woodcutter, which ones stand in the blast? The plugin keeps a `FloraIndex` resource of every standing tree, `ProceduralTree` and `PooledTree` alike (a pooled one once its pool exists), each as its trunk: a cone from its foot to its top, at the age it shows and where it stands after transform propagation. A tree moved, rebuilt or grown is updated that frame, and a felled or despawned one leaves it. It is a grid of 8 m cells, so a query costs the trees near it, not all of them: with 100 000 pooled oaks, `nearest` takes about 1.6 µs and `cast_ray` over 50 m about 0.6 µs.
+
+- `nearest(at, max)`: the tree whose bark at the foot is nearest a point (world x and z), within `max` metres.
+- `within(at, radius)`: every tree whose bark at the foot is within `radius` metres.
+- `cast_ray(ray, max)`: the first trunk a ray meets, as `TreeHit { tree, point, normal, distance }`: the player's look, an arrow, a falling branch. Crowns and leaves do not stop it.
+- `get(entity)`, `iter()`, `len()`: each tree as an `IndexedTree { entity, base, axis, height, base_radius, top_radius }`.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy::shape::Ray3d;
+use bevy_flora::prelude::*;
+
+// An axe's blow on the trunk the player looks at, within reach: the notch faces the player.
+fn swing(mut commands: Commands, camera: Single<&GlobalTransform, With<Camera3d>>, index: Res<FloraIndex>) {
+    let ray = Ray3d::new(camera.translation(), camera.forward());
+    if let Some(hit) = index.cast_ray(ray, 2.5) {
+        let toward_player = (camera.translation() - hit.point).xz();
+        commands.entity(hit.tree).insert(TreeNotch { direction: toward_player, ..default() });
+    }
+}
+
+// The woodcutter's next tree, and the trees a blast shakes.
+fn next_tree(index: &FloraIndex, woodcutter: Vec3) -> Option<Entity> {
+    index.nearest(woodcutter.xz(), 30.0).map(|tree| tree.entity)
+}
+
+fn in_the_blast(index: &FloraIndex, at: Vec2) -> Vec<Entity> {
+    index.within(at, 8.0).map(|tree| tree.entity).collect()
+}
+```
+
+![A row of four trees seen from the front: a red stand-in for a woodcutter walks to the birch on the left, a yellow ring at its foot, notches it, walks round it and fells it to the left; the ring jumps to the maple, then to the oak, each felled in turn, then to the pine](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/chop.gif)
+
+*`cargo run --release --example capture_growth -- --chop`: the woodcutter asks `FloraIndex::nearest` for its next tree; a felled tree leaves the index at once, so the ring moves on while it falls.*
+
 ### Without the plugin
 
 `build_tree` is a pure function from parameters and age to CPU meshes and the aged skeleton, so you can bake trees offline, feed your own renderer, or build colliders from the skeleton:
@@ -776,6 +813,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **No hitches.** `BuildInBackground` builds a tree off the main thread: 200 oaks planted in one frame cost it 0.5 ms instead of 23 ms, and appear a few frames later.
 - **Seeing the player.** `SeeThroughTrees` on the camera dithers out the trees between it and the player, prepasses included, while shadows keep the whole trees; nothing is compiled in while no camera has it.
 - **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
+- **Finding trees.** `FloraIndex` holds every standing tree, pooled ones included, by where its trunk stands: the nearest tree to a point, the trees within a radius and the trunk a ray meets, in microseconds among 100 000 trees, kept up to date as trees are planted, grow, move, fall or go.
 - **Trees that react.** `TreeShakes` swings the trees near a hit, a passing character or a blast and rustles their leaves, on every way a tree is drawn, for one small buffer write and nothing per tree while nothing shakes. Hits knock leaves off and felled trees shed them as they land: they tumble down, drift with the wind and lie on the ground a while, moved on the GPU; `DropLeaves` drops them from any tree.
 - **Fire.** `FloraFire` spreads a fire through the trees from where the game lights it, faster downwind and stopped where nothing burns: leaves scorch, flare and burn away, wood chars from the ground up with glowing seams, on every way a tree is drawn; the game reads the fire back to hurt what stands in it or scorch its own ground.
 - **Walking through undergrowth.** `FoliagePusher` on the player or an NPC: the leaves and thin stems it walks through bend out of its way and close up behind it, shadows included, while trunks stay put.
@@ -793,7 +831,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 | `gallery` | Renders 424 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, five deciduous presets and the pine turning, turned, half bare, bare and under snow, and the cherry's spring in blossom) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
 | `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), a `ProceduralTree` instead of a pooled tree (`--mode tree`, which `--lod` or `--level` give a `TreeLod`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]`, which `forest` takes too), notched (`--notch <bearing>,<depth>[,<height>]`: an axe's `TreeNotch`), felled (`--fell <bearing>`: the photographs wait until it lies still) and bucked (`--buck <m>`: into logs `m` metres long), on a slope (`--slope <deg>`, the ground falling toward +x: the tree at its footing, or with `--on-centre` where a plain placement would put it), dropping leaves (`--drop <count>[,<after>[,<every>]]`: photographed `after` seconds after they let go, then every `every` seconds), shedding them as an autumn passes (`--autumn <seconds>[,<after>[,<every>]]`: the leaf fall rises to 1 over `seconds`, photographed the same way), burning (`--burn <after>[,<every>]`: a `FloraFire` lit at the tree's foot, photographed the same way), or with a body standing in it or walking through it (`--push <x>,<z>[,<radius>[,<vx>,<vz>]]`: a red `FoliagePusher`, photographed every quarter of a second while it walks). The clock is fixed, so runs repeat. |
-| `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, with `--shake` the grove knocked by `TreeShakes`, with `--fell` an oak notched by an axe and felled among a few trees, with `--fire` the grove burning at dusk, or with `--push` a body walking through a patch of shrubs (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
+| `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, with `--shake` the grove knocked by `TreeShakes`, with `--fell` an oak notched by an axe and felled among a few trees, with `--fire` the grove burning at dusk, with `--push` a body walking through a patch of shrubs, or with `--chop` a woodcutter felling a row of trees one after another, each found by `FloraIndex` (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
 | `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`; `--undergrowth shrub:2.5` adds a patchy layer of shrubs 2.5 m apart and clear of the trunks), on flat ground or on rolling hills (`--terrain <relief>`: every tree at its footing on a `FloraGround`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), built in the frame or in the background (`--background`), in full or at levels of detail (`--tree-lod`: `TreeLod`), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--shake-animate` knocks the trees every few frames (every shake slot busy), `--leaf-fall-animate <s>` runs an autumn every `s` seconds (leaves always falling), `--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]` sets the season, `--fire <x>,<z>[,<radius>]` lights a `FloraFire` over the forest there (`--fire armed`: one that burns nothing), `--push <x>,<z>` stands a `FoliagePusher` there; `--see-through <x,y,z>[,<radius>]` stands a player in the forest for the camera to see through to (`SeeThroughTrees`) and `--prepass <none|depth|all>` gives the camera prepasses; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
 | `tree_file` | (`--features ron`) A tree from `examples/assets/trees/maple.tree.ron` (`--tree <path>` for another file); with `file_watcher` too it rebuilds when the file is saved, and a load error shows on screen while the last good tree stays. `--export <preset>` prints a preset as a tree file, `--screenshot <path>` saves the tree and exits. |
 

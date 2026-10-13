@@ -70,7 +70,8 @@ pub fn assign_birth_times(skeleton: &mut Skeleton, growth: &GrowthParams) {
     }
 }
 
-fn fraction(age: f32, birth: f32, duration: f32) -> f32 {
+/// How far a node born at `birth` and growing for `duration` has grown at `age`, 0 to 1.
+pub(crate) fn fraction(age: f32, birth: f32, duration: f32) -> f32 {
     if duration <= 0.0 {
         if age >= birth { 1.0 } else { 0.0 }
     } else {

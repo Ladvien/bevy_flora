@@ -50,7 +50,11 @@
 //! ground scorches by the fire's char, as a game's own ground would read it. `--push` records a
 //! patch of shrubs from a still camera while a red stand-in for a character walks through it
 //! (`FoliagePusher`): the leaves and stems give way around it and close up behind it
-//! (`docs/push.gif`, encoded like the grove).
+//! (`docs/push.gif`, encoded like the grove). `--chop` records a row of four trees from a still
+//! camera while a lumberjack asks `FloraIndex` for the nearest standing tree, walks to its bark
+//! (a yellow ring marks the tree it is after), notches it, walks round it and fells it toward the
+//! notch, then the next: a felled tree leaves the index at once (`docs/chop.gif`, encoded like the
+//! grove).
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -61,7 +65,7 @@
 //! instead of rebuilding their meshes (compare the two runs' frames with the `compare_gallery`
 //! example).
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -76,8 +80,8 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::mesh::VertexAttributeValues;
 use bevy::post_process::bloom::Bloom;
 use bevy_flora::{
-    FallingLeaves, FellTree, FireSpread, FloraFire, FloraPlugin, FloraSeason, FloraWind, FoliagePusher, GpuGrowth,
-    GustFront, ProceduralTree, RenderStyle, TreeAge, TreeNotch, TreeParams, TreePreset, TreeShake, TreeShakes,
+    FallingLeaves, FellTree, FireSpread, FloraFire, FloraIndex, FloraPlugin, FloraSeason, FloraWind, FoliagePusher,
+    GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeNotch, TreeParams, TreePreset, TreeShake, TreeShakes,
     build_tree,
 };
 
@@ -107,6 +111,18 @@ const FELL_GROVE: [(TreePreset, i32, [f32; 2]); 5] = [
 const FELL: (usize, f32, [u32; 4], u32) = (0, 90.0, [6, 14, 22, 30], 40);
 /// How much deeper each blow of the fell clip's axe cuts the notch, a share of the trunk's width.
 const NOTCH_STEP: f32 = 0.08;
+/// The chop clip: a row of trees across the view (species, seed, x in metres), and its lumberjack:
+/// where it starts (x, z), its pace (m/s), how far from the bark it stands to swing (metres), its
+/// axe's blows on each tree and the frames between them, and the frames it takes to walk half way
+/// round a trunk.
+const CHOP_ROW: [(TreePreset, i32, f32); 4] =
+    [(TreePreset::Birch, 3, -6.75), (TreePreset::Maple, 5, -2.25), (TreePreset::Oak, 42, 2.25), (TreePreset::Pine, 1, 6.75)];
+const CHOP_FROM: Vec2 = Vec2::new(-10.0, 1.2);
+const CHOP_WALK: f32 = 3.0;
+const CHOP_REACH: f32 = 0.6;
+const CHOP_BLOWS: u32 = 3;
+const CHOP_BLOW_FRAMES: u32 = 6;
+const CHOP_ROUND_FRAMES: u32 = 14;
 /// The push clip's plants: shrubs (seed and place: x, z, metres from the patch's middle), a row
 /// along the walker's path and a few behind it, none in front to hide it.
 const PUSH_PATCH: [(i32, [f32; 2]); 10] = [
@@ -194,6 +210,9 @@ enum Scene {
     /// A patch of shrubs in a light wind and a body walking through it (`FoliagePusher`): the
     /// leaves and stems give way and close up behind it.
     Push,
+    /// The grove, fully grown, in a light wind, and a lumberjack who asks [`FloraIndex`] for the
+    /// nearest tree, walks to it, notches it, walks round it and fells it, then the next.
+    Chop,
 }
 
 /// The push clip's walker.
@@ -273,6 +292,8 @@ struct Capture {
     scorch: Handle<Mesh>,
     /// Where the fire clip's fire is lit.
     fire_start: Vec3,
+    /// What the chop clip's lumberjack is doing.
+    chop: Chop,
 }
 
 #[derive(Component)]
@@ -280,7 +301,7 @@ struct OrbitCam;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire | --push] [--gpu]"
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire | --push | --chop] [--gpu]"
     );
     std::process::exit(2);
 }
@@ -298,7 +319,7 @@ fn main() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
-            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" | "--push" => {
+            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" | "--push" | "--chop" => {
                 if clip.is_some() {
                     usage();
                 }
@@ -308,7 +329,8 @@ fn main() {
                     "--shake" => "shake",
                     "--fell" => "fell",
                     "--fire" => "fire",
-                    _ => "push",
+                    "--push" => "push",
+                    _ => "chop",
                 });
             }
             "--preset" => {
@@ -343,7 +365,8 @@ fn main() {
         Some("shake") => Scene::Shake,
         Some("fell") => Scene::Fell,
         Some("fire") => Scene::Fire,
-        Some(_) => Scene::Push,
+        Some("push") => Scene::Push,
+        Some(_) => Scene::Chop,
         None => {
             let mut params = preset.unwrap_or(TreePreset::Maple).params();
             params.style = style;
@@ -375,7 +398,7 @@ fn main() {
     // A light wind in the shake, fell and push clips, so the knocks, the falls and the walker are
     // what moves.
     .insert_resource(FloraWind {
-        strength: if matches!(scene, Scene::Shake | Scene::Fell | Scene::Push) { 0.15 } else { 0.5 },
+        strength: if matches!(scene, Scene::Shake | Scene::Fell | Scene::Push | Scene::Chop) { 0.15 } else { 0.5 },
         direction: wind,
         speed: 1.4,
         ..default()
@@ -412,12 +435,13 @@ fn main() {
         entities: Vec::new(),
         shaken: 0,
         felled: 0,
+        chop: Chop::Seek(None),
         scorch: Handle::default(),
         fire_start: Vec3::ZERO,
     })
     .insert_resource(UseGpu(gpu))
     .add_systems(Startup, setup)
-    .add_systems(Update, drive)
+    .add_systems(Update, (drive, chop).chain())
     .run();
 }
 
@@ -496,6 +520,22 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
             (fit * 0.7 + 0.5 * (max.z - min.z), focus)
         }
+        // Seen from +z: the row, the lumberjack's start and the first tree lying to its left.
+        Scene::Chop => {
+            let row = chop_row();
+            let (mut min, max) = row
+                .iter()
+                .map(|(params, at, ..)| bounds(params, *at))
+                .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+            min.x = min.x.min(row[0].1.x - 0.8 * (max.y - min.y)).min(CHOP_FROM.x);
+            let half_width = 0.5 * (max.x - min.x);
+            let focus = Vec3::new(0.5 * (min.x + max.x), 0.4 * max.y, 0.0);
+            let half_height = (max.y - focus.y).max(focus.y);
+            let aspect = size.x as f32 / size.y as f32;
+            let half_h_fov = ((FOV * 0.5).tan() * aspect).atan();
+            let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
+            (fit * 0.95, focus)
+        }
     }
 }
 
@@ -517,6 +557,11 @@ fn push_patch() -> Vec<(TreeParams, Vec3, u32, u32)> {
         .iter()
         .map(|&(seed, [x, z])| (TreeParams { seed, ..TreePreset::Shrub.params() }, Vec3::new(x, 0.0, z), 0, 1))
         .collect()
+}
+
+/// The chop clip's row of trees, mature, at their places in metres.
+fn chop_row() -> Vec<(TreeParams, Vec3, u32, u32)> {
+    CHOP_ROW.iter().map(|&(preset, seed, x)| (TreeParams { seed, ..preset.params() }, Vec3::new(x, 0.0, 0.0), 0, 1)).collect()
 }
 
 /// Half the mean crown width of the grove's species: the grid its positions are given in.
@@ -594,6 +639,7 @@ fn setup(
         Scene::Seasons | Scene::Shake | Scene::Fire => {
             (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect())
         }
+        Scene::Chop => (1.0, chop_row()),
         Scene::Fell => (1.0, fell_grove()),
         Scene::Push => (1.0, push_patch()),
     };
@@ -638,6 +684,15 @@ fn setup(
             Walker,
         ));
     }
+    // The chop clip's lumberjack: the same stand-in, to the left of the row and a little in front.
+    if matches!(capture.scene, Scene::Chop) {
+        commands.spawn((
+            Mesh3d(meshes.add(Capsule3d::new(0.3, 1.2))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.15, 0.12), ..default() })),
+            Transform::from_translation(CHOP_FROM.extend(0.9).xzy()),
+            Walker,
+        ));
+    }
     let mut camera = commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),
@@ -665,6 +720,13 @@ fn orbit(capture: &Capture, t: f32) -> Transform {
 fn camera_at(capture: &Capture, frame: u32) -> Transform {
     match capture.scene {
         Scene::Shake | Scene::Fire => orbit(capture, 0.5),
+        // From +z, square to the row: the lumberjack works from left to right and each tree
+        // falls to the left, across the view.
+        Scene::Chop => {
+            let pitch = 10f32.to_radians();
+            let dir = Vec3::new(0.0, pitch.sin(), pitch.cos());
+            Transform::from_translation(capture.focus + dir * capture.distance).looking_at(capture.focus, Vec3::Y)
+        }
         // From +z, a little higher than the others, so the parting shows: the walker crosses the
         // view from left to right.
         Scene::Push => {
@@ -815,6 +877,105 @@ fn drive(
         .spawn(Screenshot::image(capture.target.clone()))
         .observe(save_to_disk(path));
     capture.in_flight = true;
+}
+
+/// What the chop clip's lumberjack is doing.
+#[derive(Clone, Copy, Debug)]
+enum Chop {
+    /// Looking for the nearest standing tree that is not `.0` (the one it just felled, which
+    /// leaves the index the frame after).
+    Seek(Option<Entity>),
+    /// Walking to the bark of the tree.
+    Walk(Entity),
+    /// Cutting the notch on the tree's side toward `side` (world x, z): `blows` landed, the next
+    /// in `wait` frames.
+    Notch { tree: Entity, side: Vec2, blows: u32, wait: u32 },
+    /// Walking round the tree to the far side of its notch, `step` frames of `CHOP_ROUND_FRAMES`.
+    Round { tree: Entity, side: Vec2, step: u32 },
+}
+
+/// The chop clip's lumberjack, one step a captured frame: ask the index for the nearest tree,
+/// walk to it, notch it, walk round it and fell it toward the notch, then the next. A yellow ring
+/// marks the tree it is after and a line runs to it.
+#[allow(clippy::too_many_arguments)]
+fn chop(
+    mut commands: Commands,
+    mut capture: ResMut<Capture>,
+    index: Res<FloraIndex>,
+    mut shakes: ResMut<TreeShakes>,
+    time: Res<Time>,
+    mut walker: Query<&mut Transform, With<Walker>>,
+    mut gizmos: Gizmos,
+    mut stepped: Local<Option<u32>>,
+) {
+    if !matches!(capture.scene, Scene::Chop) {
+        return;
+    }
+    let Ok(mut walker) = walker.single_mut() else { return };
+    let at = walker.translation.xz();
+    let target = match capture.chop {
+        Chop::Seek(_) => None,
+        Chop::Walk(tree) | Chop::Notch { tree, .. } | Chop::Round { tree, .. } => index.get(tree).copied(),
+    };
+    if let Some(tree) = target {
+        let ring = Isometry3d::new(tree.base + Vec3::Y * 0.05, Quat::from_rotation_x(FRAC_PI_2));
+        gizmos.circle(ring, tree.base_radius + 0.2, Color::srgb(1.0, 0.85, 0.1));
+        gizmos.line(walker.translation.with_y(0.05), (tree.base + Vec3::Y * 0.05).move_towards(walker.translation.with_y(0.05), tree.base_radius + 0.2), Color::srgb(1.0, 0.85, 0.1));
+    }
+    // One step a captured frame.
+    if *stepped == Some(capture.frame) {
+        return;
+    }
+    *stepped = Some(capture.frame);
+    capture.chop = match capture.chop {
+        Chop::Seek(felled) => {
+            let nearest = index.within(at, 40.0).filter(|t| Some(t.entity) != felled).min_by(|a, b| a.distance_to(at).total_cmp(&b.distance_to(at)));
+            nearest.map_or(Chop::Seek(felled), |tree| Chop::Walk(tree.entity))
+        }
+        Chop::Walk(entity) => match target {
+            None => Chop::Seek(None),
+            Some(tree) => {
+                // To arm's length from its bark, on the near side.
+                let side = (at - tree.base.xz()).normalize_or(Vec2::X);
+                let stand = tree.base.xz() + side * (tree.base_radius + CHOP_REACH);
+                let step = CHOP_WALK / FPS;
+                if at.distance(stand) <= step {
+                    walker.translation = stand.extend(0.9).xzy();
+                    Chop::Notch { tree: entity, side, blows: 0, wait: 0 }
+                } else {
+                    walker.translation = at.move_towards(stand, step).extend(0.9).xzy();
+                    Chop::Walk(entity)
+                }
+            }
+        },
+        Chop::Notch { tree, side, blows, wait } if wait > 0 => Chop::Notch { tree, side, blows, wait: wait - 1 },
+        Chop::Notch { tree, side, blows, .. } => {
+            // A blow: the notch deepens and the crown shivers away from the axe.
+            let blows = blows + 1;
+            commands.entity(tree).insert(TreeNotch { direction: side, depth: NOTCH_STEP * blows as f32, ..default() });
+            if let Some(trunk) = target {
+                let knock = TreeShake { at: trunk.base.xz(), radius: 1.0, strength: 1.5, direction: -side, duration: 1.5, ..default() };
+                shakes.shake(knock, &time);
+            }
+            if blows == CHOP_BLOWS { Chop::Round { tree, side, step: 0 } } else { Chop::Notch { tree, side, blows, wait: CHOP_BLOW_FRAMES } }
+        }
+        Chop::Round { tree, side, step } => {
+            // Half way round the trunk, then the saw: it falls toward the notch, away from the
+            // lumberjack.
+            let step = step + 1;
+            if let Some(trunk) = target {
+                let turn = PI * step as f32 / CHOP_ROUND_FRAMES as f32;
+                let around = Vec2::from_angle(turn).rotate(side);
+                walker.translation = (trunk.base.xz() + around * (trunk.base_radius + CHOP_REACH)).extend(0.9).xzy();
+            }
+            if step < CHOP_ROUND_FRAMES {
+                Chop::Round { tree, side, step }
+            } else {
+                commands.entity(tree).insert(FellTree { direction: side, ..default() });
+                Chop::Seek(Some(tree))
+            }
+        }
+    };
 }
 
 /// The fire clip's scorched ground: the patch's vertex colours from grass to ash as the fire's char
