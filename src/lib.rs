@@ -100,7 +100,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.7 ms a frame (1080p, Apple M4 Pro).
+//! 7.6 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -230,6 +230,28 @@
 //! }
 //! ```
 //!
+//! # Fire
+//!
+//! A [`FloraFire`] is a grid of cells over the game's world, each with how charred it is and how
+//! hot it burns, that the plugin spreads a fire through from where the game lights it
+//! ([`FloraFire::ignite`]): through the trees, faster downwind, stopped where nothing burns. The
+//! trees it reaches scorch and lose their leaves, and their wood chars from the ground up with
+//! glowing seams, on every way a tree is drawn; [`FloraFire::char_at`] and
+//! [`FloraFire::heat_at`] read it back for the game. While no `FloraFire` exists no shader carries
+//! the fire; see [`fire`].
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::FloraFire;
+//!
+//! // A fire over a 256 m square, lit by a lightning strike.
+//! fn setup(mut commands: Commands) {
+//!     let mut fire = FloraFire::new(Vec2::ZERO, 256.0);
+//!     fire.ignite(Vec3::new(20.0, 0.0, 5.0), 2.0);
+//!     commands.insert_resource(fire);
+//! }
+//! ```
+//!
 //! # Trees from assets and files
 //!
 //! [`TreeParams`] is an asset: a [`ProceduralTreeAsset`] draws a tree from a handle and follows
@@ -267,6 +289,7 @@ pub mod background;
 pub mod crown;
 pub mod falling;
 pub mod felling;
+pub mod fire;
 pub mod foliage;
 mod gpu;
 pub mod ground;
@@ -293,6 +316,7 @@ pub use background::BuildInBackground;
 pub use crown::CrownShape;
 pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeStump};
+pub use fire::{FireCell, FireSpread, FloraFire};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
@@ -327,8 +351,8 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 /// shakes, felling, the ground, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraGround,
-        FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafBurst, LeafScan,
+        BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
+        FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafBurst, LeafScan,
         LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint,
         SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog, TreeMature, TreeParams,
         TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,

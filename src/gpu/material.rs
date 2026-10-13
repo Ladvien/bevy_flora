@@ -56,6 +56,9 @@ pub struct GrowthExtension {
     /// Whether the see-through fade cuts this material; see
     /// [`FloraExtension::see_through`](crate::FloraExtension::see_through).
     pub see_through: bool,
+    /// Whether the fire burns this material's trees; see
+    /// [`FloraExtension::fire`](crate::FloraExtension::fire).
+    pub fire: bool,
 }
 
 impl From<&GrowthExtension> for FloraKey {
@@ -67,6 +70,7 @@ impl From<&GrowthExtension> for FloraKey {
             style: extension.style,
             see_through: extension.see_through,
             falling: false,
+            fire: extension.fire,
         }
     }
 }
@@ -90,6 +94,7 @@ pub(crate) fn growth_material(
             venation: surface.venation.clone(),
             style: surface.style,
             see_through: false,
+            fire: false,
         },
     }
 }

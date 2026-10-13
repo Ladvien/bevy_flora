@@ -113,8 +113,8 @@ pub(crate) fn arm_see_through(
 }
 
 /// Set the flag of the materials in `assets` whose flag is not `on` (only those: a material
-/// borrowed mutably is re-prepared).
-fn arm<A: Asset>(assets: &mut Assets<A>, on: bool, flag: fn(&A) -> bool, set: fn(&mut A, bool)) {
+/// borrowed mutably is re-prepared). The fire arms its flag the same way.
+pub(crate) fn arm<A: Asset>(assets: &mut Assets<A>, on: bool, flag: fn(&A) -> bool, set: fn(&mut A, bool)) {
     let stale: Vec<AssetId<A>> = assets.iter().filter(|(_, material)| flag(material) != on).map(|(id, _)| id).collect();
     for id in stale {
         if let Some(mut material) = assets.get_mut(id) {

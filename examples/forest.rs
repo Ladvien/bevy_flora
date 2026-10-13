@@ -10,7 +10,7 @@
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod]
-//!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>]
+//!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -48,6 +48,10 @@
 //! `--see-through <x,y,z>[,<radius>]` stands a red stand-in for the player at that point (its
 //! height above the ground) and puts `SeeThroughTrees` on the camera; `--prepass depth` or
 //! `--prepass all` gives the camera a depth prepass, or depth, normal and motion-vector ones.
+//! `--fire <x>,<z>[,<radius>]` puts a `FloraFire` over the forest (cells of about 2 m) and lights
+//! it there, `radius` metres round (4 by default), once the trees are placed; it spreads through
+//! the forest from there. `--fire armed` puts the fire there and lights nothing: what a game pays
+//! for having one before anything burns.
 //!
 //! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
 //! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
@@ -91,9 +95,9 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    BuildInBackground, FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances,
-    LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees, TreeAge, TreeLod,
-    TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
+    BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront,
+    LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees, TreeAge,
+    TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -141,6 +145,13 @@ enum Shadows {
     Reach(f32, usize),
 }
 
+/// `--fire`: where the fire is lit, or nowhere (armed: the fire exists and nothing burns).
+#[derive(Clone, Copy, Debug)]
+enum FireStart {
+    Armed,
+    At(Vec2, f32),
+}
+
 struct Args {
     trees: u32,
     mode: Mode,
@@ -174,6 +185,8 @@ struct Args {
     shake_animate: bool,
     /// Let the leaves fall over and over, an autumn every this many seconds.
     leaf_fall_animate: Option<f32>,
+    /// A `FloraFire` over the forest, lit where it says.
+    fire: Option<FireStart>,
     /// Step the clock a fixed 1/60 s per frame and count the warmup in frames, so two runs of
     /// different code render the same image at the same frame.
     deterministic: bool,
@@ -220,7 +233,7 @@ fn usage() -> ! {
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] \
-         [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>]"
+         [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]"
     );
     std::process::exit(2);
 }
@@ -247,6 +260,7 @@ fn parse_args() -> Args {
         wind_animate: false,
         shake_animate: false,
         leaf_fall_animate: None,
+        fire: None,
         deterministic: false,
         background: false,
         tree_lod: false,
@@ -385,6 +399,19 @@ fn parse_args() -> Args {
                     _ => usage(),
                 };
             }
+            "--fire" => {
+                let item = it.next().unwrap_or_else(|| usage());
+                args.fire = Some(if item == "armed" {
+                    FireStart::Armed
+                } else {
+                    let v: Vec<f32> = item.split(',').map(|p| p.parse().unwrap_or_else(|_| usage())).collect();
+                    match v[..] {
+                        [x, z] => FireStart::At(Vec2::new(x, z), 4.0),
+                        [x, z, radius] => FireStart::At(Vec2::new(x, z), radius),
+                        _ => usage(),
+                    }
+                });
+            }
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -485,6 +512,7 @@ fn main() {
     }
     app.insert_resource(args.season);
     let leaf_fall = args.leaf_fall_animate.is_some();
+    let fire = args.fire.is_some();
     // Unfocused, Bevy's default settings update 60 times a second; a benchmark
     // must run flat out whatever has the focus.
     app.insert_resource(bevy::winit::WinitSettings::continuous())
@@ -513,6 +541,9 @@ fn main() {
     if leaf_fall {
         app.add_systems(Update, animate_leaf_fall);
     }
+    if fire {
+        app.add_systems(Update, light_fire);
+    }
     app.run();
 }
 
@@ -537,6 +568,12 @@ fn setup(
     let placing = placing.elapsed().as_secs_f32() * 1000.0;
     bench.extent = extent;
     let half = extent * 0.5;
+    // `--fire`: from the start, so its shaders are made while the trees load, in cells of about 2 m
+    // (at most 512 a side).
+    if bench.args.fire.is_some() {
+        let cells = (extent / 2.0).ceil().clamp(2.0, FloraFire::MAX_CELLS as f32) as u32;
+        commands.insert_resource(FloraFire::with_cells(Vec2::ZERO, extent + 8.0, cells));
+    }
 
     commands.spawn((
         DirectionalLight {
@@ -841,6 +878,18 @@ fn tree_placements(args: &Args, ground: &FloraGround) -> (Vec<(Transform, usize,
         .map(|tree| (tree.transform_on(ground, &params[tree.species]), tree.species, tree.variant % VARIANTS))
         .collect();
     (trees, extent)
+}
+
+/// With `--fire <x>,<z>[,<radius>]`: light the fire once the trees are placed. (`--fire armed`
+/// lights nothing; the fire is there, so its shaders are.)
+fn light_fire(bench: Res<Bench>, fire: Option<ResMut<FloraFire>>, mut lit: Local<bool>) {
+    if *lit || bench.phase == Phase::Loading {
+        return;
+    }
+    *lit = true;
+    if let (Some(FireStart::At(at, radius)), Some(mut fire)) = (bench.args.fire, fire) {
+        fire.ignite(Vec3::new(at.x, 0.0, at.y), radius);
+    }
 }
 
 /// `--leaf-fall-animate`: an autumn every `period` seconds, over and over, so the trees near the

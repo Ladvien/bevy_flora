@@ -67,6 +67,7 @@ struct FloraUniform {
 //      direction z, start time, duration); all zero for an empty slot
 //   23, 24: the see-through fade (`SeeThroughTrees`): the fading camera's position and the
 //      clear radius at the target; the target and 1 while a camera has one (all zero otherwise)
+//   25: the fire's header (`FloraFire`), then its grid: see `FIRE`
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
 
 // The see-through fade's slot (`see_through::SEE_THROUGH_SLOT`).
@@ -158,6 +159,161 @@ fn leaf_season_tint(sway: vec4<f32>, color: vec4<f32>) -> vec3<f32> {
         return flora.blossom.rgb;
     }
     return leaf_autumn_tint(sway);
+}
+
+// The fire (`FloraFire`, fire.rs), compiled in while one exists (`FLORA_FIRE`). Slot `FIRE` holds
+// the grid's lower corner x, z, 1 / the cell size and the cells per side (0 while no cell holds
+// anything); `FIRE + 1` the world x, z rectangle (min x, min z, max x, max z) outside which every
+// cell is empty. The cells follow two to a vector (char, heat, char, heat), row by row along x,
+// rows along z.
+const FIRE: u32 = 25u;
+
+// The cell (x, z) of a grid `side` cells wide: (char, heat), nothing off the grid.
+fn fire_cell(x: i32, z: i32, side: i32) -> vec2<f32> {
+    if x < 0 || z < 0 || x >= side || z >= side {
+        return vec2<f32>(0.0);
+    }
+    let i = u32(z * side + x);
+    let pair = flora_wind[FIRE + 2u + (i >> 1u)];
+    return select(pair.xy, pair.zw, (i & 1u) == 1u);
+}
+
+// How charred the trees at `world` are and how hot the fire there burns, 0..1 each: between the
+// four nearest cell centres, nothing off the grid. `FloraFire::char_at` and `heat_at` are the same.
+// A tree outside every touched cell reads two vectors and no cell.
+fn fire_at(world: vec3<f32>) -> vec2<f32> {
+    let head = flora_wind[FIRE];
+    let side = i32(head.w);
+    if side == 0 {
+        return vec2<f32>(0.0);
+    }
+    let bounds = flora_wind[FIRE + 1u];
+    if any(world.xz < bounds.xy) || any(world.xz > bounds.zw) {
+        return vec2<f32>(0.0);
+    }
+    let g = (world.xz - head.xy) * head.z - 0.5;
+    let base = floor(g);
+    let f = g - base;
+    let x = i32(base.x);
+    let z = i32(base.y);
+    let near = mix(fire_cell(x, z, side), fire_cell(x + 1, z, side), f.x);
+    let far = mix(fire_cell(x, z + 1, side), fire_cell(x + 1, z + 1, side), f.x);
+    return mix(near, far, f.y);
+}
+
+// How far ahead of the burning front (in the leaf's moment) a leaf has scorched brown, and how
+// close to it a scorched leaf glows, burning (`fire::LEAF_SCORCH`, `fire::LEAF_GLOW`).
+const LEAF_SCORCH: f32 = 0.35;
+const LEAF_GLOW: f32 = 0.08;
+
+// The burning front in leaf moments at a tree whose char is `burnt`: the leaves whose moment is
+// below it have burnt away; none scorches without char, all have burnt at 1
+// (`fire::leaf_burn_front`). A leaf burns at its moment in the season, so the fire takes the
+// leaves in no order a viewer could follow.
+fn leaf_burn_front(burnt: f32) -> f32 {
+    let lead = LEAF_GLOW + LEAF_SCORCH + 0.02;
+    return burnt * (1.0 + lead) - lead;
+}
+
+// Whether a leaf (or a flower) has burnt away in the fire `fire` at its tree: it then draws
+// nothing, in the main pass and the shadow maps alike.
+fn leaf_burnt(sway: vec4<f32>, fire: vec2<f32>) -> bool {
+    return leaf_season_moment(sway) < leaf_burn_front(fire.x);
+}
+
+// The vertex alpha a leaf hands the fragment stage in a fire: 1 plus how scorched it is (0..1)
+// plus how bright it burns (0..1, once fully scorched). All of a leaf's vertices share its moment,
+// so the value is the same across it and survives interpolation. A flower keeps its 0.
+fn leaf_fire_alpha(sway: vec4<f32>, color: vec4<f32>, fire: vec2<f32>) -> f32 {
+    if is_flower(color) {
+        return color.a;
+    }
+    let ahead = leaf_season_moment(sway) - leaf_burn_front(fire.x);
+    let scorch = 1.0 - smoothstep(LEAF_GLOW, LEAF_GLOW + LEAF_SCORCH, ahead);
+    let glow = (1.0 - smoothstep(0.0, LEAF_GLOW, ahead)) * fire.y;
+    return color.a + scorch + glow;
+}
+
+// A scorched leaf's colour, and charcoal's (linear).
+const SCORCHED: vec3<f32> = vec3<f32>(0.075, 0.036, 0.014);
+const CHARCOAL: vec3<f32> = vec3<f32>(0.022, 0.019, 0.017);
+
+// The light of embers and of a burning leaf: linear colour times luminance in nits, scaled by the
+// view's exposure where it is added, so they glow faintly by day and brightly by night.
+const EMBER: vec3<f32> = vec3<f32>(1.0, 0.24, 0.03);
+const EMBER_NITS: f32 = 900.0;
+const LEAF_FLAME: vec3<f32> = vec3<f32>(1.0, 0.27, 0.03);
+const LEAF_FLAME_NITS: f32 = 1000.0;
+
+// How bright embers glow at a heat (0..1): they dim fast as a fire cools.
+fn ember_glow(heat: f32) -> f32 {
+    return heat * heat;
+}
+
+// How charred a piece of wood `h` trunk heights up is (`h` from the vertex stage) where the char
+// is `burnt`: from the ground up, the trunk by char 0.4, the crown's wood by 1.
+fn wood_char(burnt: f32, h: f32) -> f32 {
+    let reach = burnt * 2.6;
+    return (1.0 - smoothstep(reach - 0.35, reach, h)) * smoothstep(0.0, 0.05, burnt);
+}
+
+// A flicker for embers at `world`, 0.35..1: slow and uneven, never the same in two places.
+fn ember_flicker(world: vec3<f32>, time: f32) -> f32 {
+    let a = sin(time * 3.1 + dot(world, vec3<f32>(2.7, 1.3, 1.9)));
+    let b = sin(time * 7.7 + dot(world, vec3<f32>(-1.1, 4.3, 2.2)));
+    return 0.35 + 0.65 * saturate(0.5 + 0.35 * a + 0.25 * b);
+}
+
+// A pseudo-random point in the unit square for the cell `p` of the char's crack pattern.
+fn crack_point(p: vec2<f32>) -> vec2<f32> {
+    let q = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)), dot(p, vec2<f32>(269.5, 183.3)));
+    return fract(sin(q) * 43758.547);
+}
+
+// The cracks of charred wood at the bark's `uv`: 1 on the seams between the blocks charcoal splits
+// into, 0 inside them (the distance to the second-nearest point of a Voronoi pattern less the
+// nearest's; blocks a little longer than wide).
+fn char_cracks(uv: vec2<f32>) -> f32 {
+    let p = uv * vec2<f32>(9.0, 5.0);
+    let cell = floor(p);
+    let f = p - cell;
+    var nearest = 8.0;
+    var second = 8.0;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let o = vec2<f32>(f32(i), f32(j));
+            let d = length(o + crack_point(cell + o) - f);
+            if d < nearest {
+                second = nearest;
+                nearest = d;
+            } else if d < second {
+                second = d;
+            }
+        }
+    }
+    return 1.0 - smoothstep(0.03, 0.12, second - nearest);
+}
+
+// Burn the surface of wood in place: `charred` (0..1) of it turns to charcoal, split into blocks
+// whose seams (at the bark's `uv`) are darker still, and rougher. Returns how much of it is a
+// seam, where embers glow.
+fn char_wood(p: ptr<function, PbrInput>, charred: f32, uv: vec2<f32>) -> f32 {
+    let crack = char_cracks(uv);
+    let color = (*p).material.base_color.rgb;
+    (*p).material.base_color = vec4<f32>(mix(color, CHARCOAL * (1.0 - 0.7 * crack), charred), (*p).material.base_color.a);
+    (*p).material.perceptual_roughness = mix((*p).material.perceptual_roughness, 0.85, charred);
+    // Charcoal is dull: little of the sky's or the sun's sheen.
+    (*p).material.reflectance = (*p).material.reflectance * (1.0 - 0.75 * charred);
+    return crack;
+}
+
+// Scorch a leaf's surface in place: `scorch` (0..1) of it turns brown and dull.
+fn scorch_leaf(p: ptr<function, PbrInput>, scorch: f32) {
+    let color = (*p).material.base_color.rgb;
+    let weights = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let shade = clamp(dot(color, weights) / 0.06, 0.5, 1.5);
+    (*p).material.base_color = vec4<f32>(mix(color, SCORCHED * shade, scorch), (*p).material.base_color.a);
+    (*p).material.perceptual_roughness = mix((*p).material.perceptual_roughness, 0.9, scorch);
 }
 
 // Fresh snow's colour: bright and a little blue.

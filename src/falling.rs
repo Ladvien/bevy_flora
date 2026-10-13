@@ -59,6 +59,7 @@ use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 
 use crate::felling::{Felled, TreeLanded};
+use crate::fire::{FloraFire, burnt_front};
 use crate::ground::FloraGround;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::plugin::{Paint, ProceduralTree, TreeRender};
@@ -288,9 +289,10 @@ pub(crate) struct Card {
 }
 
 impl Card {
-    /// Whether it is a leaf still on the tree, given the season's leaf fall of a deciduous tree.
-    pub fn on_tree(&self, shed: Option<f32>) -> bool {
-        !self.flower && shed.is_none_or(|shed| self.moment >= shed)
+    /// Whether it is a leaf still on the tree, given the season's leaf fall of a deciduous tree and
+    /// the fire's burning front at the tree (`fire::burnt_front`).
+    pub fn on_tree(&self, shed: Option<f32>, burnt: f32) -> bool {
+        !self.flower && self.moment >= burnt && shed.is_none_or(|shed| self.moment >= shed)
     }
 }
 
@@ -676,6 +678,7 @@ pub(crate) fn drop_leaves(
     stumps: Query<&GlobalTransform>,
     bursts: Query<&LeafBurst>,
     mut caches: ResMut<FallCaches>,
+    fire: Option<Res<FloraFire>>,
 ) {
     let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
     let fall = Fall::now(&time, &settings, &wind);
@@ -688,8 +691,9 @@ pub(crate) fn drop_leaves(
         let Some(leaves) = leaf_source(render, tree, pooled, pools.as_deref()) else { continue };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let shed = leaves.deciduous.then_some(season.leaf_fall);
+        let burnt = burnt_front(fire.as_deref(), at.translation());
         let mut cards: Vec<&Card> =
-            caches.cards(leaves.mesh.id(), source).cards.iter().filter(|card| card.on_tree(shed)).collect();
+            caches.cards(leaves.mesh.id(), source).cards.iter().filter(|card| card.on_tree(shed, burnt)).collect();
         if cards.is_empty() {
             continue;
         }
@@ -746,6 +750,7 @@ pub(crate) fn shed_with_season(
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     trees: Query<(&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>), Without<Felled>>,
     bursts: Query<&LeafBurst>,
+    fire: Option<Res<FloraFire>>,
 ) {
     let to = season.leaf_fall.clamp(0.0, 1.0);
     let now = time.elapsed_secs_wrapped();
@@ -795,7 +800,13 @@ pub(crate) fn shed_with_season(
             continue;
         };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
-        let falling: Vec<&Card> = caches.cards(leaves.mesh.id(), source).shed_between(from, to).take(budget).collect();
+        let burnt = burnt_front(fire.as_deref(), position);
+        let falling: Vec<&Card> = caches
+            .cards(leaves.mesh.id(), source)
+            .shed_between(from, to)
+            .filter(|card| card.moment >= burnt)
+            .take(budget)
+            .collect();
         if falling.is_empty() {
             continue;
         }
@@ -892,7 +903,7 @@ mod tests {
 
     /// How many of the cards of `mesh` are leaves on the tree at the season's leaf fall `shed`.
     fn on_tree(mesh: &Mesh, shed: Option<f32>) -> usize {
-        leaf_cards(mesh).iter().filter(|card| card.on_tree(shed)).count()
+        leaf_cards(mesh).iter().filter(|card| card.on_tree(shed, f32::NEG_INFINITY)).count()
     }
 
     #[test]
@@ -1009,6 +1020,37 @@ mod tests {
             app.update();
         }
         assert!(bursts(&mut app).is_empty());
+    }
+
+    #[test]
+    fn a_burnt_tree_drops_none_of_the_leaves_the_fire_took() {
+        use crate::fire::{FloraFire, burnt_front};
+        let mut app = app();
+        let oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), Transform::default())).id();
+        let mut fire = FloraFire::with_cells(Vec2::ZERO, 32.0, 16);
+        fire.scorch(Vec3::ZERO, 3.0, 0.8);
+        app.insert_resource(fire);
+        app.update();
+        app.update();
+        let (all, left) = {
+            let world = app.world();
+            let render = world.get::<TreeRender>(oak).unwrap();
+            let mesh = world.resource::<Assets<Mesh>>().get(&render.foliage.as_ref().unwrap().1).unwrap();
+            let burnt = burnt_front(Some(world.resource::<FloraFire>()), Vec3::ZERO);
+            let cards = leaf_cards(mesh);
+            (cards.iter().filter(|card| !card.flower).count(), cards.iter().filter(|card| card.on_tree(None, burnt)).count())
+        };
+        assert!(left > 0 && left < all / 2, "{left} of {all} leaves left at char 0.8");
+        let drop_all = |app: &mut bevy::app::App| {
+            app.world_mut().resource_mut::<Messages<DropLeaves>>().write(DropLeaves { tree: oak, count: 100_000 });
+            app.update();
+            bursts(app).iter().map(|burst| burst.leaves).sum::<u32>()
+        };
+        assert_eq!(drop_all(&mut app), left as u32, "the leaves still on the tree, and only those");
+
+        // Burnt through: nothing more falls.
+        app.world_mut().resource_mut::<FloraFire>().scorch(Vec3::ZERO, 3.0, 1.0);
+        assert_eq!(drop_all(&mut app), left as u32);
     }
 
     #[test]

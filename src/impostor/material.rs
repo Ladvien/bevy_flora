@@ -57,6 +57,9 @@ pub struct ImpostorMaterial {
     /// Whether the see-through fade ([`SeeThroughTrees`](crate::SeeThroughTrees)) cuts this
     /// impostor; the plugin sets it while a camera has one.
     pub see_through: bool,
+    /// Whether the fire ([`FloraFire`](crate::FloraFire)) chars this impostor and thins its
+    /// crown; the plugin sets it while a `FloraFire` exists.
+    pub fire: bool,
 }
 
 impl ImpostorMaterial {
@@ -77,6 +80,7 @@ impl ImpostorMaterial {
             flora,
             wind: wind.0.clone(),
             see_through: false,
+            fire: false,
         }
     }
 }
@@ -86,11 +90,13 @@ impl ImpostorMaterial {
 pub struct ImpostorKey {
     /// The see-through fade: see [`ImpostorMaterial::see_through`].
     pub see_through: bool,
+    /// The fire: see [`ImpostorMaterial::fire`].
+    pub fire: bool,
 }
 
 impl From<&ImpostorMaterial> for ImpostorKey {
     fn from(material: &ImpostorMaterial) -> Self {
-        Self { see_through: material.see_through }
+        Self { see_through: material.see_through, fire: material.fire }
     }
 }
 
@@ -127,10 +133,11 @@ impl Material for ImpostorMaterial {
         // The quad turns to face the camera whatever its winding looks like
         // under the tree's own transform (a mirrored tree flips it).
         descriptor.primitive.cull_mode = None;
-        if key.bind_group_data.see_through
-            && let Some(fragment) = descriptor.fragment.as_mut()
-        {
-            fragment.shader_defs.push("FLORA_SEE_THROUGH".into());
+        let defs = [(key.bind_group_data.see_through, "FLORA_SEE_THROUGH"), (key.bind_group_data.fire, "FLORA_FIRE")];
+        for (on, def) in defs {
+            if on && let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push(def.into());
+            }
         }
         Ok(())
     }

@@ -45,6 +45,7 @@ use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bake
 use crate::params::TreeParams;
 use crate::pipeline::{aged_skeleton, build_aged};
 use crate::see_through::{SeeThroughTrees, arm_see_through, sync_see_through};
+use crate::fire::{FireRebind, arm_fire, burn, fire_burns, fire_changed, fire_rebinds, rebind_fire, sync_fire};
 use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
 use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees};
@@ -213,6 +214,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .init_resource::<FallingLeaves>()
             .init_resource::<FallCaches>()
             .init_resource::<SeasonShed>()
+            .init_resource::<FireRebind>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
@@ -260,6 +262,22 @@ impl bevy::app::Plugin for FloraPlugin {
             .add_systems(
                 bevy::app::PostUpdate,
                 (arm_see_through, sync_see_through).after(bevy::transform::TransformSystems::Propagate),
+            )
+            // The fire steps after transform propagation (its fuel is where the trees stand this
+            // frame) and is written into the shared buffer when it changed; the materials are
+            // re-prepared the frame after the buffer is resized, and carry the fire while one
+            // exists.
+            .add_systems(
+                bevy::app::PostUpdate,
+                (
+                    rebind_fire.run_if(fire_rebinds),
+                    burn.run_if(fire_burns),
+                    sync_fire.run_if(fire_changed),
+                    arm_fire,
+                )
+                    .chain()
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .before(bevy::asset::AssetEventSystems),
             )
             // Falling leaves start from where the trees are this frame, and from their leaf meshes
             // as they are this frame (a growing tree's change every frame). Nothing runs while
@@ -1344,11 +1362,11 @@ mod tests {
         assert!(assets.get(&bw).is_some() && assets.get(&bl).is_some());
     }
 
-    /// The contents of the shared wind buffer.
+    /// The weather's slots of the shared buffer (the fire's follow them).
     fn wind_buffer(app: &App) -> Vec<[f32; 4]> {
         let handle = &app.world().resource::<FloraWindBuffer>().0;
         let buffers = app.world().resource::<Assets<ShaderBuffer>>();
-        buffers.get(handle).unwrap().cast_slice::<[f32; 4]>().unwrap().to_vec()
+        buffers.get(handle).unwrap().cast_slice::<[f32; 4]>().unwrap()[..crate::shading::WIND_VECTORS].to_vec()
     }
 
     /// Run one update and count the `Modified` events of shader buffers it produced.
@@ -1447,6 +1465,62 @@ mod tests {
         let assets = app.world().resource::<Assets<FloraMaterial>>();
         assert_eq!(assets.get(&foliage).unwrap().extension.wind, app.world().resource::<FloraWindBuffer>().0);
         assert_eq!(wind_buffer(&app)[0][2], 0.77);
+    }
+
+    #[test]
+    fn a_fire_grows_the_shared_buffer_and_arms_the_materials_until_it_goes() {
+        use crate::fire::{FIRE_SLOT, FloraFire};
+        use bevy::math::Vec3;
+        use crate::shading::WIND_VECTORS;
+        let shared = |app: &App| {
+            let handle = &app.world().resource::<FloraWindBuffer>().0;
+            let buffers = app.world().resource::<Assets<ShaderBuffer>>();
+            buffers.get(handle).unwrap().cast_slice::<[f32; 4]>().unwrap().to_vec()
+        };
+        let mut app = app();
+        app.insert_resource(FloraMaterialSupport);
+        let tree = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(f32::INFINITY))).id();
+        app.update();
+        let (wood, foliage) = flora_pair(&app, tree);
+        let armed = |app: &App| {
+            let assets = app.world().resource::<Assets<FloraMaterial>>();
+            (assets.get(&wood).unwrap().extension.fire, assets.get(&foliage).unwrap().extension.fire)
+        };
+        let both = |modified: &[bevy::asset::AssetId<FloraMaterial>]| {
+            modified.contains(&wood.id()) && modified.contains(&foliage.id())
+        };
+        assert_eq!(shared(&app).len(), FIRE_SLOT + 1);
+        assert_eq!(armed(&app), (false, false));
+
+        // A fire: its grid follows the weather, which stays; nothing burns yet, so the shaders stop
+        // at the header. The materials carry the fire, and are prepared again the frame after the
+        // buffer grew, to bind the new one; then nothing more.
+        let weather = wind_buffer(&app);
+        app.insert_resource(FloraFire::with_cells(Vec2::ZERO, 16.0, 8));
+        assert!(both(&update_and_modified(&mut app)), "arming did not re-prepare the materials");
+        assert_eq!(armed(&app), (true, true));
+        let buffer = shared(&app);
+        assert_eq!(buffer.len(), FIRE_SLOT + 2 + 32);
+        assert_eq!(&buffer[..WIND_VECTORS], &weather[..]);
+        assert_eq!(buffer[FIRE_SLOT][3], 0.0, "nothing burns, yet the shaders read the cells");
+        assert!(both(&update_and_modified(&mut app)), "the materials were not bound to the grown buffer");
+        assert!(update_and_modified(&mut app).is_empty(), "the materials are prepared again and again");
+
+        // A burnt patch is written in place: the grid, the rectangle around the touched cell (grown
+        // by a cell), the cell's char; no material is touched.
+        app.world_mut().resource_mut::<FloraFire>().scorch(Vec3::new(1.0, 0.0, 1.0), 0.1, 0.5);
+        assert!(update_and_modified(&mut app).is_empty(), "the fire's cells modified a material");
+        let buffer = shared(&app);
+        assert_eq!(buffer[FIRE_SLOT], [-8.0, -8.0, 0.5, 8.0]);
+        assert_eq!(buffer[FIRE_SLOT + 1], [-2.0, -2.0, 4.0, 4.0]);
+        // Cell (4, 4) is the 36th, the first of the 18th pair.
+        assert_eq!(buffer[FIRE_SLOT + 2 + 18], [0.5, 0.0, 0.0, 0.0]);
+
+        // Gone: the buffer shrinks back and the materials carry no fire.
+        app.world_mut().remove_resource::<FloraFire>();
+        app.update();
+        assert_eq!(shared(&app).len(), FIRE_SLOT + 1);
+        assert_eq!(armed(&app), (false, false));
     }
 
     /// Check that `tree` draws `build_lods`' levels for `params` at `age` in `lod`'s bands: the
