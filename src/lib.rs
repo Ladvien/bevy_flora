@@ -429,7 +429,7 @@ pub mod venation;
 
 pub use background::BuildInBackground;
 pub use crown::CrownShape;
-pub use deadfall::{Deadfall, DeadfallKind, DeadfallSettings, PoolLog, PooledDeadfall};
+pub use deadfall::{Deadfall, DeadfallKind, DeadfallSettings, IntoDeadfall, PoolLog, PooledDeadfall};
 pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeNotch, TreeStump};
 pub use fire::{BURNT, Burnt, FireCell, FireSpread, FloraFire, TreeBurnt};

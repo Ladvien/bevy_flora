@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.42 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.43 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.42"
+bevy_flora = "0.43"
 ```
 
 | feature | default | what it does |
@@ -557,6 +557,22 @@ fn forest_floor(mut commands: Commands, mut pools: ResMut<Assets<TreePool>>, mut
     let pool = pools.add(pool);
     let kind = DeadfallKind::Lying { direction: Vec2::X };
     commands.spawn((PooledDeadfall { pool, variant: 0, kind }, Transform::from_xyz(10.0, 0.0, 4.0)));
+}
+```
+
+A standing pooled tree becomes deadfall in place with `IntoDeadfall(kind)`: the same entity, now a `PooledDeadfall` of its own pool, variant and look, where it stood, its shadow opt-out kept. That is what a save restores for the trees felled before it. `ScatterPoint::id` names a scattered tree (the same for a seed, area and spacing, whatever a density or a stand keeps), so the save can keep the ids of the felled trees and the load plant those as stumps, matching no positions:
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::{DeadfallKind, IntoDeadfall, PooledTree, Scatter, TreePool};
+
+fn plant(mut commands: Commands, forest: &Scatter, pool: Handle<TreePool>, felled: &[u32]) {
+    for tree in forest.points() {
+        let mut planted = commands.spawn((PooledTree { pool: pool.clone(), variant: tree.variant }, tree.transform(0.0)));
+        if felled.contains(&tree.id) {
+            planted.insert(IntoDeadfall(DeadfallKind::Stump));
+        }
+    }
 }
 ```
 
