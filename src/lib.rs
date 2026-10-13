@@ -55,6 +55,25 @@
 //! It needs a device with storage buffers in the vertex stage (everything but
 //! WebGL2; see [`GpuGrowthSupport`]); elsewhere the trees grow on the CPU.
 //!
+//! # Planting without a hitch: [`BuildInBackground`]
+//!
+//! A tree is built in the frame it is spawned, and that frame waits for it (200 oaks: about
+//! 23 ms on an Apple M4 Pro). With [`BuildInBackground`] it is built on Bevy's async compute
+//! pool instead and appears a few frames later, the frame its build is done; the frame it was
+//! spawned in costs well under a millisecond.
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::prelude::*;
+//!
+//! fn plant(mut commands: Commands) {
+//!     for i in 0..200 {
+//!         let at = Vec3::new((i % 20) as f32 * 8.0, 0.0, (i / 20) as f32 * 8.0);
+//!         commands.spawn((ProceduralTree(TreePreset::Oak.params()), BuildInBackground, Transform::from_translation(at)));
+//!     }
+//! }
+//! ```
+//!
 //! # Drawing a forest: [`TreePool`]
 //!
 //! Every [`ProceduralTree`] has meshes of its own, which a GPU draws a few thousand
@@ -203,6 +222,7 @@
 //! assert!(!meshes.trunk.is_empty());
 //! ```
 
+pub mod background;
 pub mod crown;
 pub mod felling;
 pub mod foliage;
@@ -226,6 +246,7 @@ mod textures;
 pub mod tree_asset;
 pub mod venation;
 
+pub use background::BuildInBackground;
 pub use crown::CrownShape;
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeStump};
 pub use foliage::LeafPoint;
@@ -261,11 +282,11 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 /// shakes, felling, the ground, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, BuckTree, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind,
-        FoliageParams, GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree,
-        ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, TreeAge, TreeBucked, TreeGenerated, TreeLanded,
-        TreeLog, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
-        WindResponse, WoodCapsule, build_pool,
+        BarkParams, BarkScan, BuckTree, BuildInBackground, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason,
+        FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree,
+        ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, TreeAge, TreeBucked, TreeGenerated,
+        TreeLanded, TreeLog, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape,
+        TreeStump, WindResponse, WoodCapsule, build_pool,
     };
 }
 

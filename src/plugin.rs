@@ -10,7 +10,9 @@
 //! CPU per tree); `Growing` is meant for a few hero trees, not a forest. The
 //! full-grown skeleton is kept between frames and regenerated only when
 //! [`ProceduralTree`] changes. Trees built or rebuilt in the same frame are built
-//! on all cores. Trees with equal looks (equal colours, trunk height, wind response and leaf
+//! on all cores, and that frame waits for them; a tree with [`BuildInBackground`] is built on
+//! the async compute pool instead and appears the frame its build is done. Trees with equal
+//! looks (equal colours, trunk height, wind response and leaf
 //! shading; seeds do not matter) share their materials, which are never
 //! written in place, so the renderer prepares each look once and does not
 //! re-prepare anything as a tree grows.
@@ -32,6 +34,7 @@ use bevy::tasks::{ComputeTaskPool, TaskPool};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
 
+use crate::background::{BuildInBackground, PendingBuild};
 use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_trees, sync_growth_mode};
 use crate::gpu::{GpuGrowth, GpuGrowthSupport};
 use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bakes};
@@ -115,6 +118,9 @@ pub struct TreeRender {
     pub(crate) full: Skeleton,
     /// Age after which rebuilding changes nothing.
     pub mature_at: f32,
+    /// The age the meshes show, for a tree rebuilt on the CPU (a [`BuildInBackground`] tree
+    /// whose age moved while it was built is rebuilt until they agree).
+    pub(crate) age: f32,
 }
 
 /// How a tree's wood and leaves are drawn.
@@ -198,6 +204,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
+            .register_type::<BuildInBackground>()
             .add_systems(
                 bevy::app::Update,
                 (
@@ -314,8 +321,11 @@ pub fn update_tree_shapes(
     }
 }
 
-/// Rebuild meshes for trees whose parameters or age changed.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+/// Rebuild meshes for trees whose parameters or age changed. A tree with [`BuildInBackground`] is
+/// built on the async compute pool instead, and its meshes are put in the frame the build is done.
+// Public so that other systems can be ordered against it; the background builds it polls are the
+// plugin's own.
+#[allow(clippy::type_complexity, clippy::too_many_arguments, private_interfaces)]
 pub fn rebuild_trees(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -328,15 +338,25 @@ pub fn rebuild_trees(
     support: Res<GpuGrowthSupport>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
-        (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
-        (Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>, Without<Felled>),
+        (Entity, Ref<ProceduralTree>, Ref<TreeAge>, Option<&mut TreeRender>, Has<GpuGrowth>, Has<BuildInBackground>),
+        Without<Felled>,
     >,
+    mut pending: Query<(Entity, &mut PendingBuild<RebuiltTree>)>,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
 
+    // Phase 0: the background builds that are done.
+    let mut finished = Vec::new();
+    for (entity, mut build) in &mut pending {
+        if let Some(out) = build.poll() {
+            commands.entity(entity).remove::<PendingBuild<RebuiltTree>>();
+            finished.push(out);
+        }
+    }
+
     // Phase 1: collect what to build.
     let mut jobs = Vec::new();
-    for (entity, tree, age, mut render, gpu) in &mut trees {
+    for (entity, tree, age, mut render, gpu, background) in &mut trees {
         // A tree that grows on the GPU is `rebuild_gpu_trees`'s.
         if gpu && support.0 {
             continue;
@@ -346,34 +366,41 @@ pub fn rebuild_trees(
         if render.as_deref().is_some_and(|render| render.paint.cloned_cpu().is_none()) {
             continue;
         }
+        if background {
+            // A change of parameters replaces a build under way; otherwise the tree is built
+            // whenever its meshes are not of its age (or it has none) and no build is under way.
+            let building = pending.contains(entity);
+            let behind = render.as_deref().is_none_or(|render| render.age != age.0);
+            if !(tree.is_changed() || (behind && !building)) {
+                continue;
+            }
+            // The kept skeleton is copied, not taken: the tree keeps it while the build runs.
+            let kept = render.as_deref().filter(|_| !tree.is_changed()).map(|render| render.full.clone());
+            let job = RebuildJob { entity, params: tree.0.clone(), age: age.0, kept, background: true };
+            commands.entity(entity).insert(PendingBuild::spawn(move || build_job(job)));
+            continue;
+        }
+        if !(tree.is_changed() || age.is_changed() || render.is_none()) {
+            continue;
+        }
         // Only the age changed: age the skeleton generated last time.
         let kept = match render.as_mut() {
             Some(render) if !tree.is_changed() => Some(std::mem::take(&mut render.full)),
             _ => None,
         };
-        jobs.push(RebuildJob { entity, params: tree.0.clone(), age: age.0, kept });
+        jobs.push(RebuildJob { entity, params: tree.0.clone(), age: age.0, kept, background: false });
     }
 
-    // Phase 2 builds on all cores, meshes included; phase 3 applies each result here, in order.
-    let build = |job: RebuildJob| {
-        let full = job.kept.unwrap_or_else(|| generate_skeleton(&job.params));
-        let out = build_aged(&full, &job.params, job.age);
-        RebuiltTree {
-            entity: job.entity,
-            full,
-            trunk: (!out.trunk.is_empty()).then(|| out.trunk.into_bevy_mesh()),
-            foliage: (!out.foliage.is_empty()).then(|| out.foliage.into_bevy_mesh()),
-            flowers: (!out.flowers.is_empty()).then(|| out.flowers.into_bevy_mesh()),
-            mature_at: out.mature_at,
-            trunk_progress: out.skeleton.nodes[0].progress,
-        }
-    };
-    // Ageing a kept skeleton costs about 20 us a tree, less than waking the pool for a few
-    // hundred of them (the growing-tree case); generating a skeleton is worth spreading.
-    let parallel = jobs.len() > 1000 || jobs.iter().filter(|job| job.kept.is_none()).count() >= 2;
-    build_in_batches(jobs, parallel, build, |out| {
+    // Phase 2 builds on all cores, meshes included; phase 3 applies each result here, in order,
+    // after the background builds that are done.
+    let mut apply = |out: RebuiltTree| {
         let (entity, full, trunk_progress) = (out.entity, out.full, out.trunk_progress);
-        let Ok((_, tree, _, render, _)) = trees.get_mut(entity) else { return };
+        let Ok((_, tree, _, render, gpu, _)) = trees.get_mut(entity) else { return };
+        // A background build is out of date if the parameters changed again since it started (a
+        // new one is under way) or the tree has moved to the GPU.
+        if out.background && (tree.is_changed() || (gpu && support.0)) {
+            return;
+        }
         let params = &tree.0;
         let existing = render.as_deref().and_then(|render| render.paint.cloned_cpu());
         match (render, existing) {
@@ -410,12 +437,14 @@ pub fn rebuild_trees(
                     flowers,
                     full,
                     mature_at: out.mature_at,
+                    age: out.age,
                 });
             }
             (Some(mut render), Some(paint)) => {
                 let render = &mut *render;
                 render.full = full;
                 render.mature_at = out.mature_at;
+                render.age = out.age;
                 let trunk_entity = render.trunk;
                 sync_trunk(
                     &mut commands,
@@ -430,7 +459,7 @@ pub fn rebuild_trees(
                         set_color(&mut materials, foliage, params.foliage.color);
                     }
                     // An age-only rebuild cannot change the looks, so it resolves nothing.
-                    Paint::Flora { .. } if tree.is_changed() => {
+                    Paint::Flora { .. } if out.regenerated => {
                         let wind = wind.expect("flora paint implies the wind buffer");
                         let wood = shared.resolve(&mut flora, &textures.wood(params), wind);
                         let leaves = shared.resolve(&mut flora, &textures.leaves(params), wind);
@@ -468,7 +497,14 @@ pub fn rebuild_trees(
             height: params.trunk.height * trunk_progress,
             radius: params.trunk.radius,
         });
-    });
+    };
+    for out in finished {
+        apply(out);
+    }
+    // Ageing a kept skeleton costs about 20 us a tree, less than waking the pool for a few
+    // hundred of them (the growing-tree case); generating a skeleton is worth spreading.
+    let parallel = jobs.len() > 1000 || jobs.iter().filter(|job| job.kept.is_none()).count() >= 2;
+    build_in_batches(jobs, parallel, build_job, &mut apply);
 }
 
 /// Run `build` on every job and hand each result to `apply` in the order of
@@ -553,8 +589,15 @@ fn sync_trunk(
 
 /// What a worker makes of one [`RebuildJob`]: the skeleton and the Bevy meshes
 /// (`None` for an empty one).
-struct RebuiltTree {
+pub(crate) struct RebuiltTree {
     entity: Entity,
+    /// The age the meshes show.
+    age: f32,
+    /// The skeleton was generated, not kept: the parameters changed (or the tree is new), so its
+    /// looks may have too.
+    regenerated: bool,
+    /// Built by a [`PendingBuild`] task: it may be out of date by the time it is done.
+    background: bool,
     full: Skeleton,
     trunk: Option<Mesh>,
     foliage: Option<Mesh>,
@@ -570,6 +613,26 @@ struct RebuildJob {
     params: TreeParams,
     age: f32,
     kept: Option<Skeleton>,
+    background: bool,
+}
+
+/// Build one [`RebuildJob`]: on any thread, so a pure function of the job.
+fn build_job(job: RebuildJob) -> RebuiltTree {
+    let regenerated = job.kept.is_none();
+    let full = job.kept.unwrap_or_else(|| generate_skeleton(&job.params));
+    let out = build_aged(&full, &job.params, job.age);
+    RebuiltTree {
+        entity: job.entity,
+        age: job.age,
+        regenerated,
+        background: job.background,
+        full,
+        trunk: (!out.trunk.is_empty()).then(|| out.trunk.into_bevy_mesh()),
+        foliage: (!out.foliage.is_empty()).then(|| out.foliage.into_bevy_mesh()),
+        flowers: (!out.flowers.is_empty()).then(|| out.flowers.into_bevy_mesh()),
+        mature_at: out.mature_at,
+        trunk_progress: out.skeleton.nodes[0].progress,
+    }
 }
 
 /// Overwrite the asset behind `handle` in place; if it was removed externally,
@@ -859,6 +922,46 @@ mod tests {
         app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 6.0;
         app.update();
         assert_eq!(uploaded_trunk(&app, tree), expected_trunk(&params, 6.0));
+    }
+
+    #[test]
+    fn a_tree_built_in_the_background_shows_only_its_latest_parameters_and_reaches_its_age() {
+        let mut app = app();
+        let mut params = TreePreset::Oak.params();
+        let tree = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(3.0), BuildInBackground)).id();
+        // The frame it is spawned only starts the build: nothing is drawn yet.
+        app.update();
+        assert!(app.world().get::<TreeRender>(tree).is_none());
+        // A new seed while it is built replaces the build, and an age set while the next one runs
+        // is caught up once it is done.
+        params.seed = 7;
+        app.world_mut().get_mut::<ProceduralTree>(tree).unwrap().0 = params.clone();
+        app.update();
+        app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 6.0;
+        let mut cursor = app.world().resource::<Messages<TreeGenerated>>().get_cursor_current();
+        let mut generated = 0;
+        for _ in 0..3000 {
+            app.update();
+            generated += cursor.read(app.world().resource::<Messages<TreeGenerated>>()).count();
+            // Whatever it shows is the new seed, at the age it says, exactly as built in the frame.
+            if let Some(age) = app.world().get::<TreeRender>(tree).map(|render| render.age) {
+                assert_eq!(uploaded_trunk(&app, tree), expected_trunk(&params, age), "age {age}");
+                if age == 6.0 {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(app.world().get::<TreeRender>(tree).map(|render| render.age), Some(6.0));
+        assert!((1..=2).contains(&generated), "{generated} builds applied");
+
+        // Despawned while it is built: the task is dropped with it.
+        let gone = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(3.0), BuildInBackground)).id();
+        app.update();
+        app.world_mut().despawn(gone);
+        for _ in 0..20 {
+            app.update();
+        }
     }
 
     #[test]
