@@ -65,7 +65,45 @@ struct FloraUniform {
 //   6: the shakes (`TreeShakes`): the render time the last one ends (-1: none), 0, 0, 0
 //   7 + 2i, 8 + 2i for i in 0..8: shake i's (at x, at z, radius, strength) and (direction x,
 //      direction z, start time, duration); all zero for an empty slot
+//   23, 24: the see-through fade (`SeeThroughTrees`): the fading camera's position and the
+//      clear radius at the target; the target and 1 while a camera has one (all zero otherwise)
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
+
+// The see-through fade's slot (`see_through::SEE_THROUGH_SLOT`).
+const SEE_THROUGH: u32 = 23u;
+
+// Discard a tree's fragment at `world` (pixel `frag_coord`) when it stands between the fading
+// camera and its target, in a cone around the line of sight a third as wide at the camera as
+// at the target: fully within 70% of the radius, dithered over the rest, and closing over the
+// last tenth of the way so nothing behind the target is cut. Only the fading camera's own views
+// cut: `view_position` is where the view being drawn looks from, so shadow maps and other
+// cameras keep the whole tree. Compiled in only while a camera sees through (`FLORA_SEE_THROUGH`).
+fn see_through(world: vec3<f32>, frag_coord: vec2<f32>, view_position: vec3<f32>) {
+    let eye = flora_wind[SEE_THROUGH];
+    // (`target` is a reserved word in WGSL.)
+    let goal = flora_wind[SEE_THROUGH + 1u];
+    if goal.w < 0.5 || any(abs(view_position - eye.xyz) > vec3<f32>(1.0e-3)) {
+        return;
+    }
+    let line = goal.xyz - eye.xyz;
+    let t = dot(world - eye.xyz, line) / max(dot(line, line), 1.0e-6);
+    if t <= 0.0 || t >= 1.0 {
+        return;
+    }
+    let radius = eye.w * mix(1.0 / 3.0, 1.0, t);
+    let off = distance(world, eye.xyz + line * t);
+    let open = (1.0 - smoothstep(0.7 * radius, radius, off)) * (1.0 - smoothstep(0.9, 1.0, t));
+    if open > ordered_dither(frag_coord) {
+        discard;
+    }
+}
+
+// A 4x4 ordered-dither threshold in (0, 1) for the pixel at `frag_coord`.
+fn ordered_dither(frag_coord: vec2<f32>) -> f32 {
+    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let p = vec2<u32>(frag_coord) % vec2<u32>(4u);
+    return (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
+}
 
 // A leaf's own moment in the season, 0..1, from its phase (`sway.w`, one per leaf): it turns
 // around `autumn` = its moment and falls once `leaf fall` passes it, so the first to turn fall

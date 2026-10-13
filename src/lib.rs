@@ -212,6 +212,13 @@
 //! [`TreeMature`] is sent once when a [`Growing`] tree reaches maturity. The [`prelude`] has the
 //! types a game usually needs.
 //!
+//! # Seeing the player through the trees
+//!
+//! [`SeeThroughTrees`] on a third-person or top-down camera dithers out the parts of trees between
+//! it and its `target` (the player), in the camera's main pass and its prepasses alike, while
+//! shadow maps and other cameras keep the whole trees. Nothing carries the fade while no camera
+//! has it.
+//!
 //! # Building meshes without Bevy's ECS
 //!
 //! ```rust
@@ -239,6 +246,7 @@ pub mod pool;
 pub mod presets;
 pub mod rng;
 pub mod scatter;
+pub mod see_through;
 pub mod shading;
 pub mod skeleton;
 pub mod shape;
@@ -266,6 +274,7 @@ pub use pool::{PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
+pub use see_through::SeeThroughTrees;
 pub use shading::{
     FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWind,
     FloraWindBuffer, GustFront,
@@ -284,9 +293,9 @@ pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason,
         FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree,
-        ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, TreeAge, TreeBucked, TreeGenerated,
-        TreeLanded, TreeLog, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape,
-        TreeStump, WindResponse, WoodCapsule, build_pool,
+        ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked,
+        TreeGenerated, TreeLanded, TreeLog, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes,
+        TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,
     };
 }
 

@@ -29,6 +29,9 @@ import package::shading::common::{leaf_surface, leaf_transmission};
 
 import package::shading::common::{snow_on, snow_shelter, facing_normal, LEAF_FROST};
 
+@if(FLORA_SEE_THROUGH)
+import package::shading::common::see_through;
+
 @fragment
 fn fragment(
     vertex_output: VertexOutput,
@@ -39,6 +42,10 @@ fn fragment(
     // In the crossfade section of a visibility range, discard according to the dither pattern.
 @if(VISIBILITY_RANGE_DITHER)
     visibility_range_dither(in.position, in.visibility_range_dither);
+
+    // A camera sees through the trees in front of what it follows (`SeeThroughTrees`).
+@if(FLORA_SEE_THROUGH)
+    see_through(in.world_position.xyz, in.position.xy, view.world_position);
 
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     pbr_input.material.base_color = alpha_discard(

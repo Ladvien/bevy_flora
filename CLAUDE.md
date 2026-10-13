@@ -30,6 +30,7 @@ cargo run --release --example tree_file --features ron,file_watcher [-- --export
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`, `background.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems, building trees on the async compute pool (`BuildInBackground`)
 - `src/shape.rs`: `TreeShape`, the gameplay capsules and crown box (opt-in component kept up to date by the plugin)
+- `src/see_through.rs`: `SeeThroughTrees`, the camera's see-through fade (arming the flora materials, its slots in the shared buffer); its shaders are `see_through` in `shading/common.wesl` and `shading/see_through_prepass.wesl`
 - `src/felling.rs`: `FellTree`, `Felled`, `TreeStump`, `TreeLanded`, `BuckTree`, `TreeLog`, `TreeBucked`: the cut, the fall about the hinge, the landing, bucking the trunk into logs; `src/mesh/cut.rs`: cutting a mesh at a height and closing it with end-grain faces
 - `src/tree_asset.rs`: `TreeParams` as an asset, `ProceduralTreeAsset` (a tree from a handle), and with the `ron` feature the `.tree.ron` loader and `to_ron`/`from_ron`
 - `src/venation.rs`: leaf veins by space colonisation (pure CPU), rasterised into the image `FloraTextures` shares

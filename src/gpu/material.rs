@@ -53,6 +53,9 @@ pub struct GrowthExtension {
     pub venation: Option<Handle<Image>>,
     /// How the surface is lit; see [`FloraExtension::style`](crate::FloraExtension::style).
     pub style: RenderStyle,
+    /// Whether the see-through fade cuts this material; see
+    /// [`FloraExtension::see_through`](crate::FloraExtension::see_through).
+    pub see_through: bool,
 }
 
 impl From<&GrowthExtension> for FloraKey {
@@ -62,6 +65,7 @@ impl From<&GrowthExtension> for FloraKey {
             detail: extension.detail_color.is_some() && extension.detail_normal.is_some(),
             venation: extension.venation.is_some(),
             style: extension.style,
+            see_through: extension.see_through,
         }
     }
 }
@@ -84,6 +88,7 @@ pub(crate) fn growth_material(
             detail_normal,
             venation: surface.venation.clone(),
             style: surface.style,
+            see_through: false,
         },
     }
 }
@@ -118,7 +123,7 @@ impl MaterialExtension for GrowthExtension {
         ])?;
         descriptor.vertex.buffers[0].attributes.extend(growth.attributes);
         // A leaf's flutter attribute goes after them (location 11).
-        specialize_flora(descriptor, layout, key.bind_group_data)
+        specialize_flora(descriptor, layout, key.bind_group_data, key.mesh_key)
     }
 }
 
