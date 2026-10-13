@@ -413,6 +413,36 @@ pub struct FoliageParams {
     /// the flora shaders: with plain materials every flower is out while the blossom is above 0
     /// (a pool's all year).
     pub blossom: Option<Color>,
+    /// The tree's fruit, or `None` for a tree without. With fruit, some of the leaves
+    /// ([`FruitParams::share`]) have one hanging below their stem, in the leaf mesh: it sways
+    /// with its leaf, is not on the tree while the blossom is out
+    /// ([`FloraSeason::blossom`](crate::FloraSeason::blossom) above 0) and drops in the first part
+    /// of the leaf fall ([`FloraSeason::leaf_fall`](crate::FloraSeason::leaf_fall)), each at its
+    /// own moment. Drawn by the flora shaders: with plain materials every fruit is on the tree
+    /// all year, in the leaves' colour.
+    pub fruit: Option<FruitParams>,
+}
+
+/// A tree's fruit ([`FoliageParams::fruit`]): round, hanging below the stem of some of its leaves.
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
+pub struct FruitParams {
+    /// The fruit's colour; each fruit's brightness varies by [`FoliageParams::color_variation`]
+    /// as its leaf's does.
+    pub color: Color,
+    /// A fruit's radius in metres at a leaf of [`FoliageParams::leaf_size`]: it grows with its
+    /// leaf, so a young tree's fruit is small, and a coarse level of detail's, whose leaves are
+    /// fewer and larger, is larger too.
+    pub radius: f32,
+    /// The share of the leaves that bear a fruit (0–1), each leaf by its own fixed draw.
+    pub share: f32,
+}
+
+impl Default for FruitParams {
+    /// Red apples, 4.5 cm across the middle, on one leaf in eight.
+    fn default() -> Self {
+        Self { color: Color::srgb(0.72, 0.08, 0.06), radius: 0.045, share: 0.125 }
+    }
 }
 
 impl Default for FoliageParams {
@@ -440,6 +470,7 @@ impl Default for FoliageParams {
             scan: None,
             autumn: None,
             blossom: None,
+            fruit: None,
         }
     }
 }

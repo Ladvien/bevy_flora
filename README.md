@@ -4,7 +4,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/bevy_flora.svg)](https://crates.io/crates/bevy_flora) [![docs.rs](https://img.shields.io/docsrs/bevy_flora)](https://docs.rs/bevy_flora) [![CI](https://github.com/Ladvien/bevy_flora/actions/workflows/ci.yml/badge.svg)](https://github.com/Ladvien/bevy_flora/actions/workflows/ci.yml) [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Ladvien/bevy_flora/blob/main/LICENSE-MIT)
 
-**Parametric, stylized procedural trees for Bevy that grow over time.** Pick one of 17 presets (16 trees and a shrub) or tune every parameter, spawn a component, and watch a seedling grow into a mature tree. The same seed always gives the same tree.
+**Parametric, stylized procedural trees for Bevy that grow over time.** Pick one of 18 presets (17 trees and a shrub) or tune every parameter, spawn a component, and watch a seedling grow into a mature tree. The same seed always gives the same tree.
 
 ![A maple growing from a bare trunk into a full crown while the camera circles it](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/growth.gif)
 
@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.30 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.31 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.30"
+bevy_flora = "0.31"
 ```
 
 | feature | default | what it does |
@@ -458,6 +458,12 @@ A flowering tree (`FoliageParams::blossom`, the cherry's pale pink) has a five-p
 
 *`cargo run --release --example forest -- --trees 700 --spacing 5 --scatter cherry:1 --clearing 7 --season 0,1,0,1 --wind 0.3 --sun -20,25,20 --eye 2,4.5,2 --at -25,1.5,-18 --fov 50 --deterministic --screenshot blossom.png`, cropped.*
 
+A fruiting tree (`FoliageParams::fruit`: a `FruitParams` colour, radius and share of the leaves that bear one; the `Apple` preset's red apples on one leaf in eight) hangs a round fruit below the stem of some of its leaves. The fruit is in the leaf mesh: it sways with its leaf, stays round in the crown's shade (its underside is baked darker), grows with its leaf on a young tree and on `GpuGrowth`, and a pool's coarser levels carry fewer, larger fruit; an impostor, a few pixels across, leaves it out. The season brings it: no fruit while the blossom is out, then fruit all summer, dropping one by one in the first two thirds of the leaf fall, so `FloraSeason::of_year` gives an apple tree white blossom in spring, red apples through summer and bare branches by winter. A fruit is 63 vertices (35 on the coarser levels).
+
+![On the left an orchard of round-headed apple trees receding over green grass, red apples among their leaves; on the right the crown of one apple tree up close, glossy red apples hanging among the leaves](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/fruit.jpg)
+
+*`cargo run --release --example forest -- --mode pool --trees 400 --spacing 6.5 --scatter apple:1 --clearing 6 --wind 0.3 --sun -20,25,20 --eye 2,2.6,2 --at -20,1.8,-15 --fov 50 --deterministic --screenshot orchard.png`, cropped, and `cargo run --release --example inspect -- --out target/apple --preset apple --mode tree --distance 3.2 --yaw 300 --eye 1.6 --look 0.55 --fov 50`.*
+
 A scattered winter forest under `FloraSeason::SNOW`: the spruces and pines keep their needles with snow on the tiers that face up, the oaks and birches stand bare with snow along their branches (the white ground is the example's, not the crate's):
 
 ![A winter forest: dark spruces and pines with snow on the upper sides of their branch tiers, bare oaks and pale birches, on white ground](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/snow.jpg)
@@ -822,7 +828,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 
 ## Features
 
-- **17 presets**: oak, pine, willow, birch, palm, cypress, bonsai, maple, spruce, poplar, baobab, dragon tree, Japanese maple, dead tree, redwood, a cherry that blossoms in spring, and a shrub for undergrowth. Each is a plain `TreeParams` value you can edit.
+- **18 presets**: oak, pine, willow, birch, palm, cypress, bonsai, maple, spruce, poplar, baobab, dragon tree, Japanese maple, dead tree, redwood, a cherry that blossoms in spring, an apple tree that bears fruit, and a shrub for undergrowth. Each is a plain `TreeParams` value you can edit.
 - **Growth over time.** Every branch has a birth age and a growth duration, derived from where it sits on the tree. A tree can be shown at any age, branches thicken after they lengthen, and leaves grow to full size without re-rolling or disappearing as the tree ages.
 - **Deterministic.** Each branch draws randomness from its own seeded stream, so the same `seed` gives the same tree on every run, and aging never re-rolls branches or leaves that already exist.
 - **Branch shape**: crown envelopes, phyllotaxis, apical dominance, Y-splits, recursive sub-branches, twist, and a gravity bend that sub-branches and leaves follow. Floor avoidance keeps even strongly drooping wood above the ground.
@@ -832,7 +838,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Bark.** Trunks and branches wear one of 14 bundled CC0 bark scans (colour and normal map; `TreeParams::bark`, `BarkScan`), laid out in metres on the mature tree so a growing tree's bark never slides, smooth on young wood and fissured as a branch thickens (`BarkParams`), and averaging the preset colour, so far trees, impostors and the plain-material fallback keep their colour. Compiled in by the default `textures` feature.
 - **Leaf scans and grown veins.** Seven presets cut their leaf cards to the real outline of a bundled CC0 leaf scan and wear its colour and normal map (`FoliageParams::scan`, `LeafScan`); every other leaf-shaped card has veins grown by space colonisation (`venation`), drawn by the leaf shader from one small shared image.
 - **Looks.** `TreeParams::style` draws a tree as `Natural`, `Painterly` (leaf normals point out of each clump's own centre: rounded masses) or `Toon` (banded light and an ink rim); impostors and pools follow.
-- **Seasons.** `FloraSeason` turns deciduous trees to their autumn colour (`FoliageParams::autumn`), sheds their leaves one by one (near a camera they fall to the ground), lays snow on every tree and brings flowering trees into blossom in spring (`FoliageParams::blossom`: five-petalled flowers that open and fall one by one), shadows, pools, impostors and `GpuGrowth` included, at no cost per tree; `FloraSeason::of_year` drives a whole year from one number.
+- **Seasons.** `FloraSeason` turns deciduous trees to their autumn colour (`FoliageParams::autumn`), sheds their leaves one by one (near a camera they fall to the ground), lays snow on every tree, brings flowering trees into blossom in spring (`FoliageParams::blossom`: five-petalled flowers that open and fall one by one) and hangs fruit on fruiting trees through summer (`FoliageParams::fruit`, the apple), shadows, pools, impostors and `GpuGrowth` included, at no cost per tree; `FloraSeason::of_year` drives a whole year from one number.
 - **Rain.** `FloraWetness` soaks every tree, pools and impostors included, from 0 (dry) to 1: wet bark darkens and turns glossy, the leaves' green grows richer; one value in the shared buffer, nothing per tree.
 - **No hitches.** `BuildInBackground` builds a tree off the main thread: 200 oaks planted in one frame cost it 0.5 ms instead of 23 ms, and appear a few frames later.
 - **Seeing the player.** `SeeThroughTrees` on the camera dithers out the trees between it and the player, prepasses included, while shadows keep the whole trees; nothing is compiled in while no camera has it.
@@ -852,7 +858,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU, `C` draws the gameplay shape, `Y` runs the year (`FloraSeason::of_year`, 40 s a year), `H` hits the tree (`TreeShakes`; leaves fall), `X` strikes it with an axe (`TreeNotch`, deeper with each blow; the fourth fells it), `F` fells it (`FellTree`) and then `B` bucks it into logs (`BuckTree`); any other key brings a new one. |
-| `gallery` | Renders 424 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, five deciduous presets and the pine turning, turned, half bare, bare and under snow, and the cherry's spring in blossom) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
+| `gallery` | Renders 441 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, five deciduous presets and the pine turning, turned, half bare, bare and under snow, and the cherry's spring in blossom) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
 | `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), a `ProceduralTree` instead of a pooled tree (`--mode tree`, which `--lod` or `--level` give a `TreeLod`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]`, which `forest` takes too), notched (`--notch <bearing>,<depth>[,<height>]`: an axe's `TreeNotch`), felled (`--fell <bearing>`: the photographs wait until it lies still) and bucked (`--buck <m>`: into logs `m` metres long), on a slope (`--slope <deg>`, the ground falling toward +x: the tree at its footing, or with `--on-centre` where a plain placement would put it), dropping leaves (`--drop <count>[,<after>[,<every>]]`: photographed `after` seconds after they let go, then every `every` seconds), shedding them as an autumn passes (`--autumn <seconds>[,<after>[,<every>]]`: the leaf fall rises to 1 over `seconds`, photographed the same way), burning (`--burn <after>[,<every>]`: a `FloraFire` lit at the tree's foot, photographed the same way), or with a body standing in it or walking through it (`--push <x>,<z>[,<radius>[,<vx>,<vz>]]`: a red `FoliagePusher`, photographed every quarter of a second while it walks). The clock is fixed, so runs repeat. |
 | `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, with `--shake` the grove knocked by `TreeShakes`, with `--fell` an oak notched by an axe and felled among a few trees, with `--fire` the grove burning at dusk, with `--push` a body walking through a patch of shrubs, or with `--chop` a woodcutter felling a row of trees one after another, each found by `FloraIndex` (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |

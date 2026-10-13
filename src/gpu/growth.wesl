@@ -101,8 +101,8 @@ fn vertex(
     out.uv_b.y = local.y * flora.tree.x;
 
     // A deciduous tree's leaves turn their autumn colour, each at its own moment; a flowering
-    // tree's flowers wear the blossom colour. The alpha (1 a leaf, 0 a flower) tells the fragment
-    // stage which it draws; the opaque material ignores it otherwise.
+    // tree's flowers wear the blossom colour. The alpha (1 a leaf, 0 a flower, 0.25 a fruit) tells
+    // the fragment stage which it draws; the opaque material ignores it otherwise.
 @if(VERTEX_COLORS && !FLORA_LEAF)
     out.color = vertex.color;
 @if(VERTEX_COLORS && FLORA_LEAF)

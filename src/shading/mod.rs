@@ -286,12 +286,14 @@ pub struct FloraSeason {
     pub autumn: f32,
     /// Share of the leaves fallen, 0 (all on the tree) to 1 (bare). Raised gradually, the leaves
     /// it sheds from trees near a camera fall to the ground ([`FallingLeaves`](crate::FallingLeaves)).
+    /// A fruiting tree's fruit ([`FoliageParams::fruit`](crate::FoliageParams::fruit)) drops in its
+    /// first two thirds.
     pub leaf_fall: f32,
     /// How much snow lies on the trees, 0 (none) to 1 (every surface that faces up is white).
     pub snow: f32,
     /// Share of a flowering species' flowers out ([`FoliageParams::blossom`](crate::FoliageParams::blossom)),
     /// 0 (none) to 1 (in full blossom). They open one by one and fall in the reverse order. At 0
-    /// the plugin does not draw a tree's flowers at all.
+    /// the plugin does not draw a tree's flowers at all; above 0 no tree bears fruit.
     pub blossom: f32,
 }
 
@@ -370,9 +372,9 @@ impl FloraWetness {
 }
 
 /// What `from` is multiplied by to become `to`, per linear channel (capped at
-/// [`AUTUMN_RATIO_MAX`]), and 1: a turned leaf's colour, or a flower's, from the leaf colour, so
-/// a scan's own variation stays.
-fn colour_ratio(to: bevy::color::Color, from: bevy::color::Color) -> Vec4 {
+/// [`AUTUMN_RATIO_MAX`]), and 1: a turned leaf's colour, a flower's or a fruit's, from the leaf
+/// colour, so a scan's own variation stays.
+pub(crate) fn colour_ratio(to: bevy::color::Color, from: bevy::color::Color) -> Vec4 {
     let (to, from) = (to.to_linear(), from.to_linear());
     let ratio = |a: f32, b: f32| (a / b.max(1e-4)).clamp(0.0, AUTUMN_RATIO_MAX);
     Vec4::new(ratio(to.red, from.red), ratio(to.green, from.green), ratio(to.blue, from.blue), 1.0)

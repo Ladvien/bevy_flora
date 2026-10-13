@@ -25,7 +25,7 @@ cargo run --release --example tree_file --features ron,file_watcher [-- --export
 
 ## Layout
 
-- `src/params.rs`, `crown.rs`, `presets.rs`: `TreeParams` and the 17 presets (16 trees, the cherry with spring blossom among them, and a shrub)
+- `src/params.rs`, `crown.rs`, `presets.rs`: `TreeParams` and the 18 presets (17 trees, the cherry with spring blossom and the apple with fruit among them, and a shrub)
 - `src/skeleton.rs`, `growth.rs`: node tree and age model
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`, `background.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems, building trees on the async compute pool (`BuildInBackground`)
