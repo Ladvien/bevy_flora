@@ -84,10 +84,30 @@ impl Scatter {
     /// `density(p)` (clamped to 0..1). Give 0 for clearings, roads, water or buildings and a
     /// fraction for sparse woodland; the trees that stay stand exactly where they stand in
     /// [`Scatter::points`], so a mask only ever removes trees.
-    pub fn points_where(&self, mut density: impl FnMut(Vec2) -> f32) -> Vec<ScatterPoint> {
+    pub fn points_where(&self, density: impl FnMut(Vec2) -> f32) -> Vec<ScatterPoint> {
+        self.points_with(density, |_, _| 1.0)
+    }
+
+    /// The trees, thinned by `density` as in [`points_where`](Self::points_where), each species'
+    /// share also weighted by where the tree stands: `weight(p, species)` multiplies the share
+    /// of `species` (an index into [`species`](Self::species)) at `p`. Stands the game places:
+    /// weight only the snags inside a dead patch, or the saplings along the forest's edge. A weight
+    /// of 0 shuts a species out there; where every weight is 1 the trees are those of
+    /// `points_where`, species and all. With groves, a tree joins the nearest grove whose
+    /// species is weighted, distances divided by the weights, so inside a stand of two species
+    /// the groves still meet along bent borders, and a weight fading out over a rim bends the
+    /// stand's edge with them.
+    pub fn points_with(
+        &self,
+        mut density: impl FnMut(Vec2) -> f32,
+        mut weight: impl FnMut(Vec2, usize) -> f32,
+    ) -> Vec<ScatterPoint> {
         let trunks = poisson_disc_stream(self.area, self.spacing, self.seed, TRUNK_STREAM);
         let groves = Groves::new(self);
         let (small, large) = self.scale;
+        // The global shares (one species when none are given), and each tree's weighted ones.
+        let global = if self.species.is_empty() { vec![1.0] } else { self.species.clone() };
+        let mut shares = vec![0.0; global.len()];
         trunks
             .into_iter()
             .enumerate()
@@ -104,10 +124,17 @@ impl Scatter {
                 if keep >= density(position).clamp(0.0, 1.0) {
                     return None;
                 }
-                let species = match &groves {
-                    Some(groves) => groves.species_at(position),
-                    None => weighted(&self.species, pick),
-                };
+                // `max` drops a NaN weight to 0.
+                for (species, share) in shares.iter_mut().enumerate() {
+                    *share = weight(position, species).max(0.0);
+                }
+                let grove = groves.as_ref().and_then(|groves| groves.species_at(position, &shares));
+                let species = grove.unwrap_or_else(|| {
+                    for (share, global) in shares.iter_mut().zip(&global) {
+                        *share *= global;
+                    }
+                    weighted(&shares, pick)
+                });
                 Some(ScatterPoint { position, yaw, scale, species, variant })
             })
             .collect()
@@ -279,21 +306,32 @@ impl Groves {
         Some(Self { centres, species, grid, size, seed: scatter.seed })
     }
 
-    /// The species of the grove whose centre is nearest `p` once the ground is warped.
-    fn species_at(&self, p: Vec2) -> usize {
+    /// The species of the grove whose centre is nearest `p` once the ground is warped, each
+    /// centre's distance divided by its species' share at `p` (`shares`, by species): a share of 0
+    /// shuts a species out, a larger one widens its groves there, and equal shares change
+    /// nothing. `None` when no grove's species has a share.
+    fn species_at(&self, p: Vec2, shares: &[f32]) -> Option<usize> {
+        let most = shares.iter().copied().fold(0.0, f32::max);
+        if most <= 0.0 {
+            return None;
+        }
         let q = p / (GROVE_BEND * self.size);
         let warp = Vec2::new(value_noise(q, self.seed ^ WARP_X_SALT), value_noise(q, self.seed ^ WARP_Y_SALT));
         let p = p + warp * (GROVE_RAGGEDNESS * self.size);
-        let mut best = (f32::INFINITY, 0);
+        let mut best = (f32::INFINITY, None);
         // Widen the square until nothing outside it can be nearer than the best so far.
         for reach in 1..=self.grid.width.max(self.grid.height) {
             for i in self.grid.around(p, reach) {
-                let d = self.centres[i].distance(p);
+                let share = shares.get(self.species[i]).copied().unwrap_or(0.0);
+                if share <= 0.0 {
+                    continue;
+                }
+                let d = self.centres[i].distance(p) / share;
                 if d < best.0 {
-                    best = (d, self.species[i]);
+                    best = (d, Some(self.species[i]));
                 }
             }
-            if best.0 <= reach as f32 * self.grid.cell {
+            if best.0 <= reach as f32 * self.grid.cell / most {
                 break;
             }
         }
@@ -442,6 +480,47 @@ mod tests {
         assert!((0.12..0.38).contains(&share(&groves)), "{}", share(&groves));
         assert!(groves.iter().all(|t| t.species != 2), "a species of weight 0 grew");
         assert!(together(&groves) > 0.85, "groves: {}", together(&groves));
+    }
+
+    #[test]
+    fn a_stand_picks_its_species_inside_and_leaves_the_forest_outside_as_it_was() {
+        let centre = Vec2::new(20.0, -10.0);
+        let inside = |p: Vec2| p.distance(centre) < 50.0;
+        let stand = |p: Vec2, species: usize| if inside(p) { (species == 3) as u8 as f32 } else { 1.0 };
+        let density = |p: Vec2| if p.x > 100.0 { 0.0 } else { 1.0 };
+        let groves = Scatter { species: vec![1.0, 2.0, 1.0, 1.0], grove_size: 30.0, ..Scatter::new(square(150.0), 5.0) };
+        for forest in [groves.clone(), Scatter { grove_size: 0.0, ..groves }] {
+            let plain = forest.points_where(density);
+            let stood = forest.points_with(density, stand);
+            assert_eq!(stood, forest.points_with(density, stand), "a seed is a forest");
+            assert_eq!(plain.len(), stood.len(), "the weights move no tree");
+            let mut within = 0;
+            for (before, after) in plain.iter().zip(&stood) {
+                if inside(after.position) {
+                    assert_eq!((after.position, after.species), (before.position, 3));
+                    within += 1;
+                } else {
+                    assert_eq!(after, before, "a tree outside the stand changed");
+                }
+            }
+            assert!(within > 200, "{within} trees in the stand");
+        }
+
+        // A stand fading out over a 30 m rim, its species nowhere else: inside the rim it is the
+        // stand's alone, and over the rim its groves and the forest's meet along a bent border,
+        // not a circle.
+        let forest = Scatter { species: vec![1.0, 2.0, 1.0, 1.0], grove_size: 30.0, ..Scatter::new(square(150.0), 4.0) };
+        let rim = |p: Vec2, species: usize| {
+            let out = ((p.distance(centre) - 30.0) / 30.0).clamp(0.0, 1.0);
+            if species == 3 { 1.0 - out } else { out }
+        };
+        let trees = forest.points_with(|_| 1.0, rim);
+        let at = |t: &ScatterPoint| t.position.distance(centre);
+        assert!(trees.iter().filter(|t| at(t) < 30.0).all(|t| t.species == 3));
+        assert!(trees.iter().filter(|t| at(t) > 60.0).all(|t| t.species != 3));
+        let stand_reaches = trees.iter().filter(|t| t.species == 3).map(at).fold(0.0, f32::max);
+        let forest_reaches = trees.iter().filter(|t| t.species != 3).map(at).fold(f32::INFINITY, f32::min);
+        assert!(stand_reaches - forest_reaches > 8.0, "a circular edge: the stand to {stand_reaches} m, the forest from {forest_reaches} m");
     }
 
     #[test]

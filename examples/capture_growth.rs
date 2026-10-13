@@ -46,8 +46,10 @@
 //! records the grove at dusk from a still camera while a fire (`FloraFire`) lit on its upwind edge
 //! runs through it, the leaves scorching and burning away and the wood charring, its embers
 //! glowing and then cooling (`docs/fire.gif`, encoded like the grove). Its fire is sped up like
-//! the rest of a clip (`FireSpread` 3.5 m/s, each spot burnt through in two seconds), and its
-//! ground scorches by the fire's char, as a game's own ground would read it. `--push` records a
+//! the rest of a clip (`FireSpread` 3.5 m/s, each spot burnt through in two seconds), its
+//! ground scorches by the fire's char, as a game's own ground would read it, and six point
+//! lights over the fire's hottest 4 m squares (`FloraFire::burning`) light the ground and the
+//! trunks around it. `--push` records a
 //! patch of shrubs from a still camera while a red stand-in for a character walks through it
 //! (`FoliagePusher`): the leaves and stems give way around it and close up behind it
 //! (`docs/push.gif`, encoded like the grove). `--chop` records a row of four trees from a still
@@ -69,6 +71,7 @@
 //! instead of rebuilding their meshes (compare the two runs' frames with the `compare_gallery`
 //! example).
 
+use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::fs;
 use std::path::PathBuf;
@@ -184,6 +187,15 @@ const FIRE_CELLS: u32 = 96;
 /// each spot burnt through in two and a half, its embers cool in five. The crowns reach 4.5 m, so
 /// the fire crosses every gap in the grove.
 const FIRE_SPREAD: FireSpread = FireSpread { speed: 3.5, burn_time: 2.5, cool_time: 5.0, reach: 4.5, ground: 0.0, wind: 1.0 };
+/// The fire clip's firelight: this many point lights (no shadows) over the hottest squares of
+/// the fire this wide (metres), this high, this bright for each burning cell's heat (lumens),
+/// reaching this far (metres), in a flame's orange.
+const FIRE_LIGHTS: usize = 6;
+const FIRE_LIGHT_SQUARE: f32 = 4.0;
+const FIRE_LIGHT_HEIGHT: f32 = 2.0;
+const FIRE_LIGHT_LUMENS: f32 = 4_000.0;
+const FIRE_LIGHT_RANGE: f32 = 14.0;
+const FIRE_LIGHT_COLOUR: Color = Color::srgb(1.0, 0.5, 0.18);
 
 /// One tree of a clip: how its age follows the frame number.
 #[derive(Component)]
@@ -239,6 +251,10 @@ enum Scene {
 /// The push clip's walker.
 #[derive(Component)]
 struct Walker;
+
+/// One of the fire clip's point lights.
+#[derive(Component)]
+struct FireLight;
 
 /// A picked apple of the harvest clip on its way to the basket.
 #[derive(Component)]
@@ -485,7 +501,7 @@ fn main() {
     })
     .insert_resource(UseGpu(gpu))
     .add_systems(Startup, setup)
-    .add_systems(Update, (drive, chop, harvest).chain())
+    .add_systems(Update, ((drive, chop, harvest).chain(), light_the_fire))
     .run();
 }
 
@@ -740,6 +756,14 @@ fn setup(
         ));
         // Upwind of the grove's middle, on the edge of its crowns.
         capture.fire_start = (capture.focus.xz() - capture.wind * FIRE_UPWIND).extend(0.0).xzy();
+        // Its firelight: point lights the fire moves and brightens (`light_the_fire`).
+        for _ in 0..FIRE_LIGHTS {
+            commands.spawn((
+                PointLight { color: FIRE_LIGHT_COLOUR, intensity: 0.0, range: FIRE_LIGHT_RANGE, ..default() },
+                Transform::from_translation(capture.focus),
+                FireLight,
+            ));
+        }
     }
     // The push clip's walker: a red stand-in for a character, 1.8 m tall, pushing the foliage aside.
     if matches!(capture.scene, Scene::Push) {
@@ -961,6 +985,36 @@ fn drive(
         .spawn(Screenshot::image(capture.target.clone()))
         .observe(save_to_disk(path));
     capture.in_flight = true;
+}
+
+/// The fire clip's firelight: its point lights over the hottest squares of the fire
+/// (`FloraFire::burning`), each at its square's heat-weighted middle and as bright as the heat
+/// in it, the rest dark. Read only when the fire stepped.
+fn light_the_fire(fire: Option<Res<FloraFire>>, mut lights: Query<(&mut PointLight, &mut Transform), With<FireLight>>) {
+    let Some(fire) = fire.filter(|fire| fire.is_changed()) else {
+        return;
+    };
+    // Heat and heat-weighted position of each square, in a fixed order so the clip is the same
+    // every run.
+    let mut squares: BTreeMap<(i32, i32), (f32, Vec2)> = BTreeMap::new();
+    for (at, cell) in fire.burning() {
+        let square = (at / FIRE_LIGHT_SQUARE).floor();
+        let sum = squares.entry((square.x as i32, square.y as i32)).or_default();
+        sum.0 += cell.heat;
+        sum.1 += at * cell.heat;
+    }
+    let mut hottest: Vec<((i32, i32), (f32, Vec2))> = squares.into_iter().collect();
+    hottest.sort_by(|a, b| b.1.0.total_cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    let mut hottest = hottest.into_iter();
+    for (mut light, mut transform) in &mut lights {
+        match hottest.next() {
+            Some((_, (heat, sum))) => {
+                light.intensity = heat * FIRE_LIGHT_LUMENS;
+                transform.translation = (sum / heat).extend(FIRE_LIGHT_HEIGHT).xzy();
+            }
+            None => light.intensity = 0.0,
+        }
+    }
 }
 
 /// What the chop clip's lumberjack is doing.

@@ -52,7 +52,7 @@ use crate::fire::{
 };
 use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
-use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees};
+use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees, sync_shadow_casting};
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWetness, FloraWind, FloraWindBuffer, SharedFlora,
     TextureLibrary, TreeShakes,
@@ -64,6 +64,10 @@ use crate::felling::{Felled, TreeLanded, buck_trees, carve_notches, drive_fellin
 use crate::tree_asset::sync_tree_assets;
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
+///
+/// The plugin draws the tree with child entities (its wood, leaves, flowers, coarser levels,
+/// cut faces). [`NotShadowCaster`](bevy::light::NotShadowCaster) on the tree reaches every one of
+/// them, rebuilt or new, and taking it off gives the shadows back.
 #[derive(Component, Clone, Debug, PartialEq, Reflect)]
 #[reflect(Component)]
 #[require(TreeAge, Transform, Visibility)]
@@ -279,7 +283,14 @@ impl bevy::app::Plugin for FloraPlugin {
             // fading camera is this frame, and push foliage from where the pushers are this frame.
             .add_systems(
                 bevy::app::PostUpdate,
-                (arm_see_through, sync_see_through, arm_push, sync_pushers, crate::index::index_trees)
+                (
+                    arm_see_through,
+                    sync_see_through,
+                    arm_push,
+                    sync_pushers,
+                    crate::index::index_trees,
+                    sync_shadow_casting,
+                )
                     .after(bevy::transform::TransformSystems::Propagate),
             )
             // The fire steps after transform propagation (its fuel is where the trees stand this
