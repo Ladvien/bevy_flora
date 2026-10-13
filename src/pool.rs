@@ -52,7 +52,7 @@ use std::sync::Arc;
 
 use bevy::asset::{Asset, AssetApp, AssetHandleProvider, AssetServer, Assets, Handle};
 use bevy::camera::primitives::Aabb;
-use bevy::camera::visibility::{Visibility, VisibilityRange};
+use bevy::camera::visibility::{NoAutoAabb, Visibility, VisibilityRange};
 use bevy::ecs::prelude::*;
 use bevy::ecs::system::SystemParam;
 use bevy::tasks::futures::check_ready;
@@ -735,6 +735,9 @@ pub(crate) fn spawn_pooled_trees(
         let Some(materials) = &pool.materials else {
             continue;
         };
+        // `NoAutoAabb`: the children keep these boxes. Bevy would otherwise recompute every new
+        // child's from all of its mesh's vertices (100 000 trees: seconds of loading) and replace
+        // the impostor's, which reaches past the quad.
         let mut spawn = |mesh: &Handle<Mesh>, leaf: bool, range: &(LodBand, VisibilityRange), bounds: Aabb| {
             let child = match materials {
                 PoolMaterials::Flora { wood, leaves } => {
@@ -745,6 +748,7 @@ pub(crate) fn spawn_pooled_trees(
                             MeshMaterial3d(material.clone()),
                             range.clone(),
                             bounds,
+                            NoAutoAabb,
                             ChildOf(tree),
                         ))
                         .id()
@@ -757,6 +761,7 @@ pub(crate) fn spawn_pooled_trees(
                             MeshMaterial3d(material.clone()),
                             range.clone(),
                             bounds,
+                            NoAutoAabb,
                             ChildOf(tree),
                         ))
                         .id()
@@ -783,7 +788,13 @@ pub(crate) fn spawn_pooled_trees(
                 center: Vec3A::new(0.0, atlas.center_y, 0.0),
                 half_extents: half,
             };
-            let drawn = (Mesh3d(atlas.quad.clone()), MeshMaterial3d(atlas.material.clone()), banded(impostor, f32::INFINITY), aabb);
+            let drawn = (
+                Mesh3d(atlas.quad.clone()),
+                MeshMaterial3d(atlas.material.clone()),
+                banded(impostor, f32::INFINITY),
+                aabb,
+                NoAutoAabb,
+            );
             // An impostor casts only for a pool that asks, and not for a tree kept out of shadows.
             match (pool.lod.impostor_shadows, quiet) {
                 (true, false) => commands.spawn((drawn, CastingImpostor, ChildOf(tree))),
@@ -1131,6 +1142,25 @@ mod tests {
         }
         assert_eq!(app.world().resource::<PendingPools>().builds.len(), 0);
         assert_eq!(app.world().resource::<Assets<TreePool>>().len(), 0);
+    }
+
+    #[test]
+    fn a_pooled_trees_children_keep_the_pools_boxes() {
+        let mut app = app();
+        // Bevy's own bounds, as a game with the renderer runs them.
+        app.add_systems(bevy::app::PostUpdate, bevy::camera::visibility::calculate_bounds);
+        let pool = make_pool(&mut app, 1);
+        let tree = app.world_mut().spawn(PooledTree { pool: pool.clone(), variant: 0 }).id();
+        for _ in 0..3 {
+            app.update();
+        }
+        let bounds = app.world().resource::<Assets<TreePool>>().get(&pool).unwrap().variants[0].bounds;
+        let children = app.world().get::<Children>(tree).unwrap();
+        assert!(children.len() >= 3);
+        for child in children {
+            let aabb = app.world().get::<Aabb>(*child).expect("a pooled tree's child has a box");
+            assert!(bounds.contains(aabb), "{aabb:?} is not one of the pool's boxes");
+        }
     }
 
     #[test]
