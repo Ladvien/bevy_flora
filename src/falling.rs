@@ -284,7 +284,7 @@ pub(crate) struct Card {
     pub indices: Range<usize>,
     /// `leaf_season_moment` of its phase: a deciduous tree sheds it once the leaf fall passes it.
     pub moment: f32,
-    /// A flower (vertex alpha 0), not a leaf.
+    /// A flower or a fruit (vertex alpha below 0.5), not a leaf: it never drops as a leaf.
     pub flower: bool,
 }
 
@@ -886,13 +886,20 @@ mod tests {
     }
 
     #[test]
-    fn a_tree_drops_neither_flowers_nor_the_leaves_it_has_shed() {
+    fn a_tree_drops_neither_flowers_fruit_nor_the_leaves_it_has_shed() {
         // A pool's leaf mesh holds the flowers after the leaves.
         let built = build_tree(&TreePreset::Cherry.params(), f32::INFINITY);
         let leaves = on_tree(&built.foliage.clone().into_bevy_mesh(), None);
         let mut merged = built.foliage;
         merged.extend(&built.flowers);
         assert_eq!(on_tree(&merged.into_bevy_mesh(), None), leaves);
+        // Each fruit is a card of its own in the leaf mesh, never a leaf's.
+        let mut apple = TreePreset::Apple.params();
+        let fruiting = build_tree(&apple, f32::INFINITY).foliage.into_bevy_mesh();
+        apple.foliage.fruit = None;
+        let bare = build_tree(&apple, f32::INFINITY).foliage.into_bevy_mesh();
+        assert_eq!(on_tree(&fruiting, None), on_tree(&bare, None));
+        assert!(leaf_cards(&fruiting).len() > leaf_cards(&bare).len(), "the fruit went into its leaves' cards");
 
         let oak = leaf_mesh(TreePreset::Oak);
         let all = on_tree(&oak, None);

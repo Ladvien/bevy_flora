@@ -5,6 +5,51 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.31.0] - 2026-10-13
+
+Fruit. A tree can bear fruit (`FoliageParams::fruit`): round, hanging below some of its leaves and
+swaying with them, brought and taken by the season. A new `Apple` preset carries it: white blossom
+flushed pink in spring, red apples through summer, yellow-brown leaves in autumn. `FoliageParams`
+gains a field and `TreePreset` a variant (`TreePreset::ALL` is 18 long), hence a minor release.
+
+### Added
+
+- **`FoliageParams::fruit: Option<FruitParams>`** and **`FruitParams { color, radius, share }`**
+  (default: red apples 4.5 cm in radius on one leaf in eight; in the crate root and the prelude).
+  Each leaf whose own fixed draw falls under `share` hangs a fruit below its stem: a slightly squat
+  sphere (63 vertices; 35 on the coarser levels of detail) in the leaf mesh, right after its leaf,
+  so it sways with the leaf and grows with it (a young tree's fruit is small, `GpuGrowth` grows it),
+  and a pool's coarser levels carry fewer, larger fruit. Its normals stay round in every style (the
+  crown's bent normals and the painterly clump normals pass it by), its underside is baked darker
+  so it reads as round in the crown's shade, its skin is glossy (roughness 0.35) and lets no light
+  through. An impostor leaves it out. Vertex alpha 0.25 marks a fruit (a flower's is 0, a leaf's 1).
+- **The season's fruit**: none while `FloraSeason::blossom` is above 0, then fruit all summer,
+  dropping one by one in the first two thirds of `leaf_fall`, on any tree. A fire burns the fruit
+  away with the leaves, rain and snow treat it as a leaf, and the falling leaves never take one.
+- **`TreePreset::Apple`**: a round-headed apple tree on a 1.6 m trunk with grey, flaking bark
+  (`BarkScan::Zelkova`) and thick scaffold limbs, birch-scan leaves, white blossom flushed pink, red
+  apples and yellow-brown autumn leaves: 212 nodes, 10 900 wood vertices and 86 600 foliage
+  vertices with its blossom (the flowers are drawn only while it is out).
+- `gallery` renders the apple: 441 scenarios.
+- README: fruit under Seasons, with `docs/fruit.jpg` (an orchard and an apple tree's crown up
+  close); 18 presets.
+
+### Measured
+
+- **Look.** The 424 scenarios of 0.30.0 render as they did on the CPU and with `--gpu` (a mean
+  difference of 0.000 of 255, no `ERROR`), and so do all eight clips frame for frame. The 17 apple
+  scenarios have no `stats.tsv` flag; the CPU against `--gpu` differ by a mean of means of 0.154
+  (the worst, `age_apple_6`, 1.36: `AllBranches` leaves the CPU path respaces, as on the cherry).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.30.0): 1 000
+  individual oaks 24.60, 24.63 and 24.54 ms (0.30.0: 24.54, 24.45 and 24.46), 100 000 pooled oaks
+  7.55 and 7.61 ms (7.57 and 7.52): a tree without fruit costs what it did.
+- **Found and fixed before release.** The first apple had 421 nodes and 247 000 foliage vertices,
+  five times the cherry: fewer limbs and leaves now (212 nodes, 86 600 with the blossom). Apples in
+  the crown's shade, where only the even ambient light reaches them, were flat dark discs: their
+  underside is baked darker. A short-trunked, wide apple felled downhill on a 27° slope rested on
+  nothing (its thin limbs give way under a falling tree) and stopped at 150°, 15 cm off the ground:
+  thicker scaffold limbs (half the trunk's radius, on a 0.25 m trunk) now hold it on the slope.
+
 ## [0.30.0] - 2026-10-13
 
 Rain. `FloraWetness` is how wet the trees are, for a game's weather to raise while it rains and
@@ -1853,6 +1898,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.31.0]: https://github.com/Ladvien/bevy_flora/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/Ladvien/bevy_flora/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/Ladvien/bevy_flora/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/Ladvien/bevy_flora/compare/v0.27.0...v0.28.0

@@ -166,12 +166,14 @@
 //! # Seasons
 //!
 //! The [`FloraSeason`] resource turns deciduous trees ([`FoliageParams::autumn`], set on the
-//! oak, willow, birch, bonsai, maple, poplar, baobab, Japanese maple and cherry presets) to their
-//! autumn colour, sheds their leaves one leaf at a time (evergreens keep theirs), lays snow on
-//! every tree, on what faces up, and brings flowering trees ([`FoliageParams::blossom`], the
-//! cherry) into blossom, one flower at a time. It shares the wind's buffer, so a season that
-//! changes every frame costs no material change and nothing per tree. As the leaf fall rises, the
-//! leaves it sheds from trees near a camera fall to the ground ([`FallingLeaves`]).
+//! oak, willow, birch, bonsai, maple, poplar, baobab, Japanese maple, cherry and apple presets) to
+//! their autumn colour, sheds their leaves one leaf at a time (evergreens keep theirs), lays snow
+//! on every tree, on what faces up, and brings flowering trees ([`FoliageParams::blossom`], the
+//! cherry and the apple) into blossom, one flower at a time. A fruiting tree's fruit
+//! ([`FoliageParams::fruit`], the apple's) hangs below some of its leaves all summer and drops in
+//! the first part of the leaf fall. It shares the wind's buffer, so a season that changes every
+//! frame costs no material change and nothing per tree. As the leaf fall rises, the leaves it
+//! sheds from trees near a camera fall to the ground ([`FallingLeaves`]).
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;
@@ -380,8 +382,9 @@ pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
 pub use mesh::MeshData;
 pub use params::{
-    BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, LeafOrientation, LeafScan, LeafShading,
-    LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams, TrunkTermination, WindResponse,
+    BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, FruitParams, LeafOrientation, LeafScan,
+    LeafShading, LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams, TrunkTermination,
+    WindResponse,
 };
 pub use pipeline::{TreeMeshes, build_tree};
 pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeMature, TreeRender};
@@ -409,6 +412,7 @@ pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
         FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
+        FruitParams,
         GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,

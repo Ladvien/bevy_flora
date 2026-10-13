@@ -382,6 +382,9 @@ fn build_foliage(points: &[LeafPoint], foliage: &FoliageParams, style: RenderSty
     let variation = foliage.color_variation.clamp(0.0, 0.5);
     let hue_span = foliage.hue_variation.clamp(0.0, 0.5);
     let flowering = foliage.blossom.is_some();
+    // A fruit's colour over the leaf colour the material multiplies it by (vertex colours scale
+    // the material's), as the flowers' blossom colour is in the shaders.
+    let fruit = foliage.fruit.as_ref().map(|fruit| (fruit, crate::shading::colour_ratio(fruit.color, foliage.color).truncate()));
     let rigid = foliage.style == LeafStyle::ClusterSphere;
     // Each point's vertices, in the leaves and in the flowers.
     let mut ranges = [Vec::with_capacity(points.len()), Vec::new()];
@@ -402,6 +405,22 @@ fn build_foliage(points: &[LeafPoint], foliage: &FoliageParams, style: RenderSty
         let colour = Vec4::new(factor * (1.0 + 0.6 * hue), factor * (1.0 + 0.1 * hue), factor * (1.0 - 0.6 * hue), 1.0);
         leaves.colors.resize(leaves.positions.len(), colour);
         bake_leaf_inputs(leaves, point, first, rigid);
+        // A fruit-bearing leaf's fruit, hanging below its stem, in the leaf mesh after the leaf: it
+        // shares the leaf's vertex range (crown visibility; `GpuGrowth` grows it with its leaf).
+        if let Some((params, ratio)) = fruit
+            && fruit_draw(point) < params.share
+        {
+            let start = leaves.positions.len();
+            fruit_sphere(leaves, point, params.radius * point.size / foliage.leaf_size.max(1e-3), coarse);
+            // Darker underneath, as a fruit shades its own underside: in the crown's shade, where
+            // only the even ambient light reaches it, it still reads as round.
+            let normals = &leaves.normals[start..];
+            leaves.colors.extend(normals.iter().map(|n| {
+                let shade = FRUIT_UNDERSIDE + (1.0 - FRUIT_UNDERSIDE) * (0.5 + 0.5 * n.y);
+                (ratio * factor * shade).extend(FRUIT_ALPHA)
+            }));
+            bake_fruit_inputs(leaves, point, start);
+        }
         ranges[0].push((first, leaves.positions.len()));
 
         // A flowering tree's flower, at the leaf's stem, in the leaf's colour and variation.
@@ -478,12 +497,16 @@ fn shade_crown(
         }
     }
 
+    // A fruit keeps its own round normals: bent out of the crown it would shade flat.
+    let leaf = |colors: &[Vec4], k: usize| colors.get(k).is_none_or(|c| !is_fruit_alpha(c.w));
     if style == RenderStyle::Natural {
         let bend = foliage.normal_bend.clamp(0.0, 1.0);
         if bend > 0.0 {
-            for (normal, &position) in mesh.normals.iter_mut().zip(&mesh.positions) {
-                let out = (position - center).normalize_or(Vec3::Y);
-                *normal = normal.lerp(out, bend).normalize_or(out);
+            for (k, (normal, &position)) in mesh.normals.iter_mut().zip(&mesh.positions).enumerate() {
+                if leaf(&mesh.colors, k) {
+                    let out = (position - center).normalize_or(Vec3::Y);
+                    *normal = normal.lerp(out, bend).normalize_or(out);
+                }
             }
         }
     } else {
@@ -499,7 +522,7 @@ fn shade_crown(
         for (point, &(first, end)) in points.iter().zip(ranges) {
             let (sum, count) = sums[&point.clump];
             let clump_center = sum / count;
-            for k in first..end {
+            for k in (first..end).filter(|&k| leaf(&mesh.colors, k)) {
                 mesh.normals[k] = (mesh.positions[k] - clump_center).normalize_or(Vec3::Y);
             }
         }
@@ -569,6 +592,82 @@ fn flower(mesh: &mut MeshData, point: &LeafPoint, coarse: bool) -> usize {
         }
     }
     n as usize + 1
+}
+
+/// A fruit's vertex alpha, which the shaders (`is_fruit`) and [`shade_crown`] tell it by: a leaf's
+/// is 1, a flower's 0.
+pub(crate) const FRUIT_ALPHA: f32 = 0.25;
+
+/// Whether a vertex colour's alpha is a fruit's ([`FRUIT_ALPHA`]).
+pub(crate) fn is_fruit_alpha(alpha: f32) -> bool {
+    (0.125..0.5).contains(&alpha)
+}
+
+/// A fruit's rings of latitude and meridians: a sphere of 8 sides near, of 6 on a coarse level.
+const FRUIT_GRID: (u32, u32) = (6, 8);
+const FRUIT_GRID_COARSE: (u32, u32) = (4, 6);
+/// A fruit's height over its width: an apple is a little squat.
+const FRUIT_SQUAT: f32 = 0.9;
+/// What a fruit keeps of its colour on its underside (full on top), baked into its vertices.
+const FRUIT_UNDERSIDE: f32 = 0.55;
+/// How far a fruit's flutter reaches, a share of its leaf's length: it hangs and swings with its
+/// twig rather than flapping as its leaf does.
+const FRUIT_LEVER: f32 = 0.15;
+
+/// The leaf's own draw (0..1) of whether it bears a fruit ([`FruitParams::share`](crate::FruitParams::share)): a hash of the
+/// leaf's tint and hue draws, which never change as the tree grows (as [`leaf_phase`], with
+/// other constants, so which leaves bear fruit has nothing to do with when they turn).
+fn fruit_draw(point: &LeafPoint) -> f32 {
+    let mut h = point.tint.to_bits().wrapping_mul(0x5BD1_E995) ^ point.hue.to_bits().wrapping_mul(0x1B87_3593);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 13;
+    (h >> 8) as f32 / (1u32 << 24) as f32
+}
+
+/// A fruit of `radius` hanging just below the leaf's stem: a sphere, a little squat
+/// ([`FRUIT_SQUAT`]), with its own outward normals ([`FRUIT_GRID`], or [`FRUIT_GRID_COARSE`] for a
+/// coarse level).
+fn fruit_sphere(mesh: &mut MeshData, point: &LeafPoint, radius: f32, coarse: bool) {
+    let (rings, sides) = if coarse { FRUIT_GRID_COARSE } else { FRUIT_GRID };
+    let centre = point.position - Vec3::Y * radius * FRUIT_SQUAT * 1.1;
+    let base = mesh.positions.len() as u32;
+    for ring in 0..=rings {
+        let (sin_lat, cos_lat) = (PI * ring as f32 / rings as f32).sin_cos();
+        for side in 0..=sides {
+            let (sin_lon, cos_lon) = (point.rotation + TAU * side as f32 / sides as f32).sin_cos();
+            let normal = Vec3::new(sin_lat * cos_lon, cos_lat, sin_lat * sin_lon);
+            mesh.positions.push(centre + Vec3::new(normal.x, normal.y * FRUIT_SQUAT, normal.z) * radius);
+            mesh.normals.push(normal);
+            mesh.uvs.push(Vec2::splat(0.5));
+        }
+    }
+    let row = sides + 1;
+    for ring in 0..rings {
+        for side in 0..sides {
+            let (a, b) = (base + ring * row + side, base + (ring + 1) * row + side);
+            // Counter-clockwise seen from outside; the poles' degenerate halves are left out.
+            if ring > 0 {
+                mesh.indices.extend_from_slice(&[a, a + 1, b]);
+            }
+            if ring + 1 < rings {
+                mesh.indices.extend_from_slice(&[a + 1, b + 1, b]);
+            }
+        }
+    }
+}
+
+/// The leaf shader's per-vertex inputs for a fruit from `first` on: `uv1` as a leaf's (the crown
+/// visibility is set by [`shade_crown`]) and a short, rigid flutter ([`FRUIT_LEVER`]) at its own
+/// phase, its leaf's shifted by a half: the fruit's own moment in the season, and a phase apart
+/// from its leaf's, which is what tells one card of the leaf mesh from the next (`falling.rs`).
+fn bake_fruit_inputs(mesh: &mut MeshData, point: &LeafPoint, first: usize) {
+    let MeshData { positions, uv1, sway, .. } = mesh;
+    debug_assert_eq!((uv1.len(), sway.len()), (first, first));
+    let (_, _, forward) = build_basis(point.direction, point.rotation);
+    let phase = (leaf_phase(point) + 0.5).fract();
+    uv1.resize(positions.len(), Vec2::new(1.0, 1.0));
+    sway.resize(positions.len(), (forward * point.size * FRUIT_LEVER).extend(phase));
 }
 
 /// Octahedron.
@@ -1043,6 +1142,56 @@ mod tests {
         let merged = foliage_mesh(&points, &flowering);
         assert_eq!(merged.positions.len(), built.leaves.positions.len() + built.flowers.positions.len());
         assert_eq!(merged.positions[..built.leaves.positions.len()], built.leaves.positions[..]);
+    }
+
+    #[test]
+    fn a_fruiting_tree_hangs_round_fruit_below_a_share_of_its_leaves() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        let fruiting = FoliageParams {
+            fruit: Some(crate::params::FruitParams { share: 0.25, ..Default::default() }),
+            ..params.foliage.clone()
+        };
+        for style in [RenderStyle::Natural, RenderStyle::Painterly] {
+            let plain = foliage_meshes(&points, &params.foliage, style);
+            let built = foliage_meshes(&points, &fruiting, style);
+            assert_indices_valid(&built.leaves, "fruiting oak");
+            let range = |m: &FoliageMeshes, p: usize| {
+                m.firsts[0][p] as usize..m.firsts[0].get(p + 1).map_or(m.leaves.positions.len(), |&n| n as usize)
+            };
+            let mut bearing = 0;
+            for (p, point) in points.iter().enumerate() {
+                // Each leaf's vertices are as without fruit; its fruit, if any, follows them.
+                let (bare, full) = (range(&plain, p), range(&built, p));
+                let leaf = full.start..full.start + bare.len();
+                assert_eq!(built.leaves.positions[leaf.clone()], plain.leaves.positions[bare.clone()]);
+                assert_eq!(built.leaves.normals[leaf.clone()], plain.leaves.normals[bare.clone()]);
+                let fruit = leaf.end..full.end;
+                if fruit.is_empty() {
+                    continue;
+                }
+                bearing += 1;
+                assert!(built.leaves.colors[fruit.clone()].iter().all(|c| c.w == FRUIT_ALPHA), "{style:?}: a fruit is flagged by its alpha");
+                // A phase of its own, apart from its leaf's: the falling leaves tell cards apart by it.
+                let phase = built.leaves.sway[fruit.start].w;
+                assert!(built.leaves.sway[fruit.clone()].iter().all(|s| s.w == phase));
+                assert_ne!(phase, built.leaves.sway[leaf.start].w);
+                // Round and hanging below the stem: its normals and faces point out of its centre,
+                // whatever the style does to the leaves' normals.
+                let centre = built.leaves.positions[fruit.clone()].iter().sum::<Vec3>() / fruit.len() as f32;
+                assert!(centre.y < point.position.y, "{style:?}: a fruit above its stem");
+                for k in fruit.clone() {
+                    assert!(built.leaves.normals[k].dot(built.leaves.positions[k] - centre) > 0.0, "{style:?}: a fruit's normal points in");
+                }
+                for triangle in built.leaves.indices.as_chunks::<3>().0 {
+                    let [a, b, c] = triangle.map(|i| built.leaves.positions[i as usize]);
+                    if fruit.contains(&(triangle[0] as usize)) {
+                        assert!((b - a).cross(c - a).dot((a + b + c) / 3.0 - centre) > 0.0, "{style:?}: a fruit's face points in");
+                    }
+                }
+            }
+            let share = bearing as f32 / points.len() as f32;
+            assert!((0.2..0.3).contains(&share), "{style:?}: {share} of the leaves bear fruit");
+        }
     }
 
     #[test]

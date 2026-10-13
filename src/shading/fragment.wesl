@@ -25,7 +25,7 @@ import package::shading::common::leaf_detail;
 import package::shading::common::{toon_lighting, toon_rim};
 
 @if(FLORA_LEAF)
-import package::shading::common::{leaf_surface, leaf_transmission};
+import package::shading::common::{leaf_surface, leaf_transmission, FRUIT_ROUGHNESS};
 
 import package::shading::common::{snow_on, snow_shelter, wet_on, facing_normal, LEAF_FROST};
 
@@ -66,12 +66,17 @@ fn fragment(
 @if(FLORA_DETAIL && !FLORA_LEAF)
     bark_surface(&pbr_input, in.uv, in.uv_b.x);
 
-    // A flower (vertex alpha 0, `FoliageParams::blossom`) is a plain petal: no leaf scan, veins or
-    // leaf gloss.
+    // A flower (vertex alpha 0, `FoliageParams::blossom`) is a plain petal and a fruit (0.25,
+    // `FoliageParams::fruit`) a plain round skin: no leaf scan, veins or leaf gloss. A fruit's skin
+    // is smooth and lets no light through.
 @if(FLORA_LEAF && VERTEX_COLORS)
     let flower = in.color.a < 0.5;
+@if(FLORA_LEAF && VERTEX_COLORS)
+    let fruit = in.color.a >= 0.125 && in.color.a < 0.5;
 @if(FLORA_LEAF && !VERTEX_COLORS)
     let flower = false;
+@if(FLORA_LEAF && !VERTEX_COLORS)
+    let fruit = false;
 
 @if(FLORA_DETAIL && FLORA_LEAF)
     if !flower {
@@ -81,6 +86,8 @@ fn fragment(
 @if(FLORA_LEAF)
     if !flower {
         leaf_surface(&pbr_input, in.uv, in.uv_b);
+    } else if fruit {
+        pbr_input.material.perceptual_roughness = FRUIT_ROUGHNESS;
     }
 
     // The fire (`FloraFire`): wood chars from the ground up as the fire where it stands chars, and
@@ -137,7 +144,7 @@ fn fragment(
     out.color = apply_pbr_lighting(pbr_input);
 @if(FLORA_LEAF)
     out.color = vec4<f32>(
-        out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y, flower) * (1.0 - snowed),
+        out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y, flower) * select(1.0 - snowed, 0.0, fruit),
         out.color.a
     );
 @if(FLORA_TOON)

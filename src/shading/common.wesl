@@ -199,9 +199,15 @@ fn leaf_autumn_tint(sway: vec4<f32>) -> vec3<f32> {
     return mix(vec3<f32>(1.0), flora.autumn.rgb, turn);
 }
 
-// A flower card's vertex: its colour's alpha is 0, a leaf's 1 (`FoliageParams::blossom`).
+// A flower card's vertex: its colour's alpha is 0, a fruit's 0.25, a leaf's 1
+// (`FoliageParams::blossom`, `FoliageParams::fruit`).
 fn is_flower(color: vec4<f32>) -> bool {
-    return color.a < 0.5;
+    return color.a < 0.125;
+}
+
+// A fruit's vertex (alpha 0.25, `FRUIT_ALPHA` in foliage.rs).
+fn is_fruit(color: vec4<f32>) -> bool {
+    return color.a >= 0.125 && color.a < 0.5;
 }
 
 // A flower's own moment in the blossom, 0..1, from its leaf's phase spread differently, so the
@@ -210,21 +216,35 @@ fn flower_moment(sway: vec4<f32>) -> f32 {
     return fract(sway.w * 3.71 + 0.53);
 }
 
-// Whether a leaf or a flower draws nothing this season (it is then put outside the clip
-// volume): a fallen leaf, or a flower that is not out; flowers open once the blossom passes
-// their moment and fall in the reverse order.
+// How much of the leaf fall has passed when the last fruit drops: the fruit goes in its first two
+// thirds, before the last leaves.
+const FRUIT_FALL: f32 = 0.67;
+// A fruit's skin: smooth, glossier than a leaf.
+const FRUIT_ROUGHNESS: f32 = 0.35;
+
+// Whether a leaf, a flower or a fruit draws nothing this season (it is then put outside the clip
+// volume): a fallen leaf; a flower that is not out (flowers open once the blossom passes their
+// moment and fall in the reverse order); a fruit while the blossom is out or once the leaf fall
+// has passed its moment, on any tree (an evergreen's fruit drops too).
 fn leaf_hidden(sway: vec4<f32>, color: vec4<f32>) -> bool {
     if is_flower(color) {
         return flower_moment(sway) >= flora_wind[5].w;
     }
+    if is_fruit(color) {
+        return flora_wind[5].w > 0.0 || leaf_season_moment(sway) * FRUIT_FALL < flora_wind[5].y;
+    }
     return leaf_has_fallen(sway);
 }
 
-// What a leaf's or a flower's vertex colour is multiplied by this season: a flower's is the
-// blossom colour over the leaf colour (`flora.blossom.rgb`), a leaf's its autumn tint.
+// What a leaf's, a flower's or a fruit's vertex colour is multiplied by this season: a flower's is
+// the blossom colour over the leaf colour (`flora.blossom.rgb`), a fruit's 1 (its colour is in the
+// vertex), a leaf's its autumn tint.
 fn leaf_season_tint(sway: vec4<f32>, color: vec4<f32>) -> vec3<f32> {
     if is_flower(color) {
         return flora.blossom.rgb;
+    }
+    if is_fruit(color) {
+        return vec3<f32>(1.0);
     }
     return leaf_autumn_tint(sway);
 }
@@ -291,9 +311,10 @@ fn leaf_burnt(sway: vec4<f32>, fire: vec2<f32>) -> bool {
 
 // The vertex alpha a leaf hands the fragment stage in a fire: 1 plus how scorched it is (0..1)
 // plus how bright it burns (0..1, once fully scorched). All of a leaf's vertices share its moment,
-// so the value is the same across it and survives interpolation. A flower keeps its 0.
+// so the value is the same across it and survives interpolation. A flower or a fruit keeps its
+// own (it burns away with no scorch).
 fn leaf_fire_alpha(sway: vec4<f32>, color: vec4<f32>, fire: vec2<f32>) -> f32 {
-    if is_flower(color) {
+    if color.a < 0.5 {
         return color.a;
     }
     let ahead = leaf_season_moment(sway) - leaf_burn_front(fire.x);
