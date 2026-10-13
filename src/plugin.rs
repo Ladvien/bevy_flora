@@ -22,7 +22,7 @@
 //! written (a few microseconds of CPU per tree); the vertex shader does the
 //! growing. See its docs for what differs from the CPU path.
 
-use bevy::asset::{Assets, Handle};
+use bevy::asset::{AssetEvent, Assets, Handle};
 use bevy::ecs::prelude::*;
 use bevy::ecs::system::EntityCommands;
 use bevy::mesh::{Mesh, Mesh3d};
@@ -36,7 +36,8 @@ use bevy::transform::components::Transform;
 
 use crate::background::{BuildInBackground, PendingBuild};
 use crate::falling::{
-    DropLeaves, FallingLeaves, LeafBurst, drop_leaves, expire_bursts, shake_leaves_loose, shed_landed_leaves,
+    DropLeaves, FallCaches, FallingLeaves, LeafBurst, SeasonShed, drop_leaves, expire_bursts, forget_changed_meshes,
+    season_sheds, shake_leaves_loose, shed_landed_leaves, shed_with_season,
 };
 use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_trees, sync_growth_mode};
 use crate::gpu::{GpuGrowth, GpuGrowthSupport};
@@ -210,6 +211,8 @@ impl bevy::app::Plugin for FloraPlugin {
             .add_message::<TreeMature>()
             .add_message::<DropLeaves>()
             .init_resource::<FallingLeaves>()
+            .init_resource::<FallCaches>()
+            .init_resource::<SeasonShed>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
@@ -260,14 +263,16 @@ impl bevy::app::Plugin for FloraPlugin {
             )
             // Falling leaves start from where the trees are this frame, and from their leaf meshes
             // as they are this frame (a growing tree's change every frame). Nothing runs while
-            // nothing shakes, lands, drops or lies on the ground.
+            // nothing shakes, lands, drops, sheds with the season or lies on the ground.
             .add_systems(
                 bevy::app::PostUpdate,
                 (
                     (
+                        forget_changed_meshes.run_if(on_message::<AssetEvent<Mesh>>),
                         shake_leaves_loose.run_if(resource_changed::<TreeShakes>),
                         shed_landed_leaves.run_if(on_message::<TreeLanded>),
                         drop_leaves.run_if(on_message::<DropLeaves>),
+                        shed_with_season.run_if(season_sheds),
                     )
                         .chain(),
                     expire_bursts.run_if(any_with_component::<LeafBurst>),

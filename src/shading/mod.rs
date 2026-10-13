@@ -283,7 +283,8 @@ const AUTUMN_RATIO_MAX: f32 = 1000.0;
 pub struct FloraSeason {
     /// How far the leaves have turned, 0 (summer green) to 1 (every leaf in its autumn colour).
     pub autumn: f32,
-    /// Share of the leaves fallen, 0 (all on the tree) to 1 (bare).
+    /// Share of the leaves fallen, 0 (all on the tree) to 1 (bare). Raised gradually, the leaves
+    /// it sheds from trees near a camera fall to the ground ([`FallingLeaves`](crate::FallingLeaves)).
     pub leaf_fall: f32,
     /// How much snow lies on the trees, 0 (none) to 1 (every surface that faces up is white).
     pub snow: f32,

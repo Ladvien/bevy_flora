@@ -6,7 +6,7 @@
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
-//!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
+//!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod]
@@ -172,6 +172,8 @@ struct Args {
     wind_animate: bool,
     /// Knock the trees every few frames (`TreeShakes`), so every shake slot is always busy.
     shake_animate: bool,
+    /// Let the leaves fall over and over, an autumn every this many seconds.
+    leaf_fall_animate: Option<f32>,
     /// Step the clock a fixed 1/60 s per frame and count the warmup in frames, so two runs of
     /// different code render the same image at the same frame.
     deterministic: bool,
@@ -214,7 +216,7 @@ fn usage() -> ! {
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
-         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
+         [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] \
@@ -244,6 +246,7 @@ fn parse_args() -> Args {
         gust: None,
         wind_animate: false,
         shake_animate: false,
+        leaf_fall_animate: None,
         deterministic: false,
         background: false,
         tree_lod: false,
@@ -340,6 +343,7 @@ fn parse_args() -> Args {
             "--gust" => args.gust = Some(value(&mut it)),
             "--wind-animate" => args.wind_animate = true,
             "--shake-animate" => args.shake_animate = true,
+            "--leaf-fall-animate" => args.leaf_fall_animate = Some(value(&mut it)),
             "--deterministic" => args.deterministic = true,
             "--background" => args.background = true,
             "--tree-lod" => args.tree_lod = true,
@@ -480,6 +484,7 @@ fn main() {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
     }
     app.insert_resource(args.season);
+    let leaf_fall = args.leaf_fall_animate.is_some();
     // Unfocused, Bevy's default settings update 60 times a second; a benchmark
     // must run flat out whatever has the focus.
     app.insert_resource(bevy::winit::WinitSettings::continuous())
@@ -503,8 +508,12 @@ fn main() {
             placed: 0,
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, drive)
-        .run();
+        .add_systems(Update, drive);
+    // Only with the flag: an always-checked condition would put a wait on `Bench` in every frame.
+    if leaf_fall {
+        app.add_systems(Update, animate_leaf_fall);
+    }
+    app.run();
 }
 
 /// Grid side length (in trees) and the grid's extent in metres.
@@ -832,6 +841,18 @@ fn tree_placements(args: &Args, ground: &FloraGround) -> (Vec<(Transform, usize,
         .map(|tree| (tree.transform_on(ground, &params[tree.species]), tree.species, tree.variant % VARIANTS))
         .collect();
     (trees, extent)
+}
+
+/// `--leaf-fall-animate`: an autumn every `period` seconds, over and over, so the trees near the
+/// camera are always letting leaves fall, the season's worst case. A system of its own, added only
+/// with the flag, so that without it nothing else waits on the season or the bench.
+fn animate_leaf_fall(bench: Res<Bench>, time: Res<Time>, mut season: ResMut<FloraSeason>) {
+    if let Some(period) = bench.args.leaf_fall_animate
+        && bench.phase != Phase::Loading
+    {
+        season.autumn = 1.0;
+        season.leaf_fall = (time.elapsed_secs() / period.max(0.1)).fract();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
