@@ -26,6 +26,11 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @if(FLORA_SEE_THROUGH)
 import package::shading::common::see_through;
 
+@if(FLORA_FIRE)
+import package::shading::common::{
+    fire_at, leaf_burn_front, ember_flicker, ember_glow, LEAF_GLOW, LEAF_SCORCH, SCORCHED, CHARCOAL, EMBER, EMBER_NITS,
+};
+
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var albedo: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var atlas_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var surface: texture_2d<f32>;
@@ -126,6 +131,30 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
             max(color.a, summer.a * bloomed * BLOSSOM_COVER),
         );
     }
+    // The fire (`FloraFire`), as on the meshes: the leaves scorch and burn away in patches (each at
+    // its own moment, the share of them where a pixel spans several), the wood chars, and it glows
+    // while it burns.
+    var ember = vec3<f32>(0.0);
+@if(FLORA_FIRE) {
+    let fire = fire_at(in.world_position.xyz);
+    if fire.x > 0.0 {
+        let leaves = saturate(baked.a);
+        let front = leaf_burn_front(fire.x);
+        let ahead = fract(sin(dot(floor(spot), vec2<f32>(63.7264, 10.873))) * 43758.547) - front;
+        let burnt = mix(step(ahead, 0.0), saturate(front), spread);
+        let scorched = mix(
+            1.0 - smoothstep(LEAF_GLOW, LEAF_GLOW + LEAF_SCORCH, ahead),
+            saturate((front + LEAF_GLOW + LEAF_SCORCH) / (LEAF_GLOW + LEAF_SCORCH)),
+            spread,
+        );
+        let charred = smoothstep(0.0, 0.4, fire.x) * (1.0 - leaves);
+        let rgb = mix(color.rgb, SCORCHED, scorched * leaves);
+        color = vec4<f32>(mix(rgb, CHARCOAL, charred), color.a * (1.0 - burnt * leaves));
+        // The meshes glow in their char's seams, about a tenth of the wood: as much on average.
+        let flicker = ember_flicker(in.world_position.xyz, globals.time);
+        ember = EMBER * EMBER_NITS * 0.1 * ember_glow(fire.y) * charred * flicker;
+    }
+}
     // Alpha is the share of the texel the tree covers, averaged down the mipmaps. With MSAA it
     // becomes the share of the pixel's samples drawn (alpha to coverage), so a far crown is as
     // airy as the leaves it was baked from: the sky shows through its gaps in the same
@@ -187,6 +216,8 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     if toon {
         out.color = vec4<f32>(out.color.rgb * toon_rim(N, p.V), out.color.a);
     }
+@if(FLORA_FIRE)
+    out.color = vec4<f32>(out.color.rgb + view.exposure * ember, out.color.a);
     out.color = main_pass_post_lighting_processing(p, out.color);
     return out;
 }

@@ -8,7 +8,7 @@
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
 //!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
-//!     [--autumn <seconds>[,<after>[,<every>]]]
+//!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -49,7 +49,10 @@
 //! after the one before; with one `--distance`, the frames follow the leaves as they fall and lie.
 //! `--autumn <seconds>[,<after>[,<every>]]` instead lets the season's leaf fall rise from the
 //! `--season` value to 1 over `seconds` once the tree is ready, photographed the same way: the
-//! tree's own leaves let go as the season passes them.
+//! tree's own leaves let go as the season passes them. `--burn <after>[,<every>]` lights the
+//! tree's spot of a [`FloraFire`](bevy_flora::FloraFire) once it is ready (the fire is there from
+//! the start, 64 m in 1 m cells), photographed the same way: the leaves scorch and burn away, the
+//! wood chars from the ground up and its embers glow, then cool.
 //!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
@@ -66,8 +69,9 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    BuckTree, DropLeaves, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings,
-    PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool, TreePreset, TreeShape, build_pool, build_tree,
+    BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances,
+    LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool, TreePreset, TreeShape, build_pool,
+    build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -129,6 +133,9 @@ struct Args {
     /// Let the leaf fall rise to 1 over `.0` seconds once the tree is ready, photograph `.1` seconds
     /// later and every `.2` seconds after that.
     autumn: Option<(f32, f32, f32)>,
+    /// Light the tree's cell of a `FloraFire` once it is ready, photograph `.0` seconds later and
+    /// every `.1` seconds after that.
+    burn: Option<(f32, f32)>,
 }
 
 fn usage() -> ! {
@@ -138,7 +145,8 @@ fn usage() -> ! {
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
-         [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]]"
+         [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
+         [--burn <after>[,<every>]]"
     );
     std::process::exit(2);
 }
@@ -178,6 +186,7 @@ fn parse_args() -> Args {
         on_centre: false,
         drop: None,
         autumn: None,
+        burn: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -283,6 +292,14 @@ fn parse_args() -> Args {
                     [seconds] => Some((seconds, 0.0, 0.0)),
                     [seconds, after] => Some((seconds, after, 0.0)),
                     [seconds, after, every] => Some((seconds, after, every)),
+                    _ => usage(),
+                };
+            }
+            "--burn" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.burn = match p[..] {
+                    [after] => Some((after, 0.0)),
+                    [after, every] => Some((after, every)),
                     _ => usage(),
                 };
             }
@@ -458,6 +475,11 @@ fn setup(
         shoot.ground = FloraGround::new(move |at: Vec2| -at.x * tan);
         commands.insert_resource(shoot.ground.clone());
     }
+    // `--burn`: a fire over the tree's ground from the start, so its shaders are made with the
+    // others, in 1 m cells.
+    if shoot.args.burn.is_some() {
+        commands.insert_resource(FloraFire::with_cells(Vec2::ZERO, 64.0, 64));
+    }
     shoot.base = if shoot.args.on_centre {
         shoot.ground.height(Vec2::ZERO)
     } else {
@@ -544,6 +566,7 @@ fn drive(
     bucking: Query<(), With<BuckTree>>,
     standing: Query<Entity, Or<(With<ProceduralTree>, With<PooledTree>)>>,
     mut drops: MessageWriter<DropLeaves>,
+    mut fire: Option<ResMut<FloraFire>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if !shoot.ready {
@@ -571,6 +594,13 @@ fn drive(
         if let Some((_, after, _)) = shoot.args.autumn {
             shoot.wait = ticks(after).max(SETTLE_FRAMES);
         }
+        // `--burn`: the tree's cell is lit now, and the first photograph waits.
+        if let Some((after, _)) = shoot.args.burn {
+            if let Some(fire) = fire.as_mut() {
+                fire.ignite(Vec3::new(0.0, shoot.base, 0.0), 1.0);
+            }
+            shoot.wait = ticks(after).max(SETTLE_FRAMES);
+        }
     }
     if shoot.in_flight {
         if !screenshots.is_empty() {
@@ -579,6 +609,7 @@ fn drive(
         shoot.in_flight = false;
         shoot.frame += 1;
         let every = shoot.args.drop.map(|(_, _, every)| every).or(shoot.args.autumn.map(|(_, _, every)| every));
+        let every = every.or(shoot.args.burn.map(|(_, every)| every));
         shoot.wait = every.map_or(SETTLE_FRAMES, |every| ticks(every).max(SETTLE_FRAMES));
         if shoot.frame == shoot.args.frames {
             let path = shoot.args.out.join("frames.tsv");

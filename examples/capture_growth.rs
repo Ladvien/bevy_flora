@@ -41,7 +41,12 @@
 //! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on the birch, then a blast
 //! that swings every tree, each hit knocking leaves off (`FallingLeaves`). `--fell` records a few
 //! grown trees from a still camera while the oak in front is felled (`FellTree`), crashes to the
-//! ground, sheds leaves and leaves its stump (`docs/fell.gif`, encoded like the grove).
+//! ground, sheds leaves and leaves its stump (`docs/fell.gif`, encoded like the grove). `--fire`
+//! records the grove at dusk from a still camera while a fire (`FloraFire`) lit on its upwind edge
+//! runs through it, the leaves scorching and burning away and the wood charring, its embers
+//! glowing and then cooling (`docs/fire.gif`, encoded like the grove). Its fire is sped up like
+//! the rest of a clip (`FireSpread` 3.5 m/s, each spot burnt through in two seconds), and its
+//! ground scorches by the fire's char, as a game's own ground would read it.
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -64,9 +69,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
+use bevy::mesh::VertexAttributeValues;
+use bevy::post_process::bloom::Bloom;
 use bevy_flora::{
-    FallingLeaves, FellTree, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle,
-    TreeAge, TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
+    FallingLeaves, FellTree, FireSpread, FloraFire, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront,
+    ProceduralTree, RenderStyle, TreeAge, TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -104,6 +111,16 @@ const TREE_SEEDLING: f32 = 0.03;
 const GROVE_SEEDLING: f32 = 0.10;
 /// Camera field of view, Bevy's default.
 const FOV: f32 = PI / 4.0;
+/// The fire clip: the frame its fire is lit, how far upwind of the grove's middle (metres), the
+/// square it covers (metres, centred on the grove) and its cells along a side (half a metre).
+const FIRE_FRAME: u32 = 12;
+const FIRE_UPWIND: f32 = 7.0;
+const FIRE_SIZE: f32 = 48.0;
+const FIRE_CELLS: u32 = 96;
+/// The fire clip's spread, sped up like the rest of a clip: across the grove in a few seconds,
+/// each spot burnt through in two and a half, its embers cool in five. The crowns reach 4.5 m, so
+/// the fire crosses every gap in the grove.
+const FIRE_SPREAD: FireSpread = FireSpread { speed: 3.5, burn_time: 2.5, cool_time: 5.0, reach: 4.5, ground: 0.0, wind: 1.0 };
 
 /// One tree of a clip: how its age follows the frame number.
 #[derive(Component)]
@@ -142,6 +159,9 @@ enum Scene {
     Shake,
     /// A few grown trees in a light wind; the oak in front is felled and crashes to the ground.
     Fell,
+    /// The grove, fully grown, at dusk in a wind: a fire lit on its upwind edge runs through it,
+    /// scorching the leaves, burning them away and charring the wood, and the embers cool.
+    Fire,
 }
 
 /// A tree of the grove: species, seed, where it stands (in units of the grove's spacing, x and
@@ -213,6 +233,10 @@ struct Capture {
     shaken: usize,
     /// How many of `FELLS` have been cut.
     felled: usize,
+    /// The fire clip's patch of ground that scorches.
+    scorch: Handle<Mesh>,
+    /// Where the fire clip's fire is lit.
+    fire_start: Vec3,
 }
 
 #[derive(Component)]
@@ -220,7 +244,7 @@ struct OrbitCam;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell] [--gpu]"
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire] [--gpu]"
     );
     std::process::exit(2);
 }
@@ -228,7 +252,8 @@ fn usage() -> ! {
 fn main() {
     let mut out = None;
     let mut preset = None;
-    // The grove clips: "grove", "seasons", "shake" or "fell"; none is the single growing tree.
+    // The grove clips: "grove", "seasons", "shake", "fell" or "fire"; none is the single growing
+    // tree.
     let mut clip: Option<&'static str> = None;
     let mut gpu = false;
     let mut style = RenderStyle::Natural;
@@ -237,7 +262,7 @@ fn main() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
-            "--grove" | "--seasons" | "--shake" | "--fell" => {
+            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" => {
                 if clip.is_some() {
                     usage();
                 }
@@ -245,7 +270,8 @@ fn main() {
                     "--grove" => "grove",
                     "--seasons" => "seasons",
                     "--shake" => "shake",
-                    _ => "fell",
+                    "--fell" => "fell",
+                    _ => "fire",
                 });
             }
             "--preset" => {
@@ -278,7 +304,8 @@ fn main() {
         Some("grove") => Scene::Grove,
         Some("seasons") => Scene::Seasons,
         Some("shake") => Scene::Shake,
-        Some(_) => Scene::Fell,
+        Some("fell") => Scene::Fell,
+        Some(_) => Scene::Fire,
         None => {
             let mut params = preset.unwrap_or(TreePreset::Maple).params();
             params.style = style;
@@ -290,61 +317,69 @@ fn main() {
     // Across the view: the camera looks along (-1, -1), the wind blows toward (-1, 1).
     let wind = Vec2::new(-1.0, 1.0).normalize();
 
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "bevy_flora capture".to_string(),
-                    ..default()
-                }),
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "bevy_flora capture".to_string(),
                 ..default()
             }),
-            FloraPlugin,
-        ))
-        .insert_resource(ClearColor(Color::srgb(0.55, 0.72, 0.92)))
-        .insert_resource(GlobalAmbientLight {
-            color: Color::srgb(0.6, 0.6, 0.6),
-            brightness: 300.0,
             ..default()
-        })
-        // A light wind in the shake and fell clips, so the knocks and the falls are what moves.
-        .insert_resource(FloraWind {
-            strength: if matches!(scene, Scene::Shake | Scene::Fell) { 0.15 } else { 0.5 },
-            direction: wind,
-            speed: 1.4,
-            ..default()
-        })
-        // The seasons clip is a time-lapse, a year in eight seconds: leaves falling at their own
-        // speed would still hang in the air in winter, so the season's leaves are shed where they
-        // hang, as before falling leaves (`FallingLeaves::autumn_distance` 0).
-        .insert_resource(FallingLeaves {
-            autumn_distance: if matches!(scene, Scene::Seasons) { 0.0 } else { FallingLeaves::default().autumn_distance },
-            ..default()
-        })
-        // Time stands still until `drive` steps it, once per captured frame.
-        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO))
-        .insert_resource(Capture {
-            scene,
-            size,
-            out,
-            target: Handle::default(),
-            ground: Handle::default(),
-            distance,
-            focus,
-            wind,
-            frame: 0,
-            wait: WARMUP_FRAMES,
-            in_flight: false,
-            gusted: false,
-            trees: Vec::new(),
-            entities: Vec::new(),
-            shaken: 0,
-            felled: 0,
-        })
-        .insert_resource(UseGpu(gpu))
-        .add_systems(Startup, setup)
-        .add_systems(Update, drive)
-        .run();
+        }),
+        FloraPlugin,
+    ))
+    .insert_resource(ClearColor(Color::srgb(0.55, 0.72, 0.92)))
+    .insert_resource(GlobalAmbientLight {
+        color: Color::srgb(0.6, 0.6, 0.6),
+        brightness: 300.0,
+        ..default()
+    })
+    // A light wind in the shake and fell clips, so the knocks and the falls are what moves.
+    .insert_resource(FloraWind {
+        strength: if matches!(scene, Scene::Shake | Scene::Fell) { 0.15 } else { 0.5 },
+        direction: wind,
+        speed: 1.4,
+        ..default()
+    })
+    // The seasons clip is a time-lapse, a year in eight seconds: leaves falling at their own
+    // speed would still hang in the air in winter, so the season's leaves are shed where they
+    // hang, as before falling leaves (`FallingLeaves::autumn_distance` 0).
+    .insert_resource(FallingLeaves {
+        autumn_distance: if matches!(scene, Scene::Seasons) { 0.0 } else { FallingLeaves::default().autumn_distance },
+        ..default()
+    })
+    // Time stands still until `drive` steps it, once per captured frame.
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    if matches!(scene, Scene::Fire) {
+        // Dusk: a darker sky and a cool ambient light. The fire, sped up like the rest of a clip.
+        app.insert_resource(ClearColor(Color::srgb(0.36, 0.41, 0.62)))
+            .insert_resource(GlobalAmbientLight { color: Color::srgb(0.5, 0.55, 0.75), brightness: 200.0, ..default() })
+            .insert_resource(FloraFire::with_cells(focus.xz(), FIRE_SIZE, FIRE_CELLS).with_spread(FIRE_SPREAD));
+    }
+    app.insert_resource(Capture {
+        scene,
+        size,
+        out,
+        target: Handle::default(),
+        ground: Handle::default(),
+        distance,
+        focus,
+        wind,
+        frame: 0,
+        wait: WARMUP_FRAMES,
+        in_flight: false,
+        gusted: false,
+        trees: Vec::new(),
+        entities: Vec::new(),
+        shaken: 0,
+        felled: 0,
+        scorch: Handle::default(),
+        fire_start: Vec3::ZERO,
+    })
+    .insert_resource(UseGpu(gpu))
+    .add_systems(Startup, setup)
+    .add_systems(Update, drive)
+    .run();
 }
 
 #[derive(Resource)]
@@ -369,7 +404,7 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let radius = (0.5 * (max - min).length()).max(0.5);
             (radius / (FOV * 0.5).sin() * 0.8, Vec3::new(0.0, 0.5 * (min.y + max.y), 0.0))
         }
-        Scene::Grove | Scene::Seasons | Scene::Shake => {
+        Scene::Grove | Scene::Seasons | Scene::Shake | Scene::Fire => {
             let placed = grove(Vec3::ZERO);
             let (min, max) = placed
                 .iter()
@@ -457,10 +492,17 @@ fn setup(
         TextureFormat::Rgba8Unorm,
         Some(TextureFormat::Rgba8UnormSrgb),
     ));
+    // The fire burns at dusk: a low, warm sun.
+    let (illuminance, colour, sun) = if matches!(capture.scene, Scene::Fire) {
+        (4_000.0, Color::srgb(1.0, 0.74, 0.52), Vec3::new(18.0, 7.0, 9.0))
+    } else {
+        (10_000.0, Color::WHITE, Vec3::new(10.0, 20.0, 10.0))
+    };
     commands.spawn((
         DirectionalLight {
             shadow_maps_enabled: true,
-            illuminance: 10_000.0,
+            illuminance,
+            color: colour,
             ..default()
         },
         CascadeShadowConfigBuilder {
@@ -470,7 +512,7 @@ fn setup(
             ..default()
         }
         .build(),
-        Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(sun).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     capture.ground = materials.add(StandardMaterial {
         base_color: ground_colour(0.0),
@@ -488,7 +530,7 @@ fn setup(
         ),
         Scene::Grove => (GROVE_SEEDLING, grove(Vec3::ZERO)),
         // Every tree mature from the first frame: the seasons are the clip.
-        Scene::Seasons | Scene::Shake => {
+        Scene::Seasons | Scene::Shake | Scene::Fire => {
             (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect())
         }
         Scene::Fell => (1.0, fell_grove()),
@@ -509,12 +551,31 @@ fn setup(
             commands.entity(tree).insert(GpuGrowth);
         }
     }
-    commands.spawn((
+    // The fire clip's patch of ground that scorches (its vertex colours follow the fire), a few
+    // millimetres over the grass.
+    if matches!(capture.scene, Scene::Fire) {
+        let mut patch = Plane3d::default().mesh().size(FIRE_SIZE, FIRE_SIZE).subdivisions(95).build();
+        let colours = vec![ground_colour(0.0).to_linear().to_f32_array(); patch.count_vertices()];
+        patch.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        capture.scorch = meshes.add(patch);
+        commands.spawn((
+            Mesh3d(capture.scorch.clone()),
+            MeshMaterial3d(materials.add(StandardMaterial { perceptual_roughness: 1.0, ..default() })),
+            Transform::from_translation(capture.focus.with_y(0.004)),
+        ));
+        // Upwind of the grove's middle, on the edge of its crowns.
+        capture.fire_start = (capture.focus.xz() - capture.wind * FIRE_UPWIND).extend(0.0).xzy();
+    }
+    let mut camera = commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),
         camera_at(&capture, 0),
         OrbitCam,
     ));
+    // At dusk the embers and the burning leaves glow.
+    if matches!(capture.scene, Scene::Fire) {
+        camera.insert(Bloom::NATURAL);
+    }
 }
 
 /// Camera transform at fraction `t` (0..1) of the clip.
@@ -531,7 +592,7 @@ fn orbit(capture: &Capture, t: f32) -> Transform {
 /// orbiting for the others.
 fn camera_at(capture: &Capture, frame: u32) -> Transform {
     match capture.scene {
-        Scene::Shake => orbit(capture, 0.5),
+        Scene::Shake | Scene::Fire => orbit(capture, 0.5),
         // From +x, square to both falls; the sun stands behind the camera's left shoulder.
         Scene::Fell => {
             let pitch = 14f32.to_radians();
@@ -556,6 +617,8 @@ fn drive(
     mut exit: MessageWriter<AppExit>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut shakes: ResMut<TreeShakes>,
+    fire: Option<ResMut<FloraFire>>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     // The clock stands still, except for the one step the frame below asks for.
     *strategy = TimeUpdateStrategy::ManualDuration(Duration::ZERO);
@@ -635,6 +698,15 @@ fn drive(
             &time,
         );
     }
+    // The fire clip: lit at its frame on the grove's upwind edge; the ground under it scorches.
+    if let (Scene::Fire, Some(mut fire)) = (&capture.scene, fire) {
+        if frame == FIRE_FRAME {
+            fire.ignite(capture.fire_start, 2.0);
+        }
+        if let Some(mut ground) = meshes.get_mut(&capture.scorch) {
+            scorch_ground(&mut ground, &fire, capture.focus.with_y(0.004));
+        }
+    }
 
     if capture.wait > 0 {
         capture.wait -= 1;
@@ -645,4 +717,17 @@ fn drive(
         .spawn(Screenshot::image(capture.target.clone()))
         .observe(save_to_disk(path));
     capture.in_flight = true;
+}
+
+/// The fire clip's scorched ground: the patch's vertex colours from grass to ash as the fire's char
+/// under each vertex (`FloraFire::char_at`), the patch standing at `origin`.
+fn scorch_ground(mesh: &mut Mesh, fire: &FloraFire, origin: Vec3) {
+    let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return };
+    let grass = ground_colour(0.0).to_linear().to_vec4();
+    let ash = Vec4::new(0.012, 0.010, 0.008, 1.0);
+    let colours: Vec<[f32; 4]> = positions
+        .iter()
+        .map(|&p| grass.lerp(ash, fire.char_at(origin + Vec3::from(p)).powf(0.6)).to_array())
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
 }

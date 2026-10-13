@@ -449,6 +449,8 @@ pub struct FloraKey {
     pub see_through: bool,
     /// Falling leaves: see [`FloraExtension::falling`].
     pub falling: bool,
+    /// The fire: see [`FloraExtension::fire`].
+    pub fire: bool,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -493,6 +495,10 @@ pub struct FloraExtension {
     /// the vertex stages move them instead of bending a tree (see [`falling`](crate::falling)). The
     /// plugin makes such a copy of a tree's leaf material for the leaves that fall from it.
     pub falling: bool,
+    /// Whether the fire ([`FloraFire`](crate::FloraFire)) burns this material's trees. The plugin
+    /// sets it on every flora material while a `FloraFire` exists and clears it when none does,
+    /// so that otherwise no pipeline carries the fire.
+    pub fire: bool,
 }
 
 impl From<&FloraExtension> for FloraKey {
@@ -504,6 +510,7 @@ impl From<&FloraExtension> for FloraKey {
             style: extension.style,
             see_through: extension.see_through,
             falling: extension.falling,
+            fire: extension.fire,
         }
     }
 }
@@ -545,6 +552,15 @@ pub(crate) fn specialize_flora(
     key: FloraKey,
     mesh_key: MeshPipelineKey,
 ) -> Result<(), SpecializedMeshPipelineError> {
+    // The fire (`FloraFire`): leaves scorch and burn away and wood chars in the vertex stages, in
+    // the main pass and the prepasses alike (so shadows lose the burnt leaves), and the fragment
+    // stage blackens and lights the embers.
+    if key.fire {
+        descriptor.vertex.shader_defs.push("FLORA_FIRE".into());
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push("FLORA_FIRE".into());
+        }
+    }
     if key.see_through {
         add_see_through(descriptor, mesh_key);
     }
@@ -714,6 +730,7 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
             style: surface.style,
             see_through: false,
             falling: false,
+            fire: false,
         },
     }
 }
@@ -738,7 +755,7 @@ pub struct FloraWindBuffer(pub Handle<ShaderBuffer>);
 
 impl FloraWindBuffer {
     fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind, season: &FloraSeason, shakes: &TreeShakes) -> Self {
-        Self(buffers.add(ShaderBuffer::from(wind_vectors(wind, season, shakes).map(|v| v.to_array()).to_vec())))
+        Self(buffers.add(ShaderBuffer::from(shared_vectors(&wind_vectors(wind, season, shakes).map(|v| v.to_array())))))
     }
 }
 
@@ -773,7 +790,8 @@ pub(crate) fn detect_flora_support(
 }
 
 /// Write [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] into the shared buffer, in place. Runs
-/// when any of them changed.
+/// when any of them changed. Only their slots: the fire's grid after them
+/// ([`FloraFire`](crate::FloraFire)) is `fire::sync_fire`'s.
 pub(crate) fn sync_wind(
     wind: Res<FloraWind>,
     season: Res<FloraSeason>,
@@ -787,14 +805,23 @@ pub(crate) fn sync_wind(
     packed[SEE_THROUGH_SLOT] = capsule.0[0].to_array();
     packed[SEE_THROUGH_SLOT + 1] = capsule.0[1].to_array();
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
-    if buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>()) == Some(&packed[..]) {
+    let current = buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>());
+    if current.and_then(|slice| slice.get(..WIND_VECTORS)) == Some(&packed[..]) {
         return;
     }
     let Some(mut shader_buffer) = buffers.get_mut(&buffer.0) else { return };
     match shader_buffer.cast_slice_mut::<[f32; 4]>() {
-        Some(slice) if slice.len() == packed.len() => slice.copy_from_slice(&packed),
-        _ => *shader_buffer = ShaderBuffer::from(packed.to_vec()),
+        Some(slice) if slice.len() > WIND_VECTORS => slice[..WIND_VECTORS].copy_from_slice(&packed),
+        _ => *shader_buffer = ShaderBuffer::from(shared_vectors(&packed)),
     }
+}
+
+/// The shared buffer's contents for the weather `packed`: it, then the fire's header saying there
+/// is no fire (`fire::sync_fire` grows the buffer by the grid when there is one).
+fn shared_vectors(packed: &[[f32; 4]; WIND_VECTORS]) -> Vec<[f32; 4]> {
+    let mut all = packed.to_vec();
+    all.push([0.0; 4]);
+    all
 }
 
 /// Drop the shakes that have died away, and those the render clock's wrap left in the future, so

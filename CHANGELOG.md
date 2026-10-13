@@ -5,6 +5,67 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.26.0] - 2026-10-13
+
+Trees burn. A `FloraFire` over the game's world spreads a fire from where the game lights it
+through the trees, faster downwind, as far as there is something to burn; the trees it reaches
+scorch, flare and lose their leaves, and their wood chars from the ground up to charcoal with
+glowing seams, on every way a tree is drawn. The flora materials gain a `fire` flag, hence the
+minor bump.
+
+### Added
+
+- **Fire.** `FloraFire`, a resource: a square grid of `FireCell { char, heat }` over the world
+  (`new`: 128 cells a side; `with_cells`, up to 512; `with_spread`). `ignite(at, radius)` lights
+  it, `extinguish` puts it out keeping the char, `scorch` lays a burn down with no fire;
+  `char_at` and `heat_at` read it back as the shaders do (between the cell centres), `cells` and
+  `is_burning` as it is. The plugin steps it ten times a second while anything burns: fuel lies
+  within `FireSpread::reach` (3 m) of every `ProceduralTree` and `PooledTree` trunk (and
+  `ground` everywhere), the front reaches a neighbour `distance / speed` after a cell was lit
+  (`speed` 1 m/s, faster downwind by `wind`, a quarter more or less by cell, from `seed`), a cell
+  burns through in `burn_time` (12 s) and its embers cool in `cool_time` (20 s).
+- **The look of fire**, compiled into the flora shaders only while a `FloraFire` exists
+  (`FLORA_FIRE`): a leaf scorches brown as the burning front nears it, flares orange and is gone
+  (in the shadow maps too); wood chars from the ground up (the trunk by char 0.4, the crown's
+  wood by 1) to dull charcoal split into blocks whose seams glow while it burns (900 nits times
+  the heat squared, flickering) and cool after; impostors burn their leaves away in patches,
+  scorch and char. `ProceduralTree`, `TreeLod`, pools and impostors, `GpuGrowth` trees and the
+  toon look; a burnt tree drops none of the leaves it lost (shakes, felling, the season).
+- `FloraFire`, `FireSpread`, `FireCell` in the crate root; `FloraFire` in the prelude.
+- Examples: `inspect --burn <after>[,<every>]` (a fire lit at the tree's foot, photographed as
+  with `--drop`), `forest --fire <x>,<z>[,<radius>]` and `--fire armed`, `capture_growth --fire`
+  (the grove at dusk burning, with bloom, its ground scorched by `char_at`; `docs/fire.gif`).
+- README: "Fire: `FloraFire`", with `docs/fire.gif` and `docs/fire_burn.jpg`.
+
+### Changed
+
+- `FloraKey`, `FloraExtension`, `GrowthExtension`, `ImpostorMaterial` and `ImpostorKey` gain
+  `fire: bool` (the plugin sets it while a `FloraFire` exists; a material built by hand starts
+  with `false`).
+- The shared buffer (`FloraWindBuffer`) holds one more vector after the weather, the fire's
+  header, and the fire's grid while one exists. `sync_wind` writes only the weather's slots.
+
+### Measured
+
+- **Look.** With no fire the 424 gallery scenarios render as in 0.25.0, on the CPU and with
+  `--gpu` (a mean difference of 0.000 of 255, no `ERROR`), and so do the growth, grove and
+  seasons clips; the shake and fell clips drop other leaves of the same trees (deterministically:
+  two runs alike). The fire, photographed: `inspect --burn` series of an oak from 1 to 23 s in
+  daylight, all 17 presets at 4 and 8 s, a pooled maple's impostor, the oak in toon, a mixed
+  forest of 3 000 pooled trees 10, 25 and 45 s after a fire was lit in it, and the fire clip,
+  whose `--gpu` run matches the CPU run frame for frame (a mean difference of 0.000).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.25.0). With
+  no `FloraFire`: 1 000 individual oaks 24.50 and 24.48 ms (0.25.0: 24.50 and 24.46), 100 000
+  pooled oaks 7.51 and 7.60 ms (7.59 and 7.71). With one and nothing burning (`--fire armed`):
+  medians 24.67 and 24.63 ms, and 7.52 ms. With every tree within 60 m of the middle alight,
+  1 000 oaks 25.02 and 25.09 ms; within 300 m, 100 000 pooled oaks 7.63 and 7.59 ms.
+- **Found and fixed before release.** The spread first lit neighbours by chance each step, and
+  its front ran at a speed set by the cell size (24 m in 8 s at half-metre cells against a
+  nominal 1 m/s: more cells, more paths racing). It is now an arrival time: at 1 m/s a tree 24 m
+  away catches in 10 to 36 s with half-metre and two-metre cells alike, within 1.6 times of each
+  other (a test). The first embers glowed over the whole char and painted trunks copper in
+  daylight; they glow in the seams only.
+
 ## [0.25.0] - 2026-10-13
 
 Autumn's leaves fall. As the season's leaf fall rises, the leaves the shaders stop drawing on a
@@ -1613,6 +1674,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.26.0]: https://github.com/Ladvien/bevy_flora/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Ladvien/bevy_flora/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Ladvien/bevy_flora/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Ladvien/bevy_flora/compare/v0.22.0...v0.23.0

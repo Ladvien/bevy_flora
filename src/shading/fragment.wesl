@@ -32,6 +32,15 @@ import package::shading::common::{snow_on, snow_shelter, facing_normal, LEAF_FRO
 @if(FLORA_SEE_THROUGH)
 import package::shading::common::see_through;
 
+@if(FLORA_FIRE && !FLORA_LEAF)
+import package::shading::common::{fire_at, wood_char, char_wood, ember_flicker, ember_glow, EMBER, EMBER_NITS};
+
+@if(FLORA_FIRE && !FLORA_LEAF)
+import bevy_pbr::render::mesh_view_bindings::globals;
+
+@if(FLORA_FIRE && FLORA_LEAF)
+import package::shading::common::{scorch_leaf, LEAF_FLAME, LEAF_FLAME_NITS};
+
 @fragment
 fn fragment(
     vertex_output: VertexOutput,
@@ -74,6 +83,32 @@ fn fragment(
         leaf_surface(&pbr_input, in.uv, in.uv_b);
     }
 
+    // The fire (`FloraFire`): wood chars from the ground up as the fire where it stands chars, and
+    // its cracks glow while it burns; a leaf scorches brown and glows as it burns away (both from
+    // the vertex stage, in its colour's alpha).
+    var ember = vec3<f32>(0.0);
+@if(FLORA_FIRE && !FLORA_LEAF) {
+    let fire = fire_at(in.world_position.xyz);
+    if fire.x > 0.0 {
+        var h = 0.0;
+@if(VERTEX_UVS_B)
+        h = in.uv_b.y;
+        var uv = vec2<f32>(0.0);
+@if(VERTEX_UVS_A)
+        uv = in.uv;
+        let charred = wood_char(fire.x, h);
+        let crack = char_wood(&pbr_input, charred, uv);
+        let flicker = ember_flicker(in.world_position.xyz, globals.time);
+        ember = EMBER * EMBER_NITS * ember_glow(fire.y) * charred * crack * flicker;
+    }
+}
+@if(FLORA_FIRE && FLORA_LEAF && VERTEX_COLORS) {
+    if !flower {
+        scorch_leaf(&pbr_input, saturate(in.color.a - 1.0));
+        ember = LEAF_FLAME * LEAF_FLAME_NITS * max(in.color.a - 2.0, 0.0);
+    }
+}
+
     // The season's snow (none in summer, which leaves the surface as it was): on the side of a leaf
     // card the camera sees, if that side faces up, and a dusting on every leaf, as much as the leaf
     // sees of the sky; on the wood, by its own normal. A leaf under snow lets no light through.
@@ -101,6 +136,9 @@ fn fragment(
     );
 @if(FLORA_TOON)
     out.color = vec4<f32>(out.color.rgb * toon_rim(pbr_input.world_normal, pbr_input.V), out.color.a);
+    // Embers and burning leaves give light of their own, after the toon rim, which would darken it.
+@if(FLORA_FIRE)
+    out.color = vec4<f32>(out.color.rgb + view.exposure * ember, out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }
