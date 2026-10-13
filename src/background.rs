@@ -18,7 +18,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool};
 /// at every age too, so it shows each age a frame or two late; grow many trees with
 /// [`GpuGrowth`](crate::GpuGrowth), which this also works with (its one build, of the mature
 /// tree, goes to the background; ageing it stays in the frame, as it costs a few kilobytes of
-/// writes). Pools are unaffected: [`build_pool`](crate::build_pool) is a call of its own.
+/// writes). Pools have their own: [`BackgroundPools`](crate::BackgroundPools).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
 #[reflect(Component)]
 pub struct BuildInBackground;

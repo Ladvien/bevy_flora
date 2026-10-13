@@ -53,8 +53,8 @@ use crate::fire::{
 use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
 use crate::pool::{
-    LodBand, LodScale, ZoomScale, banded, fill_pooled_shapes, follow_orthographic_zoom, scale_lod_bands,
-    spawn_pooled_trees, sync_shadow_casting,
+    LodBand, LodScale, PendingPools, TreePool, ZoomScale, banded, fill_pooled_shapes, finish_background_pools,
+    follow_orthographic_zoom, scale_lod_bands, spawn_pooled_trees, sync_shadow_casting,
 };
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWetness, FloraWind, FloraWindBuffer, SharedFlora,
@@ -245,6 +245,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<Burnt>()
             .init_resource::<LodScale>()
             .init_resource::<ZoomScale>()
+            .init_resource::<PendingPools>()
             .register_type::<LodScale>()
             .add_systems(
                 bevy::app::Update,
@@ -277,6 +278,9 @@ impl bevy::app::Plugin for FloraPlugin {
             .add_systems(
                 bevy::app::Update,
                 (
+                    finish_background_pools
+                        .run_if(resource_exists::<Assets<TreePool>>)
+                        .run_if(resource_exists::<Assets<Mesh>>),
                     (start_impostor_bakes, drive_impostor_bakes)
                         .chain()
                         .run_if(resource_exists::<ImpostorSupport>),
