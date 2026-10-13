@@ -5,6 +5,44 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.40.0] - 2026-10-13
+
+Pools that look alike draw with the same materials (issue #71): a game that builds a species at
+several ages, in several looks, drew every pool and look with materials of its own, each a batch of
+its own in the main pass and every shadow cascade (Sanctuary: 72 materials for 12 pools, about 2 ms
+of its frame, and 60 lines and a 120-frame wait to share them by hand).
+
+### Changed
+
+- A pool's flora materials are shared by every pool whose surfaces are equal: the ages of one
+  species, and two looks of one wood colour, draw with the same ones. A forest of four species at
+  three ages in three looks draws with at most 24 materials instead of 72.
+- `RecolorPool` recolours that pool's look and no other, materials shared or not: when every look
+  that draws with a material asks for the same colours in one frame (a palette gliding over a
+  species' pools) the material is written in place, as before; a look recoloured on its own takes
+  materials of its own (or the materials already drawn in those colours) and its trees are pointed
+  at them, so `TreePool::materials` may hold other handles after a recolour. The pool asset is
+  still never marked modified.
+
+### Added
+
+- `forest --ages <n>` builds every species' pool at n ages and spreads the trees among them.
+
+### Measured
+
+- **Cost** (`forest --trees 20000 --mode pool --scatter spruce,pine,maple,oak --ages 3 --looks
+  --offscreen --deterministic`, Apple M4 Pro, six pairs in alternating order against the same code
+  with the sharing taken out): 4.55 ms a frame in the median against 5.49 (4.50 to 4.99 against
+  5.35 to 5.53, every pair faster), CPU time 14.63 against 15.85 ms a frame.
+- **Look.** The 491 gallery scenarios render byte for byte as in 0.39.1 on the CPU and with
+  `--gpu` (but the painterly maple and oak at a mean of 0.000 of 255; no `ERROR`), and so do the
+  nine clips (but one fire frame and three push frames at a mean of 0.000) and the playground's
+  demo: their falling leaves no longer re-shuffle when a release adds a system (0.39.1). The
+  isometric demo differs in 151 frames at a mean of 0.000. A forest of four species at three ages
+  in three looks, shared against the same code with the sharing taken out, before and after a
+  recolour, differs by a mean of 0.59 of 255, the same needles in the same colours a hair apart
+  (zoomed 4x): no pool draws with another's colours.
+
 ## [0.39.1] - 2026-10-13
 
 The same frame every time (issue #68): which leaves a tree drops no longer depends on the order
@@ -2475,6 +2513,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.40.0]: https://github.com/Ladvien/bevy_flora/compare/v0.39.1...v0.40.0
 [0.39.1]: https://github.com/Ladvien/bevy_flora/compare/v0.39.0...v0.39.1
 [0.39.0]: https://github.com/Ladvien/bevy_flora/compare/v0.38.1...v0.39.0
 [0.38.1]: https://github.com/Ladvien/bevy_flora/compare/v0.38.0...v0.38.1

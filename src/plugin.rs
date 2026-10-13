@@ -253,6 +253,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .init_resource::<LodScale>()
             .init_resource::<ZoomScale>()
             .init_resource::<PendingPools>()
+            .init_resource::<crate::pool::PoolFlora>()
             .register_type::<LodScale>()
             .add_systems(
                 bevy::app::Update,
