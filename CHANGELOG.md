@@ -40,8 +40,19 @@ that does not use it.
   machine with fewer cores waits longer and wasm, which builds the variants one after the other,
   about 0.3 s for every preset's eight variants. With `BackgroundPools` the frame pays for adding
   the meshes only.
-- **Look.** LOOK
-- **Cost.** COST
+- **Look.** The 441 gallery scenarios render as in 0.37.0 on the CPU and with `--gpu`, at a mean
+  difference of 0.000 of 255 (byte for byte but the painterly and toon maple and oak; no `ERROR`).
+  The growth, grove, seasons and fire clips are 0.37.0's frame for frame and push at a mean of
+  0.000; the shake, fell, chop and harvest clips and the playground's demo drop other leaves of the
+  same trees (the new system in `Update` reorders the draws that pick them), every tree, stump, log
+  and apple where it was, and their GIFs are re-encoded. The isometric demo, its pools built in
+  the background, is 0.37.0's frame for frame.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, four pairs with 0.37.0 run in
+  alternating order on a machine loaded by other builds): 1 000 individual oaks 32.59 ms in the
+  median against 32.59 (the runs from 27 to 47 ms), 100 000 pooled oaks 8.24 ms against 8.29: no
+  difference. A pool forest built with `--background-pools` draws at the frame time of one built at
+  Startup once it is in (7.88 and 15.56 ms against 7.81 and 15.83 in two pairs, the machine
+  switching between two speeds between the pairs).
 
 ## [0.37.0] - 2026-10-13
 
