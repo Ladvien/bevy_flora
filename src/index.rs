@@ -60,6 +60,9 @@ pub struct IndexedTree {
     pub base_radius: f32,
     /// The trunk's radius at its top, in world units.
     pub top_radius: f32,
+    /// A plant of the forest floor ([`TreeParams::undergrowth`](crate::TreeParams::undergrowth): the
+    /// shrub, juniper and fern presets): skip it where only trees count.
+    pub undergrowth: bool,
 }
 
 /// Where a ray met a trunk: [`FloraIndex::cast_ray`].
@@ -187,6 +190,12 @@ impl IndexedTree {
     }
 }
 
+/// Whether an entry standing at `a` (world x, z), entity `first`, comes before one at `b`, `second`
+/// in a cell's list: by x, then z, then (only for two at one spot) entity.
+fn in_order(a: (f32, f32), first: Entity, b: (f32, f32), second: Entity) -> bool {
+    a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(first.to_bits().cmp(&second.to_bits())).is_lt()
+}
+
 fn cell_of(at: Vec2) -> IVec2 {
     (at / FloraIndex::CELL).floor().as_ivec2()
 }
@@ -216,8 +225,9 @@ impl FloraIndex {
         self.trees.values().map(|(tree, ..)| tree)
     }
 
-    /// The trees whose bark at the foot is within `radius` world units of `at` (world x and z), in no
-    /// order.
+    /// The trees whose bark at the foot is within `radius` world units of `at` (world x and z), in an
+    /// order that depends only on where they stand (cell by cell, and by position within a cell),
+    /// not on the order they were spawned in.
     pub fn within(&self, at: Vec2, radius: f32) -> impl Iterator<Item = &IndexedTree> {
         let (low, high) = (cell_of(at - Vec2::splat(radius)), cell_of(at + Vec2::splat(radius)));
         (low.y..=high.y)
@@ -231,7 +241,8 @@ impl FloraIndex {
             })
     }
 
-    /// The tree whose bark at the foot is nearest `at` (world x and z), within `max` world units.
+    /// The tree whose bark at the foot is nearest `at` (world x and z), within `max` world units;
+    /// of two as near, the first in [`FloraIndex::within`]'s order.
     pub fn nearest(&self, at: Vec2, max: f32) -> Option<&IndexedTree> {
         self.within(at, max).min_by(|a, b| a.distance_to(at).total_cmp(&b.distance_to(at)))
     }
@@ -291,9 +302,15 @@ impl FloraIndex {
     fn insert(&mut self, tree: IndexedTree) {
         self.remove(tree.entity);
         let (low, high) = tree.cells();
+        let Self { cells, trees, .. } = self;
+        // Each cell keeps its trees by where they stand, so a query's order depends on the forest,
+        // not on the order the trees were spawned or indexed in.
+        let place = |e: &Entity| trees.get(e).map_or((0.0, 0.0), |(t, ..)| (t.base.x, t.base.z));
         for y in low.y..=high.y {
             for x in low.x..=high.x {
-                self.cells.entry(IVec2::new(x, y)).or_default().push(tree.entity);
+                let list = cells.entry(IVec2::new(x, y)).or_default();
+                let at = list.partition_point(|e| in_order(place(e), *e, (tree.base.x, tree.base.z), tree.entity));
+                list.insert(at, tree.entity);
             }
         }
         self.trees.insert(tree.entity, (tree, low, high));
@@ -351,7 +368,11 @@ impl FloraIndex {
         let (low, high) = (cell_of(lo), cell_of(hi));
         for y in low.y..=high.y {
             for x in low.x..=high.x {
-                self.obstacle_cells.entry(IVec2::new(x, y)).or_default().push(entity);
+                let list = self.obstacle_cells.entry(IVec2::new(x, y)).or_default();
+                let place = |e: &Entity| self.obstacles.get(e).map_or((0.0, 0.0), |(wood, ..)| (wood[0].capsule.a.x, wood[0].capsule.a.z));
+                let here = (wood[0].capsule.a.x, wood[0].capsule.a.z);
+                let at = list.partition_point(|e| in_order(place(e), *e, here, entity));
+                list.insert(at, entity);
             }
         }
         self.obstacles.insert(entity, (wood, low, high));
@@ -397,7 +418,7 @@ impl Trunk {
     }
 
     /// The trunk where `place` stands it, as the index holds it.
-    fn placed(&self, entity: Entity, place: &GlobalTransform) -> IndexedTree {
+    fn placed(&self, entity: Entity, place: &GlobalTransform, undergrowth: bool) -> IndexedTree {
         let base = place.transform_point(self.start);
         let top = place.transform_point(self.start + self.direction * self.length);
         let height = base.distance(top);
@@ -409,6 +430,7 @@ impl Trunk {
             height,
             base_radius: self.base_radius * scale,
             top_radius: self.tip_radius * scale,
+            undergrowth,
         }
     }
 }
@@ -457,7 +479,7 @@ pub(crate) fn index_trees(
                 }
             }
         };
-        index.insert(shape.placed(entity, place));
+        index.insert(shape.placed(entity, place, tree.0.undergrowth));
     }
     let Some(pools) = pools else { return };
     let mut reloaded = Vec::new();
@@ -469,7 +491,7 @@ pub(crate) fn index_trees(
     let mut add = |entity: Entity, pooled: &PooledTree, place: &GlobalTransform| {
         let Some(pool) = pools.get(&pooled.pool) else { return };
         let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
-        index.insert(Trunk::grown(&variant.skeleton.nodes[0], 1.0, 1.0).placed(entity, place));
+        index.insert(Trunk::grown(&variant.skeleton.nodes[0], 1.0, 1.0).placed(entity, place, pool.params.undergrowth));
     };
     for (entity, pooled, place) in &moved_pooled {
         add(entity, pooled, place);
@@ -536,7 +558,7 @@ mod tests {
 
     /// A 6 m trunk, 0.5 m round at its foot and 0.25 m at its top, standing at (x, 0, z).
     fn tree(entity: Entity, x: f32, z: f32) -> IndexedTree {
-        IndexedTree { entity, base: Vec3::new(x, 0.0, z), axis: Vec3::Y, height: 6.0, base_radius: 0.5, top_radius: 0.25 }
+        IndexedTree { entity, base: Vec3::new(x, 0.0, z), axis: Vec3::Y, height: 6.0, base_radius: 0.5, top_radius: 0.25, undergrowth: false }
     }
 
     #[test]
@@ -659,5 +681,63 @@ mod tests {
         let index = app.world().resource::<FloraIndex>();
         assert!(index.get(oak).is_none());
         assert_eq!(index.len(), 1);
+    }
+
+    #[test]
+    fn a_query_answers_in_an_order_set_by_where_the_trees_stand() {
+        // Twelve trees 3 m apart, several to a cell.
+        let spots: Vec<(f32, f32)> = (0..12).map(|i| ((i % 4) as f32 * 3.0 - 4.0, (i / 4) as f32 * 3.0 - 2.0)).collect();
+        // The same trees, indexed in two orders as other entities.
+        let ask = |reverse: bool| -> (Vec<(f32, f32)>, (f32, f32)) {
+            let mut world = World::new();
+            let mut index = FloraIndex::default();
+            let mut placed = spots.clone();
+            if reverse {
+                placed.reverse();
+                for _ in 0..7 {
+                    world.spawn_empty();
+                }
+            }
+            for (x, z) in placed {
+                index.insert(tree(world.spawn_empty().id(), x, z));
+            }
+            let near = index.within(Vec2::ZERO, 20.0).map(|t| (t.base.x, t.base.z)).collect();
+            // Halfway between two trees: the same one, both ways.
+            let tie = index.nearest(Vec2::new(-2.5, -2.0), 5.0).map(|t| (t.base.x, t.base.z)).unwrap();
+            (near, tie)
+        };
+        let (forward, backward) = (ask(false), ask(true));
+        assert_eq!(forward.0.len(), 12);
+        assert_eq!(forward, backward);
+    }
+
+    #[test]
+    fn undergrowth_is_told_apart_from_trees() {
+        use crate::{LodSettings, TreePreset, build_pool};
+        use bevy::asset::{AssetApp, AssetPlugin, Assets};
+        use bevy::mesh::Mesh;
+        use bevy::pbr::StandardMaterial;
+        use bevy::transform::components::Transform;
+        let mut app = bevy::app::App::new();
+        app.add_plugins((bevy::MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin));
+        app.init_asset::<Mesh>();
+        app.init_asset::<StandardMaterial>();
+        app.add_plugins(crate::FloraPlugin);
+        let oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), Transform::default())).id();
+        let fern = app.world_mut().spawn((ProceduralTree(TreePreset::Fern.params()), Transform::from_xyz(3.0, 0.0, 0.0))).id();
+        let pool = {
+            let built = app.world_mut().resource_scope(|_, mut meshes: bevy::ecs::world::Mut<Assets<Mesh>>| {
+                build_pool(&TreePreset::Juniper.params(), 1, f32::INFINITY, &LodSettings::default(), &mut meshes)
+            });
+            app.world_mut().resource_mut::<Assets<TreePool>>().add(built)
+        };
+        let juniper = app.world_mut().spawn((PooledTree { pool, variant: 0 }, Transform::from_xyz(6.0, 0.0, 0.0))).id();
+        app.update();
+        app.update();
+        let index = app.world().resource::<FloraIndex>();
+        assert!(!index.get(oak).unwrap().undergrowth);
+        assert!(index.get(fern).unwrap().undergrowth && index.get(juniper).unwrap().undergrowth);
+        let trees: Vec<Entity> = index.within(Vec2::ZERO, 10.0).filter(|t| !t.undergrowth).map(|t| t.entity).collect();
+        assert_eq!(trees, vec![oak]);
     }
 }

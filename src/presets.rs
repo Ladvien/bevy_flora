@@ -224,6 +224,7 @@ fn oak() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.8, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -314,6 +315,7 @@ fn pine() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
@@ -406,6 +408,7 @@ fn willow() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 1.4, flutter: 1.6, sway_frequency: 0.7, flutter_frequency: 0.8 },
     }
 }
@@ -498,6 +501,7 @@ fn birch() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 1.2, flutter: 1.3, sway_frequency: 1.1, flutter_frequency: 1.3 },
     }
 }
@@ -588,6 +592,7 @@ fn palm() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 1.5, flutter: 1.2, sway_frequency: 0.6, flutter_frequency: 0.9 },
     }
 }
@@ -678,6 +683,7 @@ fn cypress() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.6, flutter: 0.6, sway_frequency: 1.0, flutter_frequency: 1.2 },
     }
 }
@@ -770,6 +776,7 @@ fn bonsai() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.2, flutter: 0.6, sway_frequency: 1.5, flutter_frequency: 1.2 },
     }
 }
@@ -862,6 +869,7 @@ fn maple() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.9, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -958,6 +966,7 @@ fn spruce() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
@@ -1050,6 +1059,7 @@ fn poplar() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 1.1, flutter: 1.8, sway_frequency: 1.1, flutter_frequency: 1.8 },
     }
 }
@@ -1141,6 +1151,7 @@ fn baobab() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.3, flutter: 0.8, sway_frequency: 0.8, flutter_frequency: 1.0 },
     }
 }
@@ -1231,6 +1242,7 @@ fn dragon_tree() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.3, flutter: 0.7, sway_frequency: 0.9, flutter_frequency: 0.9 },
     }
 }
@@ -1323,6 +1335,7 @@ fn japanese_maple() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 1.0, flutter: 1.2, sway_frequency: 1.1, flutter_frequency: 1.1 },
     }
 }
@@ -1406,6 +1419,7 @@ fn cherry() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.9, flutter: 1.1, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -1490,6 +1504,7 @@ fn apple() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.8, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -1567,6 +1582,7 @@ fn dead_tree() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.6, flutter: 0.0, sway_frequency: 1.2, flutter_frequency: 1.0 },
     }
 }
@@ -1657,6 +1673,7 @@ fn redwood() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: false,
         wind: WindResponse { sway: 0.5, flutter: 0.6, sway_frequency: 0.6, flutter_frequency: 1.0 },
     }
 }
@@ -1744,6 +1761,7 @@ fn shrub() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: true,
         wind: WindResponse { sway: 1.2, flutter: 1.2, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
@@ -1829,6 +1847,7 @@ fn juniper() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: true,
         wind: WindResponse { sway: 0.9, flutter: 0.8, sway_frequency: 1.1, flutter_frequency: 1.1 },
     }
 }
@@ -1913,6 +1932,7 @@ fn fern() -> TreeParams {
         style: RenderStyle::Natural,
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
+        undergrowth: true,
         wind: WindResponse { sway: 1.1, flutter: 1.3, sway_frequency: 1.2, flutter_frequency: 1.2 },
     }
 }
