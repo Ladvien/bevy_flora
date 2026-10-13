@@ -167,7 +167,8 @@ pub struct PooledLook(pub u32);
 /// materials and its impostors' are rewritten in place (only where a value changed), and the pool
 /// itself is not touched, so no tree is re-indexed or rebuilt. The pool must have the look
 /// ([`TreePool::add_look`]); a pool that was never drawn takes the colours when it first is.
-/// `look` and `colors` are as for [`TreePool::looks`]; felled trees follow with [`RecolorTree`](crate::RecolorTree).
+/// `look` and `colors` are as for [`TreePool::looks`]; felled and notched trees of the look, their
+/// stumps and logs follow ([`FromPool`](crate::FromPool)).
 ///
 /// [`TreePool::looks`] keeps the colours the look was added with: the current ones are in the
 /// materials.
