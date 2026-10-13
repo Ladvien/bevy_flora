@@ -63,9 +63,10 @@ use crate::fire::{FloraFire, burnt_front};
 use crate::ground::FloraGround;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::plugin::{Paint, ProceduralTree, TreeRender};
-use crate::pool::{PoolMaterials, PooledTree, TreePool};
+use crate::pool::{PoolMaterials, PooledLook, PooledTree, TreePool};
 use crate::rng::SeededRng;
 use crate::shading::{FloraExtension, FloraMaterial, FloraSeason, FloraWind, TreeShake, TreeShakes};
+use crate::units::FloraUnits;
 
 /// How many leaves fall and how long they lie. A resource; the plugin adds the default.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
@@ -78,7 +79,7 @@ pub struct FallingLeaves {
     pub per_landing: u32,
     /// Deciduous trees standing within this many metres of a camera let the leaves the season
     /// sheds fall ([`FloraSeason::leaf_fall`]); farther ones lose them where they hang, as before.
-    /// 0 lets none fall.
+    /// 0 lets none fall. Metres: [`FloraUnits`] scales it to the world.
     pub autumn_distance: f32,
     /// Seconds a fallen leaf lies on the ground before it shrinks away, each a quarter more or less.
     pub rest: f32,
@@ -159,7 +160,8 @@ pub(crate) fn specialize_falling(
     Ok(())
 }
 
-// The fall's timing, as in `falling_common.wesl`.
+// The fall's timing and distances, as in `falling_common.wesl`. The distances are metres; the
+// world's units to a metre ([`FloraUnits`]) scale them where they are used.
 /// Seconds a leaf takes to pick up most of its speed.
 const PICK_UP: f32 = 0.35;
 /// How fast the wind carries a leaf across, metres per second at strength 1.
@@ -173,7 +175,8 @@ const SWING: f32 = 0.4;
 const LET_GO: f32 = 0.5;
 /// How fast a leaf falls once it has picked up speed, metres per second: each its own in this range.
 const SPEED: Range<f32> = 0.9..1.5;
-/// A leaf that hangs less than this above the ground (a felled tree's crown lies on it) stays put.
+/// A leaf that hangs less than this above the ground, metres (a felled tree's crown lies on it),
+/// stays put.
 const LOWEST: f32 = 0.05;
 /// Leaf meshes whose cards [`FallCaches`] keeps, at most: a pool's few variants, the trees that
 /// drop leaves often.
@@ -197,16 +200,17 @@ pub(crate) struct FallCaches {
 }
 
 impl FallCaches {
-    /// The cards of `source` (the mesh `id`), read now unless they were read from it as it is.
-    fn cards(&mut self, id: AssetId<Mesh>, source: &Mesh) -> &MeshCards {
+    /// The cards of `source` (the mesh `id`; a hull crown's, with the tree's seed in `hull`),
+    /// read now unless they were read from it as it is.
+    fn cards(&mut self, id: AssetId<Mesh>, source: &Mesh, hull: Option<i32>) -> &MeshCards {
         if self.cards.len() >= CACHED_MESHES && !self.cards.contains_key(&id) {
             self.cards.clear();
         }
         // Read again if the mesh is not the one read last time (its change not seen yet).
         let size = (source.count_vertices(), source.indices().map_or(0, Indices::len));
-        let read = self.cards.entry(id).or_insert_with(|| MeshCards::read(source, size));
+        let read = self.cards.entry(id).or_insert_with(|| MeshCards::read(source, size, hull));
         if read.size != size {
-            *read = MeshCards::read(source, size);
+            *read = MeshCards::read(source, size, hull);
         }
         read
     }
@@ -219,8 +223,13 @@ impl FallCaches {
             base: source.base.clone(),
             extension: FloraExtension { falling: true, ..source.extension.clone() },
         };
+        // Made again when the leaves' look changed: their uniform, or their colour or lighting.
         if let Some(made) = self.materials.get(&leaves.id())
-            && flora.get(made).is_some_and(|made| made.extension == look.extension)
+            && flora.get(made).is_some_and(|made| {
+                made.extension == look.extension
+                    && made.base.base_color == look.base.base_color
+                    && made.base.unlit == look.base.unlit
+            })
         {
             return Some(made.clone());
         }
@@ -235,16 +244,26 @@ impl FallCaches {
 struct MeshCards {
     size: (usize, usize),
     cards: Vec<Card>,
-    /// The leaf cards (not the flowers), by their moment in the season.
+    /// The leaves (not the flowers), by their moment in the season.
     by_moment: Vec<u32>,
+    /// The chips of a hull crown, which the cards are of.
+    chips: Option<Mesh>,
 }
 
 impl MeshCards {
-    fn read(mesh: &Mesh, size: (usize, usize)) -> Self {
-        let cards = leaf_cards(mesh);
+    /// The cards of `mesh`, or, for a hull crown's mesh (`hull`: the tree's seed), of the chips
+    /// it sheds ([`hull_chips`]), which are then the mesh the cards are of ([`MeshCards::mesh`]).
+    fn read(mesh: &Mesh, size: (usize, usize), hull: Option<i32>) -> Self {
+        let chips = hull.and_then(|seed| hull_chips(mesh, seed));
+        let cards = leaf_cards(chips.as_ref().unwrap_or(mesh));
         let mut by_moment: Vec<u32> = (0..cards.len() as u32).filter(|&k| !cards[k as usize].flower).collect();
         by_moment.sort_by(|a, b| cards[*a as usize].moment.total_cmp(&cards[*b as usize].moment));
-        Self { size, cards, by_moment }
+        Self { size, cards, by_moment, chips }
+    }
+
+    /// The mesh the cards are runs of: the chips of a hull crown, else `source`, the leaf mesh.
+    fn mesh<'a>(&'a self, source: &'a Mesh) -> &'a Mesh {
+        self.chips.as_ref().unwrap_or(source)
     }
 
     /// The leaves whose moment the leaf fall passes as it rises from `from` to `to`, in that order.
@@ -336,6 +355,98 @@ pub(crate) fn leaf_cards(mesh: &Mesh) -> Vec<Card> {
     cards
 }
 
+/// How many chips fall from a hull crown, whatever its size: one per `CHIPS` random points of
+/// its surface, so a crown sheds a handful, as a leaf-carded tree sheds a few of its thousands.
+const CHIPS: usize = 96;
+/// The length of a chip, metres: an isosceles triangle a little longer than it is wide.
+const CHIP_LENGTH: f32 = 0.12;
+/// A chip's base as a share of its length.
+const CHIP_WIDTH: f32 = 0.6;
+/// Separate random stream of the chips, so they move no other draw.
+const CHIP_SALT: i32 = 0x4348_4950;
+
+/// The chips a hull crown sheds, as a leaf mesh: `hull`, a hull crown's leaf mesh (flat facets of
+/// vertex alpha 1, three vertices each), gives [`CHIPS`] isosceles triangles [`CHIP_LENGTH`] long
+/// lying in the plane of a facet chosen by area, at a random point of it and a random heading,
+/// in the facet's colour with its normal. Each chip is a card of its own (one phase each), and its
+/// moment in the season is that of the facet it came from, so a burnt or shed facet sheds no
+/// chips. `seed` is the tree's: the same crown always sheds the same chips. `None` for a mesh
+/// with no facets.
+pub(crate) fn hull_chips(hull: &Mesh, seed: i32) -> Option<Mesh> {
+    let (Some(VertexAttributeValues::Float32x3(positions)), Some(VertexAttributeValues::Float32x4(colors))) =
+        (hull.attribute(Mesh::ATTRIBUTE_POSITION), hull.attribute(Mesh::ATTRIBUTE_COLOR))
+    else {
+        return None;
+    };
+    let sway = match hull.attribute(ATTRIBUTE_LEAF_SWAY) {
+        Some(VertexAttributeValues::Float32x4(sway)) => sway,
+        _ => return None,
+    };
+    let indices: Vec<usize> = hull.indices()?.iter().collect();
+    // The facets: triangles of leaf alpha (a fruit's or a flower's is below 0.5), with their areas.
+    let at = |v: usize| Vec3::from_array(positions[v]);
+    let mut facets: Vec<([usize; 3], f32)> = Vec::new();
+    for tri in indices.as_chunks::<3>().0 {
+        if colors[tri[0]][3] < 0.5 {
+            continue;
+        }
+        let area = 0.5 * (at(tri[1]) - at(tri[0])).cross(at(tri[2]) - at(tri[0])).length();
+        if area > 1.0e-8 {
+            facets.push((*tri, area));
+        }
+    }
+    let total: f32 = facets.iter().map(|(_, area)| area).sum();
+    if facets.is_empty() || total <= 0.0 {
+        return None;
+    }
+    let mut out = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD);
+    let (mut p, mut n, mut uv, mut uv1, mut col, mut sw) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for k in 0..CHIPS {
+        let mut rng = SeededRng::from_parts(seed ^ CHIP_SALT, k as u32);
+        // A facet by area, then a point of it (uniform: the square-root fold of two draws).
+        let mut pick = rng.next_f32() * total;
+        let facet = facets
+            .iter()
+            .find(|(_, area)| {
+                pick -= area;
+                pick < 0.0
+            })
+            .unwrap_or(&facets[facets.len() - 1]);
+        let tri = facet.0;
+        let (u, v) = (rng.next_f32(), rng.next_f32());
+        let (a, b) = if u + v > 1.0 { (1.0 - u, 1.0 - v) } else { (u, v) };
+        let centre = at(tri[0]) + (at(tri[1]) - at(tri[0])) * a + (at(tri[2]) - at(tri[0])) * b;
+        let normal = (at(tri[1]) - at(tri[0])).cross(at(tri[2]) - at(tri[0])).normalize_or(Vec3::Y);
+        let heading = normal.any_orthogonal_vector().normalize();
+        let (sin, cos) = (rng.next_f32() * std::f32::consts::TAU).sin_cos();
+        let along = (heading * cos + normal.cross(heading) * sin) * CHIP_LENGTH;
+        let across = normal.cross(along) * CHIP_WIDTH * 0.5;
+        let (tip, left, right) = (centre + along * 0.5, centre - along * 0.5 - across, centre - along * 0.5 + across);
+        // Counter-clockwise seen from outside, along the facet's normal.
+        let (left, right) = if (left - tip).cross(right - tip).dot(normal) < 0.0 { (right, left) } else { (left, right) };
+        // The facet's colour, and its phase nudged by the chip's own so no two neighbours share one
+        // (a run of one phase is one card); the nudge moves the moment by under a thousandth.
+        let phase = sway[tri[0]][3] + k as f32 * 1.0e-6;
+        for corner in [tip, left, right] {
+            p.push(corner.to_array());
+            n.push(normal.to_array());
+            uv.push([0.5_f32, 0.5]);
+            uv1.push([1.0_f32, 1.0]);
+            col.push(colors[tri[0]]);
+            sw.push([0.0_f32, 0.0, 0.0, phase]);
+        }
+    }
+    let count = p.len() as u32;
+    out.insert_attribute(Mesh::ATTRIBUTE_POSITION, p);
+    out.insert_attribute(Mesh::ATTRIBUTE_NORMAL, n);
+    out.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    out.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+    out.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    out.insert_attribute(ATTRIBUTE_LEAF_SWAY, sw);
+    out.insert_indices(Indices::U32((0..count).collect()));
+    Some(out)
+}
+
 /// How a drop falls: when it begins, how long its leaves lie and how the wind carries them.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Fall {
@@ -343,17 +454,21 @@ pub(crate) struct Fall {
     pub now: f32,
     /// [`FallingLeaves::rest`].
     pub rest: f32,
-    /// The wind's drift, metres per second on the ground.
+    /// The wind's drift, world units per second on the ground.
     pub drift: Vec2,
+    /// World units to a metre ([`FloraUnits`]): what scales the speeds and the margins below.
+    pub units: f32,
 }
 
 impl Fall {
-    /// The fall of leaves that let go now, under `wind`.
-    fn now(time: &Time, settings: &FallingLeaves, wind: &FloraWind) -> Self {
+    /// The fall of leaves that let go now, under `wind`, in a world of `units`.
+    fn now(time: &Time, settings: &FallingLeaves, wind: &FloraWind, units: &FloraUnits) -> Self {
+        let units = units.units_per_metre;
         Self {
             now: time.elapsed_secs_wrapped(),
             rest: settings.rest,
-            drift: wind.direction.normalize_or_zero() * (wind.strength.max(0.0) * DRIFT),
+            drift: wind.direction.normalize_or_zero() * (wind.strength.max(0.0) * DRIFT * units),
+            units,
         }
     }
 }
@@ -441,7 +556,7 @@ impl BurstBuilder {
             let anchor = world.iter().sum::<Vec3>() / world.len() as f32;
             let reach = world.iter().map(|p| p.distance(anchor)).fold(0.0, f32::max);
             // The ground under where it will land: under where it hangs, then where the wind takes it.
-            let speed = rng.range(SPEED.start, SPEED.end);
+            let speed = rng.range(SPEED.start, SPEED.end) * fall.units;
             let at = anchor + origin;
             let mut landing = at.xz();
             let mut floor = ground(landing);
@@ -450,7 +565,7 @@ impl BurstBuilder {
                 floor = ground(landing);
             }
             let height = at.y - floor;
-            if height < LOWEST {
+            if height < LOWEST * fall.units {
                 continue;
             }
             let land = landing_time(height, speed);
@@ -487,7 +602,7 @@ impl BurstBuilder {
 
             // Bounds: where it hangs and where it lands, each with the card's reach and the swing.
             let landed = Vec3::new(landing.x - origin.x, local_floor, landing.y - origin.z);
-            let margin = Vec3::splat(reach + SWING);
+            let margin = Vec3::splat(reach + SWING * fall.units);
             self.lo = self.lo.min(anchor - margin).min(landed - margin);
             self.hi = self.hi.max(anchor + margin).max(landed + margin);
         }
@@ -555,6 +670,7 @@ fn smoothstep(edge: f32, x: f32) -> f32 {
 pub(crate) fn shake_leaves_loose(
     shakes: Res<TreeShakes>,
     settings: Res<FallingLeaves>,
+    units: Res<FloraUnits>,
     mut seen: Local<Vec<TreeShake>>,
     trees: Query<(Entity, &GlobalTransform), (Or<(With<TreeRender>, With<PooledTree>)>, Without<Felled>)>,
     mut drops: MessageWriter<DropLeaves>,
@@ -569,7 +685,8 @@ pub(crate) fn shake_leaves_loose(
         return;
     }
     for shake in new {
-        let radius = shake.radius.max(0.01);
+        // The shake's radius is metres, the distance to a tree world units.
+        let radius = shake.radius.max(0.01) * units.units_per_metre;
         for (tree, at) in &trees {
             let near = 1.0 - smoothstep(radius, at.translation().xz().distance(shake.at));
             let count = (settings.per_shake * shake.strength.max(0.0) * near).round() as u32;
@@ -599,6 +716,9 @@ struct LeafSource {
     mesh: Handle<Mesh>,
     material: Handle<FloraMaterial>,
     deciduous: bool,
+    /// The seed chips are drawn from when the tree has a hull crown ([`CrownStyle::Hull`]): what
+    /// falls from a hull is chips of its facets ([`hull_chips`]), not its facets.
+    hull: Option<i32>,
 }
 
 /// The leaves of a tree drawn on the CPU with [`FloraMaterial`]s, or from a pool's: `None` for any
@@ -607,21 +727,34 @@ fn leaf_source(
     render: Option<&TreeRender>,
     tree: Option<&ProceduralTree>,
     pooled: Option<&PooledTree>,
+    look: Option<&PooledLook>,
     pools: Option<&Assets<TreePool>>,
 ) -> Option<LeafSource> {
+    let hull = |params: &crate::params::TreeParams, variant: i32| {
+        matches!(params.crown, crate::params::CrownStyle::Hull { .. }).then_some(params.seed.wrapping_add(variant))
+    };
     match (render, tree, pooled) {
         (Some(render), Some(tree), _) => {
             let (Paint::Flora { foliage, .. }, Some((_, mesh))) = (&render.paint, &render.foliage) else { return None };
-            Some(LeafSource { mesh: mesh.clone(), material: foliage.clone(), deciduous: tree.0.foliage.autumn.is_some() })
+            Some(LeafSource {
+                mesh: mesh.clone(),
+                material: foliage.clone(),
+                deciduous: tree.0.foliage.autumn.is_some(),
+                hull: hull(&tree.0, 0),
+            })
         }
         (_, _, Some(pooled)) => {
             let pool = pools?.get(&pooled.pool)?;
-            let Some(PoolMaterials::Flora { leaves, .. }) = &pool.materials else { return None };
-            let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
+            let look = look.map_or(0, |look| look.0 as usize);
+            let Some(PoolMaterials::Flora { leaves, .. }) = pool.materials.get(look % pool.materials.len().max(1)) else {
+                return None;
+            };
+            let index = pooled.variant as usize % pool.variants.len();
             Some(LeafSource {
-                mesh: variant.leaves[0].clone()?,
+                mesh: pool.variants[index].leaves[0].clone()?,
                 material: leaves.clone(),
                 deciduous: pool.params.foliage.autumn.is_some(),
+                hull: hull(&pool.params, index as i32),
             })
         }
         _ => None,
@@ -674,26 +807,34 @@ pub(crate) fn drop_leaves(
     mut meshes: ResMut<Assets<Mesh>>,
     mut flora: ResMut<Assets<FloraMaterial>>,
     pools: Option<Res<Assets<TreePool>>>,
-    trees: Query<(&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>, Option<&Felled>)>,
+    trees: Query<(
+        &GlobalTransform,
+        Option<&TreeRender>,
+        Option<&ProceduralTree>,
+        Option<&PooledTree>,
+        Option<&PooledLook>,
+        Option<&Felled>,
+    )>,
     stumps: Query<&GlobalTransform>,
     bursts: Query<&LeafBurst>,
     mut caches: ResMut<FallCaches>,
     fire: Option<Res<FloraFire>>,
+    units: Res<FloraUnits>,
 ) {
     let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
-    let fall = Fall::now(&time, &settings, &wind);
+    let fall = Fall::now(&time, &settings, &wind, &units);
     for (k, drop) in drops.read().enumerate() {
         let budget = settings.max_leaves.saturating_sub(live).min(drop.count) as usize;
         if budget == 0 {
             continue;
         }
-        let Ok((at, render, tree, pooled, felled)) = trees.get(drop.tree) else { continue };
-        let Some(leaves) = leaf_source(render, tree, pooled, pools.as_deref()) else { continue };
+        let Ok((at, render, tree, pooled, look, felled)) = trees.get(drop.tree) else { continue };
+        let Some(leaves) = leaf_source(render, tree, pooled, look, pools.as_deref()) else { continue };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let shed = leaves.deciduous.then_some(season.leaf_fall);
         let burnt = burnt_front(fire.as_deref(), at.translation());
-        let mut cards: Vec<&Card> =
-            caches.cards(leaves.mesh.id(), source).cards.iter().filter(|card| card.on_tree(shed, burnt)).collect();
+        let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
+        let mut cards: Vec<&Card> = read.cards.iter().filter(|card| card.on_tree(shed, burnt)).collect();
         if cards.is_empty() {
             continue;
         }
@@ -708,7 +849,7 @@ pub(crate) fn drop_leaves(
         let stood = felled.and_then(|felled| stumps.get(felled.stump).ok()).unwrap_or(at).translation().y;
         let height = |p: Vec2| ground.as_deref().map_or(stood, |ground| ground.height(p));
         let mut burst = BurstBuilder::new(at.translation());
-        burst.add(source, cards[..chosen].iter().copied(), at, height, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+        burst.add(read.mesh(source), cards[..chosen].iter().copied(), at, height, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
         let Some(burst) = burst.finish() else { continue };
         let Some(material) = caches.material(&leaves.material, &mut flora) else { continue };
         live += burst.leaves;
@@ -748,9 +889,13 @@ pub(crate) fn shed_with_season(
     mut caches: ResMut<FallCaches>,
     mut state: ResMut<SeasonShed>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
-    trees: Query<(&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>), Without<Felled>>,
+    trees: Query<
+        (&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>, Option<&PooledLook>),
+        Without<Felled>,
+    >,
     bursts: Query<&LeafBurst>,
     fire: Option<Res<FloraFire>>,
+    units: Res<FloraUnits>,
 ) {
     let to = season.leaf_fall.clamp(0.0, 1.0);
     let now = time.elapsed_secs_wrapped();
@@ -778,16 +923,17 @@ pub(crate) fn shed_with_season(
     state.shed = Some((to, now));
 
     let eyes: Vec<Vec3> = cameras.iter().map(GlobalTransform::translation).collect();
-    let reach = settings.autumn_distance * settings.autumn_distance;
+    let distance = units.world(settings.autumn_distance);
+    let reach = distance * distance;
     if eyes.is_empty() || reach <= 0.0 {
         return;
     }
     let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
-    let fall = Fall::now(&time, &settings, &wind);
+    let fall = Fall::now(&time, &settings, &wind, &units);
     let mut rng = SeededRng::from_parts(now.to_bits() as i32, 1);
     let span = to - from;
     let mut looks: HashMap<AssetId<FloraMaterial>, (Handle<FloraMaterial>, BurstBuilder)> = HashMap::default();
-    for (at, render, tree, pooled) in &trees {
+    for (at, render, tree, pooled, look) in &trees {
         let budget = settings.max_leaves.saturating_sub(live) as usize;
         if budget == 0 {
             break;
@@ -796,17 +942,14 @@ pub(crate) fn shed_with_season(
         if !eyes.iter().any(|eye| eye.distance_squared(position) <= reach) {
             continue;
         }
-        let Some(leaves) = leaf_source(render, tree, pooled, pools.as_deref()).filter(|leaves| leaves.deciduous) else {
+        let Some(leaves) = leaf_source(render, tree, pooled, look, pools.as_deref()).filter(|leaves| leaves.deciduous) else {
             continue;
         };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let burnt = burnt_front(fire.as_deref(), position);
-        let falling: Vec<&Card> = caches
-            .cards(leaves.mesh.id(), source)
-            .shed_between(from, to)
-            .filter(|card| card.moment >= burnt)
-            .take(budget)
-            .collect();
+        let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
+        let falling: Vec<&Card> =
+            read.shed_between(from, to).filter(|card| card.moment >= burnt).take(budget).collect();
         if falling.is_empty() {
             continue;
         }
@@ -815,7 +958,7 @@ pub(crate) fn shed_with_season(
             .entry(leaves.material.id())
             .or_insert_with(|| (leaves.material.clone(), BurstBuilder::new(position)));
         // Each lets go when the leaf fall passed its moment, assuming it rose evenly meanwhile.
-        live += burst.add(source, falling, at, height, fall, &mut rng, |card, _| {
+        live += burst.add(read.mesh(source), falling, at, height, fall, &mut rng, |card, _| {
             ((card.moment - from) / span - 1.0) * elapsed
         });
     }
@@ -914,12 +1057,66 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_sheds_chips_not_facets_and_a_burnt_one_none_it_has_lost() {
+        let hull = build_tree(&crate::crown_hull::hull_spruce(), f32::INFINITY).foliage.into_bevy_mesh();
+        let facets = leaf_cards(&hull);
+        assert_eq!(facets.len(), 70);
+
+        // Through the cache, as the systems read it: the cards are of the chips, not of the hull.
+        let mut caches = FallCaches::default();
+        let read = caches.cards(AssetId::default(), &hull, Some(7));
+        let chips = read.mesh(&hull).clone();
+        let cards = read.cards.clone();
+        assert_eq!((chips.count_vertices(), cards.len()), (CHIPS * 3, CHIPS), "a chip is a card of three vertices");
+        assert_ne!(chips.count_vertices(), hull.count_vertices(), "the cards are of the chips, not the hull");
+        assert_eq!(hull_chips(&hull, 7).unwrap().attribute(Mesh::ATTRIBUTE_POSITION), chips.attribute(Mesh::ATTRIBUTE_POSITION));
+        assert_ne!(hull_chips(&hull, 8).unwrap().attribute(Mesh::ATTRIBUTE_POSITION), chips.attribute(Mesh::ATTRIBUTE_POSITION));
+        // A mesh that is not a hull is read as it is.
+        let mut plain = FallCaches::default();
+        let oak = leaf_mesh(TreePreset::Oak);
+        assert_eq!(plain.cards(AssetId::default(), &oak, None).cards.len(), leaf_cards(&oak).len());
+
+        // Every chip lies in the plane of a facet, inside the hull's box, and is a chip long.
+        let (Some(VertexAttributeValues::Float32x3(positions)), Some(VertexAttributeValues::Float32x3(hull_positions))) =
+            (chips.attribute(Mesh::ATTRIBUTE_POSITION), hull.attribute(Mesh::ATTRIBUTE_POSITION))
+        else {
+            panic!("no positions")
+        };
+        let hull_points: Vec<Vec3> = hull_positions.iter().map(|p| Vec3::from_array(*p)).collect();
+        let (lo, hi) = hull_points.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        for tri in positions.as_chunks::<3>().0 {
+            let [tip, left, right] = tri.map(Vec3::from_array);
+            assert!(tip.cmpge(lo - 0.01).all() && tip.cmple(hi + 0.01).all(), "a chip off the hull at {tip}");
+            let length = tip.distance((left + right) / 2.0);
+            assert!((length - CHIP_LENGTH).abs() < 1.0e-3, "a chip {length} long");
+        }
+
+        // A chip falls only while its facet is on the tree: it has its facet's moment, so the fire
+        // that burnt a facet away (`on_tree`'s front) burns away its chips, and one that burnt all
+        // of them leaves none.
+        let alive = |front: f32| facets.iter().map(|f| f.moment).filter(|&m| m >= front).collect::<Vec<f32>>();
+        for front in [f32::NEG_INFINITY, 0.3, 0.6, 0.95, 1.0] {
+            let alive = alive(front);
+            for chip in cards.iter().filter(|c| c.on_tree(None, front)) {
+                assert!(
+                    alive.iter().any(|m| (m - chip.moment).abs() < 1.0e-3),
+                    "front {front}: a chip of moment {} whose facet is burnt",
+                    chip.moment
+                );
+            }
+        }
+        assert_eq!(cards.iter().filter(|c| c.on_tree(None, 1.0)).count(), 0, "a burnt crown sheds nothing");
+        let some = cards.iter().filter(|c| c.on_tree(None, 0.5)).count();
+        assert!((CHIPS / 4..CHIPS * 3 / 4).contains(&some), "{some} of {CHIPS} chips are on a half-burnt crown");
+    }
+
+    #[test]
     fn a_burst_holds_the_chosen_cards_falling_to_the_ground_from_where_they_hang() {
         let oak = leaf_mesh(TreePreset::Oak);
         let cards = leaf_cards(&oak);
         let chosen: Vec<&Card> = cards.iter().step_by(97).collect();
         let tree = GlobalTransform::from(Transform::from_xyz(4.0, 1.0, -3.0).with_scale(Vec3::splat(1.5)));
-        let fall = Fall { now: 10.0, rest: 6.0, drift: Vec2::new(0.5, 0.0) };
+        let fall = Fall { now: 10.0, rest: 6.0, drift: Vec2::new(0.5, 0.0), units: 1.0 };
         let mut rng = SeededRng::new(3);
         let mut burst = BurstBuilder::new(tree.translation());
         burst.add(&oak, chosen.iter().copied(), &tree, |_| 1.0, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
@@ -956,6 +1153,33 @@ mod tests {
         let tallest = anchor.iter().map(|a| a[1]).fold(0.0, f32::max);
         assert!(burst.life > landing_time(tallest, SPEED.end) + 6.0 * 0.75);
         assert!(burst.life < LET_GO + landing_time(tallest, SPEED.start) + 6.0 * 1.25 + SHRINK + 1.0e-3);
+    }
+
+    #[test]
+    fn leaves_fall_for_as_long_and_as_fast_in_a_world_of_another_unit() {
+        let oak = leaf_mesh(TreePreset::Oak);
+        let cards = leaf_cards(&oak);
+        let chosen: Vec<&Card> = cards.iter().step_by(97).collect();
+        // The same oak and the same leaves, in metres and in a world 3.2808 times as large (the
+        // tree, the ground and the wind's drift scaled; the speeds come from the units).
+        let burst_in = |k: f32| {
+            let tree = GlobalTransform::from(Transform::from_xyz(4.0 * k, k, -3.0 * k).with_scale(Vec3::splat(1.5 * k)));
+            let fall = Fall { now: 10.0, rest: 6.0, drift: Vec2::new(0.5 * k, 0.0), units: k };
+            let mut rng = SeededRng::new(3);
+            let mut burst = BurstBuilder::new(tree.translation());
+            burst.add(&oak, chosen.iter().copied(), &tree, |_| k, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+            burst.finish().expect("leaves above the ground")
+        };
+        let (metres, feet) = (burst_in(1.0), burst_in(3.2808));
+        assert_eq!(metres.leaves, feet.leaves, "a leaf too close to the ground to fall in one world and not the other");
+        assert!((metres.life - feet.life).abs() < 1.0e-3, "falls for {} s in metres, {} s in feet", metres.life, feet.life);
+        let speeds = |burst: &Burst| match burst.mesh.attribute(ATTRIBUTE_FALL_PATH) {
+            Some(VertexAttributeValues::Float32x4(path)) => path.iter().map(|p| p[3]).collect::<Vec<f32>>(),
+            _ => panic!("no paths"),
+        };
+        for (m, f) in speeds(&metres).into_iter().zip(speeds(&feet)) {
+            assert!(SPEED.contains(&m) && (f / m - 3.2808).abs() < 1.0e-4, "{m} m/s fell at {f} ft/s");
+        }
     }
 
     fn app() -> bevy::app::App {

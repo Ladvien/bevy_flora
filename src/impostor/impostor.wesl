@@ -31,8 +31,14 @@ import package::shading::common::{
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var albedo: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var atlas_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var surface: texture_2d<f32>;
-// x: views in the atlas.
+// x: views in the atlas, y: the render style, w: 1 for an unlit look.
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> params: vec4<f32>;
+struct ImpostorTint {
+    wood: vec4<f32>,
+    leaf: vec4<f32>,
+}
+// Twice the look's linear colour of the wood and of the leaves.
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var<uniform> look: ImpostorTint;
 
 @vertex
 fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
@@ -81,6 +87,9 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
 
     var color = textureSample(albedo, atlas_sampler, in.uv);
     let baked = textureSample(surface, atlas_sampler, in.uv);
+    // The picture is neutral grey (0.5): the look's colour, twice over, multiplies it into the
+    // wood's or the leaves' (baked translucency 1; wood 0), before the season recolours the leaves.
+    color = vec4<f32>(color.rgb * select(look.wood.rgb, look.leaf.rgb, baked.a > 0.5), color.a);
     // The season (`FloraSeason`): the baked picture is summer. A deciduous tree's leaves (baked
     // translucency 1, wood 0) turn their autumn colour in patches a few texels wide, each at its
     // own moment, and fallen leaves thin the crown's coverage, so a bare tree keeps its wood.
@@ -163,8 +172,10 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     p.N = N;
     p.is_orthographic = view.clip_from_view[3].w == 1.0;
     p.V = calculate_view(in.world_position, p.is_orthographic);
-    // Leaves (baked translucency 1; wood 0) lose their gloss facing the sun as the meshes' do.
-    p.material.reflectance = p.material.reflectance * mix(1.0, leaf_gloss_toward_light(p.V), saturate(baked.a));
+    // Leaves (baked translucency 1; wood 0) lose their gloss facing the sun as the meshes' do; a
+    // hull crown's facets (`flora.tree.y`) are matte and have none to lose.
+    let leaf_gloss = select(saturate(baked.a), 0.0, flora.tree.y > 0.5);
+    p.material.reflectance = p.material.reflectance * mix(1.0, leaf_gloss_toward_light(p.V), leaf_gloss);
     p.flags = MESH_FLAGS_SHADOW_RECEIVER_BIT;
     // What the crown's own leaves keep from the sky and the sun.
     p.diffuse_occlusion = vec3<f32>(baked.b);
@@ -177,24 +188,29 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     let snowed = snow_on(&p, N, snow_shelter(baked.b), LEAF_FROST * saturate(baked.a));
 
     var out: FragmentOutput;
-    // The material's `params.y` is the render style: 2 is toon.
-    let toon = params.y > 1.5;
-    if toon {
-        out.color = toon_lighting(p);
+    if params.w > 0.5 {
+        // An unlit look (`PoolColors::unlit`): the colour as the weather and the fire left it.
+        out.color = vec4<f32>(p.material.base_color.rgb, color.a);
     } else {
-        out.color = apply_pbr_lighting(p);
-    }
-    // Light through a flower takes its own colour, as on the meshes (`leaf_transmission`).
-    let tint = mix(flora.tint.rgb, vec3<f32>(1.0), flower_share);
-    let through = color.rgb * tint * flora.leaf.x * baked.a * (1.0 - snowed);
-    out.color = vec4<f32>(
-        out.color.rgb + view.exposure * transmitted_light(
-            p.world_position, N, N, p.V, p.frag_coord, p.flags, baked.b, through, baked.b
-        ),
-        color.a,
-    );
-    if toon {
-        out.color = vec4<f32>(out.color.rgb * toon_rim(N, p.V), out.color.a);
+        // The material's `params.y` is the render style: 2 is toon.
+        let toon = params.y > 1.5;
+        if toon {
+            out.color = toon_lighting(p);
+        } else {
+            out.color = apply_pbr_lighting(p);
+        }
+        // Light through a flower takes its own colour, as on the meshes (`leaf_transmission`).
+        let tint = mix(flora.tint.rgb, vec3<f32>(1.0), flower_share);
+        let through = color.rgb * tint * flora.leaf.x * baked.a * (1.0 - snowed);
+        out.color = vec4<f32>(
+            out.color.rgb + view.exposure * transmitted_light(
+                p.world_position, N, N, p.V, p.frag_coord, p.flags, baked.b, through, baked.b
+            ),
+            color.a,
+        );
+        if toon {
+            out.color = vec4<f32>(out.color.rgb * toon_rim(N, p.V), out.color.a);
+        }
     }
 @if(FLORA_FIRE)
     out.color = vec4<f32>(out.color.rgb + view.exposure * ember, out.color.a);

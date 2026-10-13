@@ -40,7 +40,7 @@ use crate::falling::{
     season_sheds, shake_leaves_loose, shed_landed_leaves, shed_with_season,
 };
 use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_trees, sync_growth_mode};
-use crate::gpu::{GpuGrowth, GpuGrowthSupport};
+use crate::gpu::{GpuGrowth, GpuGrowthSupport, grows_on_gpu};
 use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bakes};
 use crate::params::TreeParams;
 use crate::pipeline::{aged_skeleton, build_aged};
@@ -54,8 +54,10 @@ use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
 use crate::pool::{
     LodBand, LodScale, PendingPools, TreePool, ZoomScale, banded, fill_pooled_shapes, finish_background_pools,
-    follow_orthographic_zoom, scale_lod_bands, spawn_pooled_trees, sync_shadow_casting,
+    follow_orthographic_zoom, recolor_pools, scale_lod_bands, spawn_pooled_trees, sync_pooled_looks,
+    sync_shadow_casting,
 };
+use crate::recolor::{RecolorTree, TreeColors, recolor_trees};
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWetness, FloraWind, FloraWindBuffer, SharedFlora,
     TextureLibrary, TreeShakes,
@@ -65,6 +67,7 @@ use crate::shading::{
 use crate::skeleton::{Skeleton, generate_skeleton};
 use crate::felling::{Felled, TreeLanded, buck_trees, carve_notches, drive_felling, start_felling};
 use crate::tree_asset::sync_tree_assets;
+use crate::units::FloraUnits;
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
 ///
@@ -229,11 +232,15 @@ impl bevy::app::Plugin for FloraPlugin {
             .add_message::<TreeMature>()
             .add_message::<DropLeaves>()
             .add_message::<TreeBurnt>()
+            .add_message::<RecolorTree>()
+            .init_resource::<FloraUnits>()
+            .init_resource::<crate::deadfall::DeadMaterialCache>()
             .init_resource::<FallingLeaves>()
             .init_resource::<FallCaches>()
             .init_resource::<SeasonShed>()
             .init_resource::<FireRebind>()
             .init_resource::<PushSlots>()
+            .register_type::<FloraUnits>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
@@ -257,8 +264,13 @@ impl bevy::app::Plugin for FloraPlugin {
                         |wind: Res<FloraWind>,
                          season: Res<FloraSeason>,
                          wetness: Res<FloraWetness>,
-                         shakes: Res<TreeShakes>| {
-                            wind.is_changed() || season.is_changed() || wetness.is_changed() || shakes.is_changed()
+                         shakes: Res<TreeShakes>,
+                         units: Res<FloraUnits>| {
+                            wind.is_changed()
+                                || season.is_changed()
+                                || wetness.is_changed()
+                                || shakes.is_changed()
+                                || units.is_changed()
                         },
                     ),
                     sync_tree_assets.run_if(resource_exists::<Assets<TreeParams>>),
@@ -271,6 +283,7 @@ impl bevy::app::Plugin for FloraPlugin {
                     start_felling,
                     drive_felling,
                     buck_trees,
+                    recolor_trees,
                     show_flowers,
                 )
                     .chain(),
@@ -285,7 +298,12 @@ impl bevy::app::Plugin for FloraPlugin {
                         .chain()
                         .run_if(resource_exists::<ImpostorSupport>),
                     spawn_pooled_trees.run_if(flora_decided),
+                    crate::deadfall::spawn_pooled_deadfall.run_if(flora_decided),
+                    crate::deadfall::buck_pooled_deadfall,
                     fill_pooled_shapes,
+                    recolor_pools,
+                    crate::deadfall::restyle_deadfall,
+                    sync_pooled_looks,
                 )
                     .chain(),
             )
@@ -388,6 +406,17 @@ pub(crate) fn leaf_material(base_color: bevy::color::Color) -> StandardMaterial 
     }
 }
 
+/// The plain material of a tree's crown for devices without the flora shaders: a leaf's, which
+/// lets light through, or a hull's ([`CrownStyle::Hull`](crate::CrownStyle)), which is matte
+/// paper like its trunk.
+pub(crate) fn crown_material(params: &crate::params::TreeParams) -> StandardMaterial {
+    if matches!(params.crown, crate::params::CrownStyle::Hull { .. }) {
+        material(params.foliage.color)
+    } else {
+        leaf_material(params.foliage.color)
+    }
+}
+
 /// Advance the age of every [`Growing`] tree that already has render state, and send
 /// [`TreeMature`] for each that reaches its mature age this frame.
 pub fn grow_trees(
@@ -446,6 +475,7 @@ pub fn rebuild_trees(
     flora_support: Option<Res<FloraMaterialSupport>>,
     wind: Option<Res<FloraWindBuffer>>,
     support: Res<GpuGrowthSupport>,
+    units: Res<FloraUnits>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
         (
@@ -456,6 +486,7 @@ pub fn rebuild_trees(
             Has<GpuGrowth>,
             Has<BuildInBackground>,
             Option<&TreeLod>,
+            Option<&TreeColors>,
         ),
         Without<Felled>,
     >,
@@ -474,9 +505,9 @@ pub fn rebuild_trees(
 
     // Phase 1: collect what to build.
     let mut jobs = Vec::new();
-    for (entity, tree, age, mut render, gpu, background, lod) in &mut trees {
+    for (entity, tree, age, mut render, gpu, background, lod, _) in &mut trees {
         // A tree that grows on the GPU is `rebuild_gpu_trees`'s.
-        if gpu && support.0 {
+        if grows_on_gpu(gpu, &support, &tree.0) {
             continue;
         }
         // Left over from before the tree stopped growing on the GPU;
@@ -517,25 +548,32 @@ pub fn rebuild_trees(
     // after the background builds that are done.
     let mut apply = |out: RebuiltTree| {
         let (entity, full, trunk_progress) = (out.entity, out.full, out.trunk_progress);
-        let Ok((_, tree, _, render, gpu, _, _)) = trees.get_mut(entity) else { return };
+        let Ok((_, tree, _, render, gpu, _, _, colors)) = trees.get_mut(entity) else { return };
         // A background build is out of date if the parameters changed again since it started (a
         // new one is under way) or the tree has moved to the GPU.
-        if out.background && (tree.is_changed() || (gpu && support.0)) {
+        if out.background && (tree.is_changed() || grows_on_gpu(gpu, &support, &tree.0)) {
             return;
         }
         let params = &tree.0;
+        // The colours a `RecolorTree` gave it over its parameters' own.
+        let unlit = colors.is_some_and(|colors| colors.0.unlit);
+        let painted = match colors {
+            Some(colors) => std::borrow::Cow::Owned(colors.0.apply(params)),
+            None => std::borrow::Cow::Borrowed(params),
+        };
         let existing = render.as_deref().and_then(|render| render.paint.cloned_cpu());
         match (render, existing) {
             (None, _) => {
                 let paint = if let Some(wind) = wind {
                     Paint::Flora {
-                        trunk: shared.resolve(&mut flora, &textures.wood(params), wind),
-                        foliage: shared.resolve(&mut flora, &textures.leaves(params), wind),
+                        trunk: shared.resolve(&mut flora, &textures.wood(&painted).with_unlit(unlit), wind),
+                        foliage: shared.resolve(&mut flora, &textures.leaves(&painted).with_unlit(unlit), wind),
                     }
                 } else {
+                    let lit = |base: StandardMaterial| StandardMaterial { unlit, ..base };
                     Paint::Standard {
-                        trunk: materials.add(material(params.trunk_color)),
-                        foliage: materials.add(leaf_material(params.foliage.color)),
+                        trunk: materials.add(lit(material(painted.trunk_color))),
+                        foliage: materials.add(lit(crown_material(&painted))),
                     }
                 };
                 let mut trunk_child = commands.spawn((TreeTrunkMesh, Visibility::Hidden, ChildOf(entity)));
@@ -553,7 +591,7 @@ pub fn rebuild_trees(
                 });
                 let mut lod = None;
                 let level0 = [Some(trunk), foliage.as_ref().map(|c| c.0), flowers.as_ref().map(|c| c.0)];
-                sync_levels(&mut commands, &mut meshes, entity, &mut lod, out.lod, &paint, level0);
+                sync_levels(&mut commands, &mut meshes, entity, &mut lod, out.lod, &paint, level0, units.units_per_metre);
                 commands.entity(entity).insert(TreeRender {
                     trunk,
                     trunk_mesh,
@@ -581,32 +619,15 @@ pub fn rebuild_trees(
                 );
                 match &paint {
                     Paint::Standard { trunk, foliage } => {
-                        set_color(&mut materials, trunk, params.trunk_color);
-                        set_color(&mut materials, foliage, params.foliage.color);
+                        set_color(&mut materials, trunk, painted.trunk_color, unlit);
+                        set_color(&mut materials, foliage, painted.foliage.color, unlit);
                     }
                     // An age-only rebuild cannot change the looks, so it resolves nothing.
                     Paint::Flora { .. } if out.regenerated => {
                         let wind = wind.expect("flora paint implies the wind buffer");
-                        let wood = shared.resolve(&mut flora, &textures.wood(params), wind);
-                        let leaves = shared.resolve(&mut flora, &textures.leaves(params), wind);
-                        if let Paint::Flora { trunk, foliage } = &mut render.paint {
-                            let coarse = render.lod.iter().flat_map(|(_, levels)| levels);
-                            if *trunk != wood {
-                                let woods = coarse.clone().flat_map(|level| level.wood.iter().map(|c| c.0));
-                                for child in std::iter::once(render.trunk).chain(woods) {
-                                    commands.entity(child).insert(MeshMaterial3d(wood.clone()));
-                                }
-                                *trunk = wood;
-                            }
-                            if *foliage != leaves {
-                                let coarse_leaves = coarse.flat_map(|level| level.leaves.iter().map(|c| c.0));
-                                let level0 = render.foliage.iter().chain(&render.flowers).map(|c| c.0);
-                                for child in level0.chain(coarse_leaves) {
-                                    commands.entity(child).insert(MeshMaterial3d(leaves.clone()));
-                                }
-                                *foliage = leaves;
-                            }
-                        }
+                        let wood = shared.resolve(&mut flora, &textures.wood(&painted).with_unlit(unlit), wind);
+                        let leaves = shared.resolve(&mut flora, &textures.leaves(&painted).with_unlit(unlit), wind);
+                        repaint_flora(&mut commands, render, wood, leaves, true);
                     }
                     Paint::Flora { .. } => {}
                     Paint::Growth(_) => unreachable!("trees grown on the GPU were skipped above"),
@@ -620,7 +641,16 @@ pub fn rebuild_trees(
                     spawn_mesh_child(commands, mesh, FLOWERS_SPAWN, entity, paint, true)
                 });
                 let level0 = [Some(render.trunk), render.foliage.as_ref().map(|c| c.0), render.flowers.as_ref().map(|c| c.0)];
-                sync_levels(&mut commands, &mut meshes, entity, &mut render.lod, out.lod, &render.paint, level0);
+                sync_levels(
+                    &mut commands,
+                    &mut meshes,
+                    entity,
+                    &mut render.lod,
+                    out.lod,
+                    &render.paint,
+                    level0,
+                    units.units_per_metre,
+                );
             }
             // A tree painted for the GPU was skipped above.
             (Some(_), None) => {}
@@ -685,14 +715,49 @@ pub(crate) fn paint_child(child: &mut EntityCommands, paint: &Paint, leaf: bool)
     };
 }
 
-/// Set the material's base colour, marking it modified only when the colour
-/// differs: a modified material is re-extracted and re-prepared by the
-/// renderer, which a growing tree would otherwise trigger every frame.
-fn set_color(materials: &mut Assets<StandardMaterial>, handle: &Handle<StandardMaterial>, color: bevy::color::Color) {
+/// Set the material's base colour and whether it is lit, marking it modified only when one
+/// differs: a modified material is re-extracted and re-prepared by the renderer, which a growing
+/// tree would otherwise trigger every frame.
+pub(crate) fn set_color(
+    materials: &mut Assets<StandardMaterial>,
+    handle: &Handle<StandardMaterial>,
+    color: bevy::color::Color,
+    unlit: bool,
+) {
     if let Some(mut material) = materials.get_mut(handle)
-        && material.base_color != color
+        && (material.base_color != color || material.unlit != unlit)
     {
         material.base_color = color;
+        material.unlit = unlit;
+    }
+}
+
+/// Give the wood and the leaves of a tree drawn with [`FloraMaterial`] the materials `wood` and
+/// `leaves`, where they differ from its paint: the trunk, the leaves and flowers, and with `levels`
+/// the coarse levels of a [`TreeLod`] tree too (a felled tree has none). The paint keeps them.
+pub(crate) fn repaint_flora(
+    commands: &mut Commands,
+    render: &mut TreeRender,
+    wood: Handle<FloraMaterial>,
+    leaves: Handle<FloraMaterial>,
+    levels: bool,
+) {
+    let Paint::Flora { trunk, foliage } = &mut render.paint else { return };
+    let coarse = render.lod.iter().filter(|_| levels).flat_map(|(_, levels)| levels);
+    if *trunk != wood {
+        let woods = coarse.clone().flat_map(|level| level.wood.iter().map(|c| c.0));
+        for child in std::iter::once(render.trunk).chain(woods) {
+            commands.entity(child).insert(MeshMaterial3d(wood.clone()));
+        }
+        *trunk = wood;
+    }
+    if *foliage != leaves {
+        let coarse_leaves = coarse.flat_map(|level| level.leaves.iter().map(|c| c.0));
+        let level0 = render.foliage.iter().chain(&render.flowers).map(|c| c.0);
+        for child in level0.chain(coarse_leaves) {
+            commands.entity(child).insert(MeshMaterial3d(leaves.clone()));
+        }
+        *foliage = leaves;
     }
 }
 
@@ -812,18 +877,21 @@ pub(crate) struct CoarseMeshes {
 pub struct TreeLodMesh(pub u8);
 
 /// The distances level `level` of a tree drawn with [`TreeLod`] is drawn at: a pool's bands,
-/// with level 2 at every distance beyond `lod2` (an individual tree has no impostor).
-fn level_band(level: usize, distances: LodDistances) -> (LodBand, VisibilityRange) {
+/// with level 2 at every distance beyond `lod2` (an individual tree has no impostor). `distances`
+/// are metres, `units` the world units to a metre ([`FloraUnits`]).
+fn level_band(level: usize, distances: LodDistances, units: f32) -> (LodBand, VisibilityRange) {
     match level {
-        0 => banded(0.0, distances.lod1),
-        1 => banded(distances.lod1, distances.lod2),
-        _ => banded(distances.lod2, f32::INFINITY),
+        0 => banded(0.0, distances.lod1, units),
+        1 => banded(distances.lod1, distances.lod2, units),
+        _ => banded(distances.lod2, f32::INFINITY, units),
     }
 }
 
 /// Bring a tree's levels of detail in line with `want` (its [`TreeLod`] settings and coarse
 /// meshes, or `None` without one): the coarse children, and the band of distances the full
 /// tree's own children (`level0`) are drawn at, which a tree without levels does not limit.
+/// `units`: world units to a metre.
+#[allow(clippy::too_many_arguments)]
 fn sync_levels(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -832,6 +900,7 @@ fn sync_levels(
     want: Option<(LodSettings, [CoarseMeshes; 2])>,
     paint: &Paint,
     level0: [Option<Entity>; 3],
+    units: f32,
 ) {
     let old = have.as_ref().map(|(settings, _)| settings.distances);
     let Some((settings, built)) = want else {
@@ -851,15 +920,15 @@ fn sync_levels(
     // the others keep theirs unless the distances moved.
     for child in level0.into_iter().flatten() {
         if moved {
-            commands.entity(child).insert(level_band(0, distances));
+            commands.entity(child).insert(level_band(0, distances, units));
         } else {
-            commands.entity(child).insert_if_new(level_band(0, distances));
+            commands.entity(child).insert_if_new(level_band(0, distances, units));
         }
     }
     let (kept, levels) = have.get_or_insert_with(|| (settings, Default::default()));
     *kept = settings;
     for (index, (level, built)) in levels.iter_mut().zip(built).enumerate() {
-        let range = level_band(index + 1, distances);
+        let range = level_band(index + 1, distances, units);
         if moved {
             for child in level.children() {
                 commands.entity(child).insert(range.clone());
@@ -1443,19 +1512,19 @@ mod tests {
         app.update();
         assert!(update_and_modified(&mut app).is_empty());
         let (season, still) = (FloraSeason::default(), TreeShakes::default());
-        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default(), &season, &still).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&FloraWind::default(), &season, &still, 1.0).map(|v| v.to_array()));
 
         app.world_mut().resource_mut::<FloraWind>().strength = 0.9;
         assert!(update_and_modified(&mut app).is_empty(), "a new strength modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season, &still).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season, &still, 1.0).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[0][2], 0.9);
 
         // A gust front is wind too.
         app.world_mut().resource_mut::<FloraWind>().launch_gust(GustFront::default(), &Time::default());
         assert!(update_and_modified(&mut app).is_empty(), "a launched gust modified a material");
         let wind = *app.world().resource::<FloraWind>();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season, &still).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &season, &still, 1.0).map(|v| v.to_array()));
         assert!(wind_buffer(&app)[4][2] > 0.0);
 
         // Touching the resource without changing the wind writes nothing.
@@ -1469,7 +1538,7 @@ mod tests {
         assert!(update_and_modified(&mut app).is_empty(), "the season modified a material");
         let wind = *app.world().resource::<FloraWind>();
         let still = TreeShakes::default();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &still).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &still, 1.0).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[5][0], 1.0);
 
         // So do the shakes.
@@ -1479,7 +1548,7 @@ mod tests {
         app.world_mut().resource_mut::<TreeShakes>().shake(shake, &time);
         assert!(update_and_modified(&mut app).is_empty(), "a shake modified a material");
         let shakes = app.world().resource::<TreeShakes>().clone();
-        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &shakes).map(|v| v.to_array()));
+        assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &shakes, 1.0).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[7][0], 2.0);
 
         // And the rain: one value of the buffer, as wet as it gets at 1, and no material.
@@ -1601,7 +1670,7 @@ mod tests {
         assert_eq!(render.age, age);
         let level0 = [Some(render.trunk), render.foliage.as_ref().map(|c| c.0), render.flowers.as_ref().map(|c| c.0)];
         for child in level0.into_iter().flatten() {
-            assert_eq!(margins(child), band_of(level_band(0, lod.distances).1));
+            assert_eq!(margins(child), band_of(level_band(0, lod.distances, 1.0).1));
         }
         let expected = build_lods(params, age, lod);
         let (settings, levels) = render.lod.as_ref().expect("no coarse levels");
@@ -1612,7 +1681,7 @@ mod tests {
             let (leaves, _) = level.leaves.as_ref().expect("no coarse leaves");
             for child in [*wood, *leaves] {
                 assert_eq!(world.get::<TreeLodMesh>(child), Some(&TreeLodMesh(index as u8 + 1)));
-                assert_eq!(margins(child), band_of(level_band(index + 1, lod.distances).1));
+                assert_eq!(margins(child), band_of(level_band(index + 1, lod.distances, 1.0).1));
             }
             let wood_positions: Vec<[f32; 3]> = want.trunk.positions.iter().map(|p| p.to_array()).collect();
             assert_eq!(mesh(*wood), wood_positions, "level {} wood", index + 1);

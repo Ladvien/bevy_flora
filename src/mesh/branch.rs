@@ -6,7 +6,7 @@ use super::MeshData;
 use super::rings::{RingBasis, RingUv, connect_rings, emit_cap, emit_ring, mature_size, u_tiles_around};
 use super::smoothing::laplacian_smooth;
 use super::trunk::{TrunkPieces, trunk_mesh_with, trunk_pieces};
-use crate::params::{BarkScan, TreeParams};
+use crate::params::{BarkScan, TreeParams, TrunkStyle};
 use crate::skeleton::{Node, NodeKind, Skeleton};
 
 /// The bark scan's tile size in metres for `params`: that of its scan, `1 x 1` without one.
@@ -470,6 +470,19 @@ pub(crate) fn skeleton_mesh_coarse(skeleton: &Skeleton, params: &TreeParams, coa
     )
 }
 
+/// Whether the wood of this tree is its trunk chain only (`CrownStyle::Hull { trunk_only: true, .. }`).
+pub(crate) fn trunk_only(params: &TreeParams) -> bool {
+    matches!(params.crown, crate::params::CrownStyle::Hull { trunk_only: true, .. })
+}
+
+/// The faces of the trunk of a [`TrunkStyle::Prism`] tree (at least 3), `None` for a round one.
+pub(crate) fn prism_sides(params: &TreeParams) -> Option<u32> {
+    match params.trunk_style {
+        TrunkStyle::Prism { sides } => Some(sides.max(3)),
+        TrunkStyle::Round => None,
+    }
+}
+
 fn skeleton_mesh_inner(
     skeleton: &Skeleton,
     params: &TreeParams,
@@ -477,6 +490,21 @@ fn skeleton_mesh_inner(
     mut spans: Option<&mut Vec<WoodSpan>>,
     coarse: Option<Coarseness>,
 ) -> MeshData {
+    // A prism trunk (`TrunkStyle::Prism`): the trunk has its sides, branch tubes and collars no
+    // more, nothing is smoothed and the result is flat-shaded at the end.
+    let prism = prism_sides(params);
+    let only_trunk = trunk_only(params);
+    let prismatic;
+    let params = match prism {
+        Some(sides) => {
+            let mut p = params.clone();
+            p.trunk.radial_segments = sides;
+            p.mesh.smooth_iterations = 0;
+            prismatic = p;
+            &prismatic
+        }
+        None => params,
+    };
     let b = &params.branches;
     let tile = bark_tile(params);
     let mut mesh = trunk_mesh_with(&params.trunk, &skeleton.nodes[0], params.seed, trunk, tile);
@@ -495,10 +523,15 @@ fn skeleton_mesh_inner(
         if node.length <= 1e-4 || node.base_radius <= 0.0 {
             continue;
         }
+        // A hull tree drawn as its trunk chain: no side branches (the crown hides them).
+        if only_trunk && node.kind != NodeKind::Leader {
+            continue;
+        }
         let segments = match coarse {
             Some(c) => radial_segments_for(node, params).min(c.sides.max(3)),
             None => radial_segments_for(node, params),
         };
+        let segments = prism.map_or(segments, |sides| segments.min(sides));
         if node.kind == NodeKind::Primary {
             let first = roots.positions.len();
             append_primary_base(
@@ -599,6 +632,11 @@ fn skeleton_mesh_inner(
         record(&mut spans, WoodSpan { first: span.first + roots_at, ..span });
     }
 
+    // A prism is flat-shaded, which gives every triangle its own vertices: the growth shader's
+    // spans (`spans`) would not hold, but a tree with a prism trunk is never grown on the GPU.
+    if prism.is_some() {
+        return mesh.flat_shaded();
+    }
     mesh
 }
 

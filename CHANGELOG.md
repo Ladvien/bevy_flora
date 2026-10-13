@@ -5,6 +5,189 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.39.0] - 2026-10-13
+
+A forest in the colours of the game and a world in its units: low-poly conifers, undergrowth,
+recolouring, pooled deadfall and any world unit (issues #49, #50, #54, #56 and #57). The crown
+and trunk styles are new fields of `TreeParams`, `TreeStump::tree` is an `Option` and a pool's
+materials are a `Vec`, so a minor release. The impostors keep 0.37.0's elevation, crown reach and
+shadows, now baked grey and tinted per look, and a pool built in the background (0.38.0) is a pool
+of one look, without deadfall.
+
+### Added
+
+- **`FloraUnits { units_per_metre }`** (#50), a resource (default 1.0: a world in metres, nothing
+  changes) for a game whose world unit is not the metre: its trees are built in metres and placed
+  with a `Transform` scale of about 3.28 in a world in feet, and everything the crate measures in
+  the world itself now follows the unit. The rule, written on every field it touches: a field
+  that sizes or times the crate's own simulation is in **metres**, multiplied by `units_per_metre`
+  where it meets the world (`FellTree::cut_height`, `TreeNotch::height`, `BuckTree`,
+  `FireSpread::speed` and `reach`, `FoliagePusher::radius` and `height`, `SeeThroughTrees::radius` and `in_front` (its `floor` is a world height and
+  stays), `TreeShake::radius`, `GustFront::speed` and `width`, `LodDistances` (under `LodScale`
+  and under an orthographic camera's zoom, whose view height is read in metres),
+  `FallingLeaves::autumn_distance`, and the crate's own constants: gravity for felled trees and
+  fallen fruit, the saw's and the notch's 5 cm margins, the bucked logs' gap, how fast falling
+  leaves fall and drift, the pushers' rooting height and the 2 m cross-fade between levels of
+  detail); a position, or a size that addresses the world, is in **world units** (every `at`,
+  `target`, `centre`, `origin` and `feet`; `FloraFire::new`'s size and the radius of `ignite`,
+  `extinguish` and `scorch`; `FloraIndex`'s radii and distances; `Scatter`'s area, spacing and
+  grove size; `FloraGround`'s heights). The shaders get the unit in the shared buffer (slot 2,
+  lane w): the pushers' reach, the thin stems' radii and the falling leaves' drift follow it.
+  `FloraWind::speed` multiplies time, not a length, and stays as it was. Set it before planting:
+  a pooled tree's bands of distance are made when it is spawned. Tests: a felled oak lands on the
+  same update in a world in feet as in metres, a notched one is cut at the same metres, bucked
+  logs are the same logs the same gap apart, a fire spreads the same number of cells a second, the
+  default pusher covers the same share of a shrub, falling leaves fall for as long, and the bands
+  scale. `FloraUnits` is in the crate root and the prelude.
+- **Deadfall takes looks and the world's units** (#56). A `PooledLook` on a `PooledDeadfall` picks that
+  look's materials (the look's calm wood and leaves, and its end grain, unlit with the look), made
+  once for each pool and look; `RecolorPool` and a change of `PooledLook` re-dress the deadfall
+  of that look, stump, logs and lying leaves included; `RecolorTree` on a pooled stump or log
+  works (a stump and its logs carry what it needs). A lying tree rests on `FloraGround` and bucked logs
+  lie a `LOG_GAP` of `FloraUnits` apart, so a world in feet lays the same deadfall as a world in
+  metres, scaled (a test holds the turn and the logs' places). A deadfall is cut at the scale
+  its tree is placed at: a cut height or log length is in metres where the instance's scale
+  is `units_per_metre`. `inspect --mode deadfall` photographs it.
+- **Pooled deadfall** (#56). `build_pool_with_deadfall(params, variants, age, lod, &DeadfallSettings,
+  meshes)` (`build_pool` is unchanged) also cuts every variant as `FellTree` and `BuckTree` would:
+  `PoolVariant::deadfall` holds the stump and its face (level 0), the wood above the cut at each
+  level and its face, up to 600 contact points and the cut's outline (for the rest angle of each
+  instance), and the logs. `DeadfallSettings { cut_height: 0.5, log_length: Some(2.0), min_radius:
+  0.08 }` is in metres. A `PooledDeadfall { pool, variant, kind }` (`DeadfallKind::Stump`,
+  `Lying { direction }`, `Bucked { direction }`) is placed from it: a `TreeStump` with shared wood and
+  the cut face; the lying part turned about the cut's hinge until its limbs reach the ground there
+  (`FloraGround` included, as `FellTree` does) with the variant's leaves, its levels of detail and
+  its `TreeShape`; or the stump and `TreeLog`s in a row from it, as `buck_trees` lays them. Its
+  wood and leaves are of the calm look (no sway), made once per pool. Deadfall is never in the
+  `FloraIndex`, shakes and sheds nothing, is fire fuel, and takes `NotShadowCaster` like a pooled
+  tree. `BuckTree` on a lying one makes it bucked in place. `felling` helpers it shares with
+  `buck_trees` (`lay_log`, `trunk_alone`, `hinge_point`, `rest_angle`) are `pub(crate)`.
+
+### Changed
+
+- **Hull crowns and prism trunks** (#49). `TreeParams::crown` (`CrownStyle`, default `Leaves`) can be
+  `Hull { tiers, sides, lift, jitter }`: the leaf cards are not drawn and a faceted stack of cones
+  is wrapped round the leaf cloud instead (`tiers * sides * 2` flat triangles), and
+  `TreeParams::trunk_style` (`TrunkStyle`, default `Round`) can be `Prism { sides }`: the trunk has
+  that many faces, branch tubes and collars no more, nothing is smoothed, and every triangle of the
+  wood has its own vertices and face normal (`MeshData::flat_shaded`). Every preset keeps leaf cards
+  and a round trunk and renders as before; both fields are in `.tree.ron` files and under the
+  `serde` feature (a file that leaves them out gets the defaults). `TreeParams::gpu_growable()` is
+  true only for leaf cards on a round trunk.
+  - `CrownStyle::Hull::trunk_only`: the wood of a hull tree is its trunk chain only (trunk and
+    leader, no side branches; the hull spruce's wood goes from 9 425 triangles to 120), and the
+    hull's apex covers the leader's tip. The skeleton keeps its branches. `false` draws them all.
+  - Felling a prism tree: `hinge_point` took the outline with the most points for the trunk's
+    cut, and a flat-shaded trunk has few, so a limb the cut crossed lengthwise won; the tree
+    rested at 12 degrees instead of falling. It takes the outline that encloses the most now.
+  - New pure module `crown_hull` (`HullSpec`, `Hull`, `Facet`, `crown_triangles`, `crown_extent`,
+    `percentile`): the cloud is each leaf's position and its tip (`position + up * size`), cut into
+    `tiers` bands from its 5th-percentile height (lifted to `lift` of the top) to its top; a band's
+    ring is the 90th percentile of its points' distance from the trunk (never wider than the band
+    below, at least 0.06 of the crown's height), times 1.08, knocked about by `jitter` from
+    `SeededRng::from_parts(seed ^ HULL_SALT, tier * 64 + side)`, so a hull depends on age only
+    through the cloud; no hull under 8 points or half a metre. The facets' colours (the leaf
+    formula, from draws of their own) and phases (one for a side face and the underside face on the
+    same ring points) are functions of the seed, the tier and the side alone.
+  - `LodSettings::hull_detail` (default `[1.0, 0.7, 0.5]`): a coarse level's hull has `tiers` and
+    `sides` times it (at least 2 and 3), is built from every leaf, not only the ones the level
+    keeps (those carry fruit and flowers), and is clamped into level 0's bounds.
+  - Shading: `FloraUniform::tree.y` is 1 for a hull; `fragment.wesl` lights its facets matte
+    (`hull_surface`, roughness 0.85, no veins, no scan, no light through them) and the impostor
+    skips the leaf gloss gate; snow lies on the facets that face up as on leaves. Plain-material
+    devices paint a hull without diffuse transmission.
+  - `GpuGrowth` is ignored for a tree that is not `gpu_growable`, with a warning logged once: it is
+    built on the CPU (`gpu::grows_on_gpu` is the one place that asks), and a change of parameters
+    moves a tree between the paths (`sync_growth_mode` reacts to `Changed<ProceduralTree>`).
+  - Falling leaves from a hull are chips, not facets: `CHIPS` (96) isosceles triangles 0.12 m long
+    in the plane of facets picked by area, in their colours, each its facet's moment in the season.
+  - `buck_trees` meshes a prism trunk as the tree has it, and a log's end takes the corners of the
+    cut only (a flat-shaded trunk's cut has a point in the middle of each side too).
+  - `examples/gallery.rs`: `hull_spruce`, `hull_fir` and `hull_cypress` (mature, ages 2 and 5 and
+    under snow), flagging `HULL_TRIS` when a mature crown's triangles are not `tiers * sides * 2`;
+    `examples/inspect.rs`: `--hull <tiers>,<sides>[,<lift>[,<jitter>]]` and `--prism <sides>`.
+- **`TreePreset::Juniper` and `TreePreset::Fern`** (#57), evergreen undergrowth for a winter
+  forest (`TreePreset::ALL` has 20 presets; names `juniper` and `fern`). The juniper is the shrub's
+  branching (a 0.4 m stub of a trunk, many leaning, arching stems with side shoots) under spruce-style
+  needle clusters in dark blue-green, cedar bark, no autumn colour; the fern is a dozen or so arching stalks (branch density 300)
+  from a 6 cm trunk, each with single leaf cards along it, green all year. Neither has an autumn
+  colour (`autumn: None`), so a winter `FloraSeason` leaves them green and snows only their
+  up-facing parts; they are meant to be pooled with half the default `LodDistances` like `Shrub`,
+  take a `FoliagePusher`, and take `CrownStyle::Hull`. The gallery renders both in summer and
+  under snow (`undergrowth_juniper_*`, `undergrowth_fern_*`) besides every per-preset group.
+- **Looks of a pool** (`PoolColors { wood, leaves, unlit }`, `TreePool::looks`,
+  `TreePool::add_look`, `PooledLook`): a pool is drawn in look 0, the colours of its parameters, or
+  in any look added to it before it goes into the assets; a `PooledTree` picks one with
+  `PooledLook(n)` (absent is 0, taken modulo the looks; changing it re-dresses the tree's children
+  and nothing else). Every look shares the pool's meshes: three looks of one forest draw the same
+  meshes with three pairs of materials. A look is made as the pool's own is: scans keep their
+  pattern with their average colour divided out, autumn and blossom colours stay the same ratio of
+  the leaf colour away.
+- **`RecolorPool { pool, look, colors }`** (a message): rewrites the pool's materials and the
+  look's impostor materials in place, writing only what changed, and never takes the pool asset
+  mutably, so no tree is re-indexed or rebuilt (a palette that glides through the day costs a few
+  material writes a frame). A pool that was not drawn yet takes the colours when it first is.
+- **`RecolorTree { tree, colors }`** (a message): the same for a tree that is not pooled, or no
+  longer is: a `ProceduralTree` (every level of a `TreeLod` tree), its cut faces and, when it is
+  felled, its stump; or a `TreeStump` or `TreeLog` on its own (a bucked tree's stump and logs are
+  separate entities). Materials are swapped for the shared ones of the new colours, no mesh is
+  rebuilt, and the tree keeps the colours through later rebuilds. A felled tree lying on the ground
+  keeps its materials that do not sway. A `GpuGrowth` tree takes its colours from its parameters.
+- **`PoolColors::unlit`**: the surface is drawn as its colour alone (after the rain, the snow and
+  the fire have had their say with it): no lighting, no shadows received, no light through the
+  leaves, no toon rim. The wood, leaves, impostors and cut faces of the look all do it
+  (`StandardMaterial::unlit` on the base, `STANDARD_MATERIAL_FLAGS_UNLIT_BIT` in `fragment.wesl`
+  and `impostor.wesl`); an unlit look is a different `SharedFlora` material from a lit one of the
+  same colours.
+- **`TreePool::tree_params_for(variant, look)`**: the variant's parameters painted in a look's
+  colours. A pooled tree that is felled or notched becomes the `ProceduralTree` of its variant *in
+  its look* (and in the colours a `RecolorPool` has since given it), unlit included.
+- **`ImpostorTint`**, and `forest --looks [--recolor]`: three looks of one forest in three bands,
+  and a recolour of two of them mid-run.
+
+### Changed (breaking)
+
+- **`TreeStump::tree` is an `Option<Entity>`** (#56): `None` for the stump of a pooled
+  deadfall, which no tree was cut from.
+- **`TreeParams` has two new fields, `crown` and `trunk_style`** (#49), and `CrownStyle::Hull` four
+  (`tiers`, `sides`, `lift`, `jitter`) and a fifth, `trunk_only`: a struct literal of `TreeParams`
+  needs `..` (every preset has them, as `CrownStyle::Leaves` and `TrunkStyle::Round`).
+- **`TreePool::materials` is a `Vec<PoolMaterials>`, one pair per look** (was an `Option`: empty
+  where it was `None`). `TreePool` has a new public field, `looks`, which `build_pool` fills with
+  look 0.
+- **`ImpostorAtlas::material` is `ImpostorAtlas::materials`**, one `Handle<ImpostorMaterial>` per
+  look, sharing the albedo and surface images. `ImpostorMaterial::new` takes the look's
+  `ImpostorTint` and whether it is unlit after `wind`, and `ImpostorMaterial` has a `tint` field at
+  binding 4.
+- **Impostors are baked neutral grey** (linear 0.5, wood and leaves alike) and the shader
+  multiplies in twice the look's linear colour where the picture holds wood or leaves, before the
+  season recolours the leaves: a look needs no new bake, and look 0 draws the pool's colours.
+  The tint is applied at any `impostor_elevation`, and the impostor shadow prepass takes the same
+  material.
+
+### Measured
+
+- **Look.** The 441 gallery scenarios the release has had since 0.32.0 render pixel for pixel as
+  0.38.1's (a build of `10fb800` on the same machine; `compare_gallery`: mean difference 0.000 of
+  255 for all 441, worst 0.000, no `ERROR`, the mesh columns of `stats.tsv` identical) on the CPU.
+  The 50 new scenarios (hull spruce, fir and cypress at ages 2 and 5, mature and under snow; the
+  juniper and the fern through every per-preset group) carry no flag. Over all 491 the CPU and
+  `--gpu` renders differ by a mean 0.08 of 255 (79 PNGs byte for byte, the worst a young shrub at
+  2.11). No gallery scenario shows an impostor, so the impostors are measured by the isometric
+  demo: its re-recorded clip differs from 0.38.1's by a mean 0.20 of 255 a frame (0.33 at most),
+  the level of the palette. The growth, grove, seasons, fire and push clips are frame for frame
+  0.38.1's; shake, fell, chop, harvest and the playground's demo differ in which leaves fall (mean
+  0.13 to 1.6 of 255 a frame).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, bmb, interleaved with 0.38.1 in
+  ten rounds on a machine other jobs shared, so only the best and the median of the ten are worth
+  quoting): 1 000 individual oaks 30.44 ms best and 45.46 median (0.38.1: 30.31 and 44.88), 100 000
+  pooled oaks 9.50 and 16.23 ms (10.80 and 17.67): no difference beyond the spread of the runs. A
+  first set of five rounds, with the machine quieter and against 0.37.0, had 24.60 and 26.91 ms
+  (24.15 and 26.51) and 7.84 and 7.98 ms (7.66 and 8.06).
+- **Clips.** All eleven README clips were re-recorded (growth, grove, seasons, shake, fell, fire,
+  push, chop, harvest, the playground and the isometric demo) and their first, middle and last
+  frames looked at.
+
 ## [0.38.1] - 2026-10-13
 
 Pooled forests load three times faster (issue #66). A trace of 100 000 pooled oaks loading put
@@ -2250,6 +2433,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.39.0]: https://github.com/Ladvien/bevy_flora/compare/v0.38.1...v0.39.0
 [0.38.1]: https://github.com/Ladvien/bevy_flora/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/Ladvien/bevy_flora/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/Ladvien/bevy_flora/compare/v0.36.0...v0.37.0
