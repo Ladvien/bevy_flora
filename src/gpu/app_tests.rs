@@ -189,6 +189,40 @@ fn a_tree_follows_its_gpu_growth_component_and_the_devices_support() {
 }
 
 #[test]
+fn a_tree_has_its_levels_of_detail_only_while_it_is_built_on_the_cpu() {
+    use crate::lod::TreeLod;
+    use bevy::camera::visibility::VisibilityRange;
+    let mut app = app(true);
+    let tree = app
+        .world_mut()
+        .spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(f32::INFINITY), TreeLod::default()))
+        .id();
+    let children = |app: &App| app.world().get::<Children>(tree).unwrap().to_vec();
+    let has_levels = |app: &App| app.world().get::<TreeRender>(tree).unwrap().lod.is_some();
+    app.update();
+    // Trunk and leaves, then a wood and a leaf child per coarse level.
+    assert!(has_levels(&app));
+    assert_eq!(children(&app).len(), 6);
+
+    // On the GPU it has one level: the coarse children go with the CPU's, and nothing is banded.
+    app.world_mut().entity_mut(tree).insert(GpuGrowth);
+    app.update();
+    assert!(is_gpu(&app, tree));
+    assert!(!has_levels(&app));
+    let gpu_children = children(&app);
+    assert_eq!(gpu_children.len(), 2);
+    for child in gpu_children {
+        assert!(app.world().get::<VisibilityRange>(child).is_none(), "{child} is banded");
+    }
+
+    app.world_mut().entity_mut(tree).remove::<GpuGrowth>();
+    app.update();
+    assert!(!is_gpu(&app, tree));
+    assert!(has_levels(&app));
+    assert_eq!(children(&app).len(), 6);
+}
+
+#[test]
 fn growing_trees_reach_their_mature_state_on_the_gpu() {
     use crate::plugin::Growing;
     let params = TreePreset::Spruce.params();

@@ -9,7 +9,7 @@
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
-//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background]
+//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod]
 //!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>]
 //! ```
 //!
@@ -43,6 +43,8 @@
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame. `--background` builds those trees off the main thread
 //! (`BuildInBackground`): they appear a few frames after the start instead of in its first frame.
+//! `--tree-lod` draws them at levels of detail (`TreeLod`, at the `--lod` distances; there is no
+//! impostor), as a pool draws its trees.
 //! `--see-through <x,y,z>[,<radius>]` stands a red stand-in for the player at that point (its
 //! height above the ground) and puts `SeeThroughTrees` on the camera; `--prepass depth` or
 //! `--prepass all` gives the camera a depth prepass, or depth, normal and motion-vector ones.
@@ -90,8 +92,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
     BuildInBackground, FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances,
-    LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees, TreeAge, TreeParams,
-    TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
+    LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees, TreeAge, TreeLod,
+    TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -175,6 +177,8 @@ struct Args {
     deterministic: bool,
     /// Build the `ProceduralTree`s in the background (`BuildInBackground`).
     background: bool,
+    /// Draw the `ProceduralTree`s at levels of detail (`TreeLod`, the `--lod` distances).
+    tree_lod: bool,
     /// Render into an image, with no window.
     offscreen: bool,
     screenshot: Option<PathBuf>,
@@ -213,7 +217,7 @@ fn usage() -> ! {
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
-         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] \
+         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] \
          [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>]"
     );
     std::process::exit(2);
@@ -242,6 +246,7 @@ fn parse_args() -> Args {
         shake_animate: false,
         deterministic: false,
         background: false,
+        tree_lod: false,
         offscreen: false,
         screenshot: None,
         season: FloraSeason::SUMMER,
@@ -337,6 +342,7 @@ fn parse_args() -> Args {
             "--shake-animate" => args.shake_animate = true,
             "--deterministic" => args.deterministic = true,
             "--background" => args.background = true,
+            "--tree-lod" => args.tree_lod = true,
             "--scatter" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let species = list
@@ -622,38 +628,33 @@ fn setup(
             base
         })
         .collect();
+    // Levels of detail of each species: `--lod`'s distances, nearer for the undergrowth.
+    let undergrowth = bench.args.undergrowth.map(|_| bases.len() - 1);
+    let lods: Vec<LodSettings> = (0..bases.len())
+        .map(|i| {
+            let mut lod = LodSettings::default();
+            if let Some([lod1, lod2, impostor]) = bench.args.lod {
+                lod.distances = LodDistances { lod1, lod2, impostor };
+            }
+            if !bench.args.impostors {
+                lod.distances.impostor = f32::INFINITY;
+            }
+            // A shrub is a tenth of a tree's height, so its coarser levels can take over much
+            // nearer.
+            if Some(i) == undergrowth {
+                let d = lod.distances;
+                let near = UNDERGROWTH_LOD_SCALE;
+                lod.distances = LodDistances { lod1: d.lod1 * near, lod2: d.lod2 * near, impostor: d.impostor * near };
+            }
+            lod
+        })
+        .collect();
     let pools: Vec<Handle<TreePool>> = if bench.args.mode == Mode::Pool {
-        let mut lod = LodSettings::default();
-        if let Some([lod1, lod2, impostor]) = bench.args.lod {
-            lod.distances = LodDistances {
-                lod1,
-                lod2,
-                impostor,
-            };
-        }
-        if !bench.args.impostors {
-            lod.distances.impostor = f32::INFINITY;
-        }
         let started = Instant::now();
-        let undergrowth = bench.args.undergrowth.map(|_| bases.len() - 1);
         let built: Vec<_> = bases
             .iter()
-            .enumerate()
-            .map(|(i, base)| {
-                // A shrub is a tenth of a tree's height, so its coarser levels can take over
-                // much nearer.
-                let lod = if Some(i) == undergrowth {
-                    let d = lod.distances;
-                    let near = UNDERGROWTH_LOD_SCALE;
-                    LodSettings {
-                        distances: LodDistances { lod1: d.lod1 * near, lod2: d.lod2 * near, impostor: d.impostor * near },
-                        ..lod
-                    }
-                } else {
-                    lod
-                };
-                pools.add(build_pool(base, VARIANTS, f32::INFINITY, &lod, &mut meshes))
-            })
+            .zip(&lods)
+            .map(|(base, lod)| pools.add(build_pool(base, VARIANTS, f32::INFINITY, lod, &mut meshes)))
             .collect();
         eprintln!(
             "forest: built {} pool(s) of {VARIANTS} variants in {:.2} s",
@@ -691,6 +692,9 @@ fn setup(
         }
         if bench.args.background {
             tree.insert(BuildInBackground);
+        }
+        if bench.args.tree_lod {
+            tree.insert(TreeLod(lods[species]));
         }
     }
 }

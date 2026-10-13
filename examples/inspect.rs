@@ -20,8 +20,9 @@
 //! `--mode pool` (the default) draws the tree from a [`TreePool`](bevy_flora::TreePool), as a
 //! forest would, so the level of detail follows the distance (`--lod` moves the switches,
 //! `--no-impostors` leaves the impostor out). `--mode tree` draws a `ProceduralTree` at `--age`
-//! (a growth age; mature by default), which has one level of detail.
-//! `--level n` draws the pool's level `n` at every distance (3 is the impostor), so two levels
+//! (a growth age; mature by default), in full at every distance, or with `--lod` or `--level` at
+//! the same levels of detail (`TreeLod`; an individual tree has no impostor).
+//! `--level n` draws level `n` at every distance (3 is the pool's impostor), so two levels
 //! can be compared at one distance; `--empty` photographs the same scene with no tree, so the
 //! tree's pixels are the ones that differ from it. `--no-msaa` turns the camera's multisampling
 //! off (it is on, 4 samples, by default).
@@ -58,7 +59,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
     BuckTree, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings,
-    PooledTree, ProceduralTree, RenderStyle, TreeAge, TreePool, TreePreset, TreeShape, build_pool, build_tree,
+    PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -411,44 +412,42 @@ fn setup(
     if shoot.args.empty {
         return;
     }
-    match shoot.args.mode {
+    let mut lod = LodSettings::default();
+    if let Some([lod1, lod2, impostor]) = shoot.args.lod {
+        lod.distances = LodDistances { lod1, lod2, impostor };
+    }
+    // One level everywhere: every other level's band lies below the camera's nearest position or
+    // beyond its farthest.
+    if let Some(level) = shoot.args.level {
+        let (near, far) = (0.001, 1.0e6);
+        lod.distances = match level {
+            0 => LodDistances { lod1: far, lod2: far + 1.0, impostor: far + 2.0 },
+            1 => LodDistances { lod1: near, lod2: far, impostor: far + 1.0 },
+            2 => LodDistances { lod1: near, lod2: near * 2.0, impostor: far },
+            _ => LodDistances { lod1: near, lod2: near * 2.0, impostor: near * 3.0 },
+        };
+    }
+    if !shoot.args.impostors {
+        lod.distances.impostor = f32::INFINITY;
+    }
+    let tree = match shoot.args.mode {
         Mode::Pool => {
-            let mut lod = LodSettings::default();
-            if let Some([lod1, lod2, impostor]) = shoot.args.lod {
-                lod.distances = LodDistances { lod1, lod2, impostor };
-            }
-            // One level everywhere: every other level's band lies below the camera's nearest
-            // position or beyond its farthest.
-            if let Some(level) = shoot.args.level {
-                let (near, far) = (0.001, 1.0e6);
-                lod.distances = match level {
-                    0 => LodDistances { lod1: far, lod2: far + 1.0, impostor: far + 2.0 },
-                    1 => LodDistances { lod1: near, lod2: far, impostor: far + 1.0 },
-                    2 => LodDistances { lod1: near, lod2: near * 2.0, impostor: far },
-                    _ => LodDistances { lod1: near, lod2: near * 2.0, impostor: near * 3.0 },
-                };
-            }
-            if !shoot.args.impostors {
-                lod.distances.impostor = f32::INFINITY;
-            }
-            let pool = build_pool(&params, 1, shoot.args.age, &lod, &mut meshes);
-            let pool = pools.add(pool);
-            let tree = commands.spawn((PooledTree { pool, variant: 0 }, Transform::from_xyz(0.0, shoot.base, 0.0))).id();
-            if shoot.args.colliders {
-                commands.entity(tree).insert(TreeShape::default());
-            }
-            fell(&mut commands, tree, &shoot.args);
+            let pool = pools.add(build_pool(&params, 1, shoot.args.age, &lod, &mut meshes));
+            commands.spawn((PooledTree { pool, variant: 0 }, Transform::from_xyz(0.0, shoot.base, 0.0))).id()
         }
         Mode::Tree => {
-            let tree = commands
-                .spawn((ProceduralTree(params), TreeAge(shoot.args.age), Transform::from_xyz(0.0, shoot.base, 0.0)))
-                .id();
-            if shoot.args.colliders {
-                commands.entity(tree).insert(TreeShape::default());
+            let at = Transform::from_xyz(0.0, shoot.base, 0.0);
+            let mut tree = commands.spawn((ProceduralTree(params), TreeAge(shoot.args.age), at));
+            if shoot.args.lod.is_some() || shoot.args.level.is_some() {
+                tree.insert(TreeLod(lod));
             }
-            fell(&mut commands, tree, &shoot.args);
+            tree.id()
         }
+    };
+    if shoot.args.colliders {
+        commands.entity(tree).insert(TreeShape::default());
     }
+    fell(&mut commands, tree, &shoot.args);
 }
 
 /// With `--fell`: cut the tree and let it fall toward the bearing (degrees from +x toward +z),

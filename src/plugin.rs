@@ -29,7 +29,7 @@ use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::reflect::Reflect;
 use bevy::render::render_resource::Face;
-use bevy::camera::visibility::Visibility;
+use bevy::camera::visibility::{Visibility, VisibilityRange};
 use bevy::tasks::{ComputeTaskPool, TaskPool};
 use bevy::time::Time;
 use bevy::transform::components::Transform;
@@ -42,7 +42,8 @@ use crate::params::TreeParams;
 use crate::pipeline::{aged_skeleton, build_aged};
 use crate::see_through::{SeeThroughTrees, arm_see_through, sync_see_through};
 use crate::shape::TreeShape;
-use crate::pool::{fill_pooled_shapes, spawn_pooled_trees};
+use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
+use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees};
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWind, FloraWindBuffer, SharedFlora, TextureLibrary,
     TreeShakes,
@@ -122,6 +123,8 @@ pub struct TreeRender {
     /// The age the meshes show, for a tree rebuilt on the CPU (a [`BuildInBackground`] tree
     /// whose age moved while it was built is rebuilt until they agree).
     pub(crate) age: f32,
+    /// Levels 1 and 2 of a tree drawn with [`TreeLod`], and the settings they were built with.
+    pub(crate) lod: Option<(LodSettings, [CoarseLevel; 2])>,
 }
 
 /// How a tree's wood and leaves are drawn.
@@ -207,6 +210,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<Growing>()
             .register_type::<BuildInBackground>()
             .register_type::<SeeThroughTrees>()
+            .register_type::<TreeLod>()
             .add_systems(
                 bevy::app::Update,
                 (
@@ -346,7 +350,15 @@ pub fn rebuild_trees(
     support: Res<GpuGrowthSupport>,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
-        (Entity, Ref<ProceduralTree>, Ref<TreeAge>, Option<&mut TreeRender>, Has<GpuGrowth>, Has<BuildInBackground>),
+        (
+            Entity,
+            Ref<ProceduralTree>,
+            Ref<TreeAge>,
+            Option<&mut TreeRender>,
+            Has<GpuGrowth>,
+            Has<BuildInBackground>,
+            Option<&TreeLod>,
+        ),
         Without<Felled>,
     >,
     mut pending: Query<(Entity, &mut PendingBuild<RebuiltTree>)>,
@@ -364,7 +376,7 @@ pub fn rebuild_trees(
 
     // Phase 1: collect what to build.
     let mut jobs = Vec::new();
-    for (entity, tree, age, mut render, gpu, background) in &mut trees {
+    for (entity, tree, age, mut render, gpu, background, lod) in &mut trees {
         // A tree that grows on the GPU is `rebuild_gpu_trees`'s.
         if gpu && support.0 {
             continue;
@@ -374,36 +386,40 @@ pub fn rebuild_trees(
         if render.as_deref().is_some_and(|render| render.paint.cloned_cpu().is_none()) {
             continue;
         }
+        // Its levels of detail are not those of its `TreeLod` (it came, went or changed).
+        let lod = lod.map(|lod| lod.0);
+        let levels_stale = render.as_deref().is_some_and(|render| render.lod.as_ref().map(|(s, _)| *s) != lod);
         if background {
             // A change of parameters replaces a build under way; otherwise the tree is built
-            // whenever its meshes are not of its age (or it has none) and no build is under way.
+            // whenever its meshes are not of its age or its levels (or it has none) and no build
+            // is under way.
             let building = pending.contains(entity);
-            let behind = render.as_deref().is_none_or(|render| render.age != age.0);
+            let behind = render.as_deref().is_none_or(|render| render.age != age.0) || levels_stale;
             if !(tree.is_changed() || (behind && !building)) {
                 continue;
             }
             // The kept skeleton is copied, not taken: the tree keeps it while the build runs.
             let kept = render.as_deref().filter(|_| !tree.is_changed()).map(|render| render.full.clone());
-            let job = RebuildJob { entity, params: tree.0.clone(), age: age.0, kept, background: true };
+            let job = RebuildJob { entity, params: tree.0.clone(), age: age.0, kept, background: true, lod };
             commands.entity(entity).insert(PendingBuild::spawn(move || build_job(job)));
             continue;
         }
-        if !(tree.is_changed() || age.is_changed() || render.is_none()) {
+        if !(tree.is_changed() || age.is_changed() || render.is_none() || levels_stale) {
             continue;
         }
-        // Only the age changed: age the skeleton generated last time.
+        // Only the age (or the levels) changed: age the skeleton generated last time.
         let kept = match render.as_mut() {
             Some(render) if !tree.is_changed() => Some(std::mem::take(&mut render.full)),
             _ => None,
         };
-        jobs.push(RebuildJob { entity, params: tree.0.clone(), age: age.0, kept, background: false });
+        jobs.push(RebuildJob { entity, params: tree.0.clone(), age: age.0, kept, background: false, lod });
     }
 
     // Phase 2 builds on all cores, meshes included; phase 3 applies each result here, in order,
     // after the background builds that are done.
     let mut apply = |out: RebuiltTree| {
         let (entity, full, trunk_progress) = (out.entity, out.full, out.trunk_progress);
-        let Ok((_, tree, _, render, gpu, _)) = trees.get_mut(entity) else { return };
+        let Ok((_, tree, _, render, gpu, _, _)) = trees.get_mut(entity) else { return };
         // A background build is out of date if the parameters changed again since it started (a
         // new one is under way) or the tree has moved to the GPU.
         if out.background && (tree.is_changed() || (gpu && support.0)) {
@@ -431,12 +447,15 @@ pub fn rebuild_trees(
                 sync_trunk(&mut commands, &mut meshes, trunk, &mut trunk_mesh, out.trunk);
                 let mut foliage = None;
                 sync_leaf_child(&mut commands, &mut meshes, &mut foliage, out.foliage, |commands, mesh| {
-                    spawn_leaf_child(commands, mesh, TreeFoliageMesh, entity, &paint)
+                    spawn_mesh_child(commands, mesh, TreeFoliageMesh, entity, &paint, true)
                 });
                 let mut flowers = None;
                 sync_leaf_child(&mut commands, &mut meshes, &mut flowers, out.flowers, |commands, mesh| {
-                    spawn_leaf_child(commands, mesh, FLOWERS_SPAWN, entity, &paint)
+                    spawn_mesh_child(commands, mesh, FLOWERS_SPAWN, entity, &paint, true)
                 });
+                let mut lod = None;
+                let level0 = [Some(trunk), foliage.as_ref().map(|c| c.0), flowers.as_ref().map(|c| c.0)];
+                sync_levels(&mut commands, &mut meshes, entity, &mut lod, out.lod, &paint, level0);
                 commands.entity(entity).insert(TreeRender {
                     trunk,
                     trunk_mesh,
@@ -446,6 +465,7 @@ pub fn rebuild_trees(
                     full,
                     mature_at: out.mature_at,
                     age: out.age,
+                    lod,
                 });
             }
             (Some(mut render), Some(paint)) => {
@@ -472,13 +492,19 @@ pub fn rebuild_trees(
                         let wood = shared.resolve(&mut flora, &textures.wood(params), wind);
                         let leaves = shared.resolve(&mut flora, &textures.leaves(params), wind);
                         if let Paint::Flora { trunk, foliage } = &mut render.paint {
+                            let coarse = render.lod.iter().flat_map(|(_, levels)| levels);
                             if *trunk != wood {
-                                commands.entity(render.trunk).insert(MeshMaterial3d(wood.clone()));
+                                let woods = coarse.clone().flat_map(|level| level.wood.iter().map(|c| c.0));
+                                for child in std::iter::once(render.trunk).chain(woods) {
+                                    commands.entity(child).insert(MeshMaterial3d(wood.clone()));
+                                }
                                 *trunk = wood;
                             }
                             if *foliage != leaves {
-                                for (child, _) in render.foliage.iter().chain(&render.flowers) {
-                                    commands.entity(*child).insert(MeshMaterial3d(leaves.clone()));
+                                let coarse_leaves = coarse.flat_map(|level| level.leaves.iter().map(|c| c.0));
+                                let level0 = render.foliage.iter().chain(&render.flowers).map(|c| c.0);
+                                for child in level0.chain(coarse_leaves) {
+                                    commands.entity(child).insert(MeshMaterial3d(leaves.clone()));
                                 }
                                 *foliage = leaves;
                             }
@@ -490,11 +516,13 @@ pub fn rebuild_trees(
 
                 let paint = &render.paint;
                 sync_leaf_child(&mut commands, &mut meshes, &mut render.foliage, out.foliage, |commands, mesh| {
-                    spawn_leaf_child(commands, mesh, TreeFoliageMesh, entity, paint)
+                    spawn_mesh_child(commands, mesh, TreeFoliageMesh, entity, paint, true)
                 });
                 sync_leaf_child(&mut commands, &mut meshes, &mut render.flowers, out.flowers, |commands, mesh| {
-                    spawn_leaf_child(commands, mesh, FLOWERS_SPAWN, entity, paint)
+                    spawn_mesh_child(commands, mesh, FLOWERS_SPAWN, entity, paint, true)
                 });
+                let level0 = [Some(render.trunk), render.foliage.as_ref().map(|c| c.0), render.flowers.as_ref().map(|c| c.0)];
+                sync_levels(&mut commands, &mut meshes, entity, &mut render.lod, out.lod, &render.paint, level0);
             }
             // A tree painted for the GPU was skipped above.
             (Some(_), None) => {}
@@ -612,6 +640,8 @@ pub(crate) struct RebuiltTree {
     flowers: Option<Mesh>,
     mature_at: f32,
     trunk_progress: f32,
+    /// A tree drawn with [`TreeLod`]: its settings and levels 1 and 2.
+    lod: Option<(LodSettings, [CoarseMeshes; 2])>,
 }
 
 /// One tree for `rebuild_trees` to build: its parameters, its age and, when only the age
@@ -622,6 +652,8 @@ struct RebuildJob {
     age: f32,
     kept: Option<Skeleton>,
     background: bool,
+    /// [`TreeLod`]'s settings, when the tree has one.
+    lod: Option<LodSettings>,
 }
 
 /// Build one [`RebuildJob`]: on any thread, so a pure function of the job.
@@ -629,6 +661,17 @@ fn build_job(job: RebuildJob) -> RebuiltTree {
     let regenerated = job.kept.is_none();
     let full = job.kept.unwrap_or_else(|| generate_skeleton(&job.params));
     let out = build_aged(&full, &job.params, job.age);
+    let lod = job.lod.map(|settings| {
+        let levels = coarse_levels(&out, &job.params, &settings).map(|level| {
+            let mut leaves = level.foliage;
+            leaves.extend(&level.flowers);
+            CoarseMeshes {
+                wood: (!level.trunk.is_empty()).then(|| level.trunk.into_bevy_mesh()),
+                leaves: (!leaves.is_empty()).then(|| leaves.into_bevy_mesh()),
+            }
+        });
+        (settings, levels)
+    });
     RebuiltTree {
         entity: job.entity,
         age: job.age,
@@ -640,6 +683,97 @@ fn build_job(job: RebuildJob) -> RebuiltTree {
         flowers: (!out.flowers.is_empty()).then(|| out.flowers.into_bevy_mesh()),
         mature_at: out.mature_at,
         trunk_progress: out.skeleton.nodes[0].progress,
+        lod,
+    }
+}
+
+/// A coarser level of detail of a tree drawn with [`TreeLod`]: its wood and leaf children.
+#[derive(Default)]
+pub(crate) struct CoarseLevel {
+    wood: Option<(Entity, Handle<Mesh>)>,
+    leaves: Option<(Entity, Handle<Mesh>)>,
+}
+
+impl CoarseLevel {
+    /// Its children, the wood's first.
+    pub(crate) fn children(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.wood.iter().chain(&self.leaves).map(|(child, _)| *child)
+    }
+}
+
+/// What a worker makes of a coarse level: its wood and its leaves, with a flowering tree's
+/// flowers after them (the shaders hide them out of season, as on a pool's coarse levels).
+pub(crate) struct CoarseMeshes {
+    wood: Option<Mesh>,
+    leaves: Option<Mesh>,
+}
+
+/// Marker on a child of a tree drawn with [`TreeLod`] that carries one of its coarse levels
+/// (1 or 2), its wood or its leaves.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeLodMesh(pub u8);
+
+/// The distances level `level` of a tree drawn with [`TreeLod`] is drawn at: a pool's bands,
+/// with level 2 at every distance beyond `lod2` (an individual tree has no impostor).
+fn level_band(level: usize, distances: LodDistances) -> VisibilityRange {
+    match level {
+        0 => band(0.0, distances.lod1),
+        1 => band(distances.lod1, distances.lod2),
+        _ => band(distances.lod2, f32::INFINITY),
+    }
+}
+
+/// Bring a tree's levels of detail in line with `want` (its [`TreeLod`] settings and coarse
+/// meshes, or `None` without one): the coarse children, and the band of distances the full
+/// tree's own children (`level0`) are drawn at, which a tree without levels does not limit.
+fn sync_levels(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    tree: Entity,
+    have: &mut Option<(LodSettings, [CoarseLevel; 2])>,
+    want: Option<(LodSettings, [CoarseMeshes; 2])>,
+    paint: &Paint,
+    level0: [Option<Entity>; 3],
+) {
+    let old = have.as_ref().map(|(settings, _)| settings.distances);
+    let Some((settings, built)) = want else {
+        if let Some((_, levels)) = have.take() {
+            for child in levels.iter().flat_map(CoarseLevel::children) {
+                commands.entity(child).despawn();
+            }
+            for child in level0.into_iter().flatten() {
+                commands.entity(child).remove::<VisibilityRange>();
+            }
+        }
+        return;
+    };
+    let distances = settings.distances;
+    let moved = old != Some(distances);
+    // A child of the full tree spawned since (the leaves of a tree that had none) gets its band;
+    // the others keep theirs unless the distances moved.
+    for child in level0.into_iter().flatten() {
+        if moved {
+            commands.entity(child).insert(level_band(0, distances));
+        } else {
+            commands.entity(child).insert_if_new(level_band(0, distances));
+        }
+    }
+    let (kept, levels) = have.get_or_insert_with(|| (settings, Default::default()));
+    *kept = settings;
+    for (index, (level, built)) in levels.iter_mut().zip(built).enumerate() {
+        let range = level_band(index + 1, distances);
+        if moved {
+            for child in level.children() {
+                commands.entity(child).insert(range.clone());
+            }
+        }
+        let marker = TreeLodMesh(index as u8 + 1);
+        sync_leaf_child(commands, meshes, &mut level.wood, built.wood, |commands, mesh| {
+            spawn_mesh_child(commands, mesh, (marker, range.clone()), tree, paint, false)
+        });
+        sync_leaf_child(commands, meshes, &mut level.leaves, built.leaves, |commands, mesh| {
+            spawn_mesh_child(commands, mesh, (marker, range.clone()), tree, paint, true)
+        });
     }
 }
 
@@ -683,11 +817,18 @@ pub(crate) fn sync_leaf_child<'w, 's>(
     }
 }
 
-/// Spawn a CPU-built tree's leaf child (`marker` tells which, with what else it starts with) with
-/// `mesh` and the leaf paint.
-fn spawn_leaf_child(commands: &mut Commands, mesh: Handle<Mesh>, marker: impl Bundle, tree: Entity, paint: &Paint) -> Entity {
-    let mut child = commands.spawn((Mesh3d(mesh), marker, ChildOf(tree)));
-    paint_child(&mut child, paint, true);
+/// Spawn a CPU-built tree's child (`bundle` tells which, with what else it starts with) with
+/// `mesh` and the leaf paint (`leaf`) or the wood's.
+fn spawn_mesh_child(
+    commands: &mut Commands,
+    mesh: Handle<Mesh>,
+    bundle: impl Bundle,
+    tree: Entity,
+    paint: &Paint,
+    leaf: bool,
+) -> Entity {
+    let mut child = commands.spawn((Mesh3d(mesh), bundle, ChildOf(tree)));
+    paint_child(&mut child, paint, leaf);
     child.id()
 }
 
@@ -1278,5 +1419,114 @@ mod tests {
         let assets = app.world().resource::<Assets<FloraMaterial>>();
         assert_eq!(assets.get(&foliage).unwrap().extension.wind, app.world().resource::<FloraWindBuffer>().0);
         assert_eq!(wind_buffer(&app)[0][2], 0.77);
+    }
+
+    /// Check that `tree` draws `build_lods`' levels for `params` at `age` in `lod`'s bands: the
+    /// full tree's children up close, the coarse ones' wood and leaves (flowers included) beyond.
+    fn assert_levels(app: &App, tree: Entity, params: &TreeParams, age: f32, lod: &LodSettings) {
+        use crate::lod::build_lods;
+        let world = app.world();
+        let margins = |child: Entity| {
+            let range = world.get::<VisibilityRange>(child).unwrap_or_else(|| panic!("{child} has no band"));
+            (range.start_margin.clone(), range.end_margin.clone())
+        };
+        let band_of = |range: VisibilityRange| (range.start_margin, range.end_margin);
+        let mesh = |child: Entity| {
+            let handle = &world.get::<Mesh3d>(child).unwrap().0;
+            world.resource::<Assets<Mesh>>().get(handle).unwrap().attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec()
+        };
+        let render = world.get::<TreeRender>(tree).unwrap();
+        assert_eq!(render.age, age);
+        let level0 = [Some(render.trunk), render.foliage.as_ref().map(|c| c.0), render.flowers.as_ref().map(|c| c.0)];
+        for child in level0.into_iter().flatten() {
+            assert_eq!(margins(child), band_of(level_band(0, lod.distances)));
+        }
+        let expected = build_lods(params, age, lod);
+        let (settings, levels) = render.lod.as_ref().expect("no coarse levels");
+        assert_eq!(settings, lod);
+        for (index, level) in levels.iter().enumerate() {
+            let want = &expected[index + 1];
+            let (wood, _) = level.wood.as_ref().expect("no coarse wood");
+            let (leaves, _) = level.leaves.as_ref().expect("no coarse leaves");
+            for child in [*wood, *leaves] {
+                assert_eq!(world.get::<TreeLodMesh>(child), Some(&TreeLodMesh(index as u8 + 1)));
+                assert_eq!(margins(child), band_of(level_band(index + 1, lod.distances)));
+            }
+            let wood_positions: Vec<[f32; 3]> = want.trunk.positions.iter().map(|p| p.to_array()).collect();
+            assert_eq!(mesh(*wood), wood_positions, "level {} wood", index + 1);
+            assert_eq!(mesh(*leaves).len(), want.foliage.positions.len() + want.flowers.positions.len());
+        }
+        // Trunk, leaves and flowers, then a wood and a leaf child per coarse level.
+        assert_eq!(world.get::<Children>(tree).unwrap().len(), 7);
+    }
+
+    #[test]
+    fn a_tree_with_levels_of_detail_draws_its_coarse_levels_beyond_the_full_tree() {
+        use crate::felling::FellTree;
+        let mut app = app();
+        let params = TreePreset::Cherry.params();
+        let mut lod = LodSettings::default();
+        let tree = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(9.0), TreeLod(lod), Transform::default())).id();
+        app.update();
+        assert_levels(&app, tree, &params, 9.0, &lod);
+        // A new age rebuilds every level from the kept skeleton.
+        app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = f32::INFINITY;
+        app.update();
+        assert_levels(&app, tree, &params, f32::INFINITY, &lod);
+        // New distances move every child's band.
+        lod.distances.lod1 = 12.0;
+        lod.distances.lod2 = 40.0;
+        app.world_mut().get_mut::<TreeLod>(tree).unwrap().0 = lod;
+        app.update();
+        assert_levels(&app, tree, &params, f32::INFINITY, &lod);
+
+        // Without its `TreeLod` the tree is drawn in full at every distance; with it back, the
+        // levels return.
+        let coarse: Vec<Entity> = {
+            let render = app.world().get::<TreeRender>(tree).unwrap();
+            render.lod.as_ref().unwrap().1.iter().flat_map(CoarseLevel::children).collect()
+        };
+        app.world_mut().entity_mut(tree).remove::<TreeLod>();
+        app.update();
+        let full_only = |app: &App| {
+            let world = app.world();
+            let render = world.get::<TreeRender>(tree).unwrap();
+            assert!(render.lod.is_none());
+            assert!(coarse.iter().all(|child| world.get_entity(*child).is_err()), "a coarse level is left");
+            let level0 = [Some(render.trunk), render.foliage.as_ref().map(|c| c.0), render.flowers.as_ref().map(|c| c.0)];
+            for child in level0.into_iter().flatten() {
+                assert!(world.get::<VisibilityRange>(child).is_none(), "{child} is still banded");
+            }
+        };
+        full_only(&app);
+        assert_eq!(app.world().get::<Children>(tree).unwrap().len(), 3);
+        app.world_mut().entity_mut(tree).insert(TreeLod(lod));
+        app.update();
+        assert_levels(&app, tree, &params, f32::INFINITY, &lod);
+
+        // Felled, it falls in full: a coarse level standing in its place far away would not.
+        let coarse: Vec<Entity> = {
+            let render = app.world().get::<TreeRender>(tree).unwrap();
+            render.lod.as_ref().unwrap().1.iter().flat_map(CoarseLevel::children).collect()
+        };
+        app.world_mut().entity_mut(tree).insert(FellTree::default());
+        app.update();
+        let world = app.world();
+        assert!(coarse.iter().all(|child| world.get_entity(*child).is_err()), "a coarse level is left");
+        let render = world.get::<TreeRender>(tree).unwrap();
+        for child in std::iter::once(render.trunk).chain(render.foliage.as_ref().map(|c| c.0)) {
+            assert!(world.get::<VisibilityRange>(child).is_none(), "{child} is still banded");
+        }
+
+        // A tree built in the background gets its levels with its meshes.
+        let background = app.world_mut().spawn((ProceduralTree(params.clone()), TreeAge(9.0), TreeLod(lod), BuildInBackground)).id();
+        for _ in 0..3000 {
+            app.update();
+            if app.world().get::<TreeRender>(background).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_levels(&app, background, &params, 9.0, &lod);
     }
 }

@@ -151,7 +151,7 @@ pub struct PoolVariant {
 ///
 /// The children are drawn by distance (see [`LodDistances`]). The impostor casts
 /// no shadow; the three levels of detail do. (In the `forest` example, 100 000
-/// trees with a shadow-casting sun cost 7.5 ms a frame on an Apple M4 Pro, leaf shading and
+/// trees with a shadow-casting sun cost 7.4 ms a frame on an Apple M4 Pro, leaf shading and
 /// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
 /// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
 #[derive(Component, Clone, Debug)]
@@ -334,7 +334,7 @@ fn bounds_of(tree: &TreeMeshes) -> Aabb {
 /// The cross-fading range of distances in which a child is drawn: from `start`
 /// to `end` metres, each end fading over [`FADE`] metres around it. `end` may be
 /// infinite, and `start` zero.
-fn band(start: f32, end: f32) -> VisibilityRange {
+pub(crate) fn band(start: f32, end: f32) -> VisibilityRange {
     let half = FADE / 2.0;
     let edge = |at: f32| {
         if at <= 0.0 {

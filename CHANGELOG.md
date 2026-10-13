@@ -5,6 +5,41 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.23.0] - 2026-10-13
+
+Levels of detail for individual trees. A forest of `ProceduralTree`s, which grow, change and
+fall, draws at a quarter of the cost: 1 000 oaks take 6.5 ms a frame instead of 24. It only adds
+to the API.
+
+### Added
+
+- **`TreeLod(LodSettings)`** (a component, in the prelude): a `ProceduralTree` drawn as a pool
+  draws its trees, at the same levels (`build_lods`): in full up close, then level 1 from
+  `distances.lod1` and level 2 from `distances.lod2` (30 and 80 m by default), cross-fading over
+  2 m at each switch. There is no impostor: level 2 is drawn at every distance beyond `lod2`. The
+  coarse levels are rebuilt with the tree from the skeleton it keeps (a `Growing` tree's every
+  age, a `BuildInBackground` tree's builds included), and the component may come, go or change
+  at any time. A `GpuGrowth` tree ignores it, and a felled tree drops its coarse levels at the cut
+  and falls in full.
+- `plugin::TreeLodMesh(level)` marks the coarse children: a wood and a leaf child per level,
+  drawn with the tree's materials; a flowering tree's flowers ride in the leaves, as on a pool's.
+- `LodSettings` and `LodDistances` derive `Reflect`, and `TreeLod` is registered for reflection.
+- `forest --tree-lod`; `inspect --mode tree` gives the tree a `TreeLod` with `--lod` or `--level`.
+- README: "Distant trees for less: `TreeLod`", with `docs/tree_lod.jpg`.
+
+### Measured
+
+- **Look.** A tree's coarse levels are a pool's (a test holds every child's meshes to
+  `build_lods` and its band to the distances), and `inspect` dollies from 15 to 150 m show the
+  `TreeLod` tree and the pooled tree frame for frame alike through both switches. Without
+  `TreeLod` the 424 gallery scenarios render as in 0.22.0, on the CPU and with `--gpu` (a mean
+  difference of 0.000 of 255, no `ERROR`), and the five clips frame for frame.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.22.0, two runs
+  each): 1 000 individual oaks take 24.35 and 24.46 ms without `TreeLod` (0.22.0: 23.83 and 24.49)
+  and 6.49 and 6.50 ms with it. 200 oaks growing on the CPU (`--mode cpu-live`) take 10.08 and
+  10.14 ms without and 14.19 and 14.10 ms with it, every new age rebuilding the coarse levels too.
+  100 000 pooled oaks take 7.41 and 7.43 ms (0.22.0: 7.39 and 7.43).
+
 ## [0.22.0] - 2026-10-13
 
 Seeing the player through the trees. A third-person or top-down camera keeps the player in
@@ -1481,6 +1516,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.23.0]: https://github.com/Ladvien/bevy_flora/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/Ladvien/bevy_flora/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Ladvien/bevy_flora/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/Ladvien/bevy_flora/compare/v0.19.0...v0.20.0
