@@ -184,6 +184,12 @@ impl TreeRender {
     pub fn flower_entity(&self) -> Option<Entity> {
         self.flowers.as_ref().map(|(e, _)| *e)
     }
+
+    /// Every leaf mesh the tree draws: level 0's, then its coarser levels' ([`TreeLod`]).
+    pub(crate) fn leaf_meshes(&self) -> impl Iterator<Item = &Handle<Mesh>> {
+        let coarse = self.lod.iter().flat_map(|(_, levels)| levels.iter().filter_map(|level| level.leaves.as_ref()));
+        self.foliage.iter().chain(coarse).map(|(_, handle)| handle)
+    }
 }
 
 /// Marker on the wood child entity.
@@ -314,6 +320,7 @@ impl bevy::app::Plugin for FloraPlugin {
         crate::tree_asset::build(app);
         crate::felling::build(app);
         crate::index::build(app);
+        crate::harvest::build(app);
     }
 
     fn finish(&self, app: &mut bevy::app::App) {

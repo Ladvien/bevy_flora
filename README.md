@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.31 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.32 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.31"
+bevy_flora = "0.32"
 ```
 
 | feature | default | what it does |
@@ -562,6 +562,40 @@ In autumn the falling leaves are the tree's own. The shaders stop drawing a deci
 
 Nothing moves on the CPU: a drop is one entity (`LeafBurst`) with one small mesh, drawn with a copy of its tree's leaf material that moves the cards in its vertex stage (`FloraExtension::falling`), and despawned when its last leaf is gone. Making one reads the tree's leaf mesh (a pool's variants once, then kept), and `FallingLeaves::max_leaves` (5 000) caps how many fall or lie at once. On an Apple M4 Pro (`forest --offscreen`): knocking trees every few frames with every shake slot busy (`--shake-animate`), so that thousands of leaves are always falling, cost 2% more frame time over 100 000 pooled oaks than before falling leaves and 4% over 1 000 individual ones; an autumn every six seconds, over and over (`--leaf-fall-animate 6`), costs 1 000 individual oaks 1% more than the same autumn standing still, and 100 000 pooled oaks 2 to 4%. With nothing falling no system runs. Trees drawn on the CPU and from pools drop leaves; `GpuGrowth` trees and trees drawn with plain `StandardMaterial`s do not. The see-through fade cuts falling leaves as it cuts the trees. A shake's or a drop's leaves are copies: the tree keeps its own, and a few falling copies are not missed from a crown of thousands.
 
+### Picking fruit: `TreeFruit`
+
+A fruiting tree (`FoliageParams::fruit`, the `Apple` preset) drawn as a `ProceduralTree` gets a `TreeFruit` once it is built: the fruit it grew, each with a key that holds as the tree grows, where it hangs in the tree's own space and its radius. `on_tree(&season)` lists the fruit the season hangs on it, `nearest(&season, tree, at, max)` finds the one nearest a hand, and `pick(key)` takes it off the tree: the shaders stop drawing it, on every level of detail, and it stays picked when the tree is rebuilt, until the next blossom brings the fruit back. A shake (`TreeShakes`) knocks loose a share of the fruit of the trees it reaches (`FallingFruit::per_shake`, 0.3 of it at strength 1, less the further the tree stands): each falls from where it hung as a `FallenFruit` entity (a sphere of its colour; its `Transform`'s scale is its radius), bounces and lies on the ground (`FloraGround`, or the height the tree stands at) for `FallingFruit::rest` seconds (60) for the game to pick up, and a `FruitFell` message tells of each. Pooled trees share their meshes, so their fruit hangs as the season says, and a tree grown on the GPU has no `TreeFruit`.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::prelude::*;
+
+// The player picks the apple nearest their hand, and gathers the fallen ones within reach.
+fn pick(
+    mut commands: Commands,
+    hand: Single<&GlobalTransform, With<Camera3d>>,
+    season: Res<FloraSeason>,
+    mut trees: Query<(&GlobalTransform, &mut TreeFruit)>,
+    fallen: Query<(Entity, &GlobalTransform), With<FallenFruit>>,
+) {
+    let at = hand.translation();
+    for (tree, mut fruit) in &mut trees {
+        if let Some((apple, _)) = fruit.nearest(&season, tree, at, 1.5) {
+            fruit.pick(apple.key);
+        }
+    }
+    for (apple, lying) in &fallen {
+        if lying.translation().distance(at) < 1.5 {
+            commands.entity(apple).despawn();
+        }
+    }
+}
+```
+
+![Two apple trees on grass: the left one is shaken and its apples fall and scatter in the grass, then a red stand-in beyond the right one picks its apples one by one, a yellow line marking each, into a basket at its feet](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/harvest.gif)
+
+*`cargo run --release --example capture_growth -- --harvest`: `TreeShakes`, `FallenFruit` and `TreeFruit::nearest` and `pick`.*
+
 ### Felling: `FellTree`
 
 Insert `FellTree { direction, cut_height, speed }` on a tree and it comes down. The plugin cuts its wood at `cut_height`: what stays becomes a `TreeStump` entity, and what falls keeps the tree's entity, both closed by a cut face that shows the end grain (pale sapwood, rings, the pith and a few checks). The tree tips over toward `direction` about the front edge of the cut, as a felled trunk turns on its hinge, slowly at first and then faster as a rod of its height would (the oak below lands about 2.7 seconds after the cut), until its trunk or one of its big limbs reaches the ground; it lands there with a small bounce, thin branches and leaves on the near side giving way into the ground. `TreeLanded` is sent the frame it hits, with the point it hit, for the crash, the dust and the camera shake, and the landing shakes the crowns of the trees it fell through and rustles its own leaves. `Felled` says how far it has tipped and when it lies still. A `PooledTree` becomes the `ProceduralTree` of its variant before it is cut (the same tree as the pool's finest level), and a `GpuGrowth` tree is moved to the CPU path first, so any tree in a forest can be felled. On a hillside, a `FloraGround` resource (see "On terrain" above) is the ground it is cut above and lands on.
@@ -845,6 +879,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
 - **Finding trees.** `FloraIndex` holds every standing tree, pooled ones included, by where its trunk stands: the nearest tree to a point, the trees within a radius and the trunk a ray meets, in microseconds among 100 000 trees, kept up to date as trees are planted, grow, move, fall or go.
 - **Trees that react.** `TreeShakes` swings the trees near a hit, a passing character or a blast and rustles their leaves, on every way a tree is drawn, for one small buffer write and nothing per tree while nothing shakes. Hits knock leaves off and felled trees shed them as they land: they tumble down, drift with the wind and lie on the ground a while, moved on the GPU; `DropLeaves` drops them from any tree.
+- **Picking fruit.** `TreeFruit` lists a fruiting tree's fruit, finds the one nearest a hand and picks it off the tree until the next blossom; shakes knock fruit loose to fall, bounce and lie on the ground as `FallenFruit` entities for the game to pick up.
 - **Fire.** `FloraFire` spreads a fire through the trees from where the game lights it, faster downwind and stopped where nothing burns: leaves scorch, flare and burn away, wood chars from the ground up with glowing seams, on every way a tree is drawn; the game reads the fire back to hurt what stands in it or scorch its own ground.
 - **Walking through undergrowth.** `FoliagePusher` on the player or an NPC: the leaves and thin stems it walks through bend out of its way and close up behind it, shadows included, while trunks stay put.
 - **Felling.** `TreeNotch` cuts an axe's notch into a standing trunk, deeper with each blow; `FellTree` cuts a tree, pooled ones included, at its notch if it has one: it falls about the hinge of the cut, lands on its limbs with a bounce (`TreeLanded`), and leaves a `TreeStump`; every cut face shows end grain. `BuckTree` then cuts its trunk into `TreeLog`s lying on the ground, each with a capsule for its collider.
@@ -861,7 +896,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 | `gallery` | Renders 441 scenarios (every preset at several ages and seeds, forced splits, smoothing, pipe radii (mature and young) and a wobbly twisted trunk on every preset, every leaf style × placement × orientation, every crown shape, every preset painterly and toon, parameter extremes, five deciduous presets and the pine turning, turned, half bare, bare and under snow, and the cherry's spring in blossom) offscreen to four-view PNGs plus a `stats.tsv` with mesh sanity flags. This is the visual QA harness. `--filter <substr>` narrows it; `--gpu` grows every tree in the vertex shader. |
 | `compare_gallery` | Compares two renders directory against directory (CPU `gallery` against `gallery --gpu`, or two `capture_growth` runs): mean difference and share of close pixels per PNG, non-zero exit past the limits. |
 | `inspect` | Photographs one tree under controlled conditions, to see how it reads: a camera that backs off through every level of detail and into the impostor (`--distance a,b --frames n`), optionally zooming so the tree keeps its size on screen and a level switch shows as a jump (`--constant-size`), any bearing, height and field of view, one level forced at every distance (`--level`), a `ProceduralTree` instead of a pooled tree (`--mode tree`, which `--lod` or `--level` give a `TreeLod`), the empty scene (`--empty`) to measure the tree's pixels against, with or without MSAA, in any look (`--style natural|painterly|toon`, which `forest` and `capture_growth` take too) and season (`--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]`, which `forest` takes too), notched (`--notch <bearing>,<depth>[,<height>]`: an axe's `TreeNotch`), felled (`--fell <bearing>`: the photographs wait until it lies still) and bucked (`--buck <m>`: into logs `m` metres long), on a slope (`--slope <deg>`, the ground falling toward +x: the tree at its footing, or with `--on-centre` where a plain placement would put it), dropping leaves (`--drop <count>[,<after>[,<every>]]`: photographed `after` seconds after they let go, then every `every` seconds), shedding them as an autumn passes (`--autumn <seconds>[,<after>[,<every>]]`: the leaf fall rises to 1 over `seconds`, photographed the same way), burning (`--burn <after>[,<every>]`: a `FloraFire` lit at the tree's foot, photographed the same way), or with a body standing in it or walking through it (`--push <x>,<z>[,<radius>[,<vx>,<vz>]]`: a red `FoliagePusher`, photographed every quarter of a second while it walks). The clock is fixed, so runs repeat. |
-| `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, with `--shake` the grove knocked by `TreeShakes`, with `--fell` an oak notched by an axe and felled among a few trees, with `--fire` the grove burning at dusk, with `--push` a body walking through a patch of shrubs, or with `--chop` a woodcutter felling a row of trees one after another, each found by `FloraIndex` (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
+| `capture_growth` | Records the clips above as numbered PNG frames: one tree growing (`--preset <name>`, default maple), with `--grove` a grove of mixed species with a gust front crossing it, with `--seasons` the same grove fully grown through a year, with `--shake` the grove knocked by `TreeShakes`, with `--fell` an oak notched by an axe and felled among a few trees, with `--fire` the grove burning at dusk, with `--push` a body walking through a patch of shrubs, with `--chop` a woodcutter felling a row of trees one after another, each found by `FloraIndex`, or with `--harvest` an apple tree shaken and another picked into a basket (`--gpu` grows the trees in the vertex shader). The clock steps a fixed 1/24 s per frame, so the wind sways smoothly and two runs write the same frames; the `ffmpeg` commands that make the GIFs are in the example's docs. |
 | `forest` | The forest-scale benchmark: up to 100 000 trees under a shadow-casting sun, on a grid or, with `--scatter oak:3,birch:1,...`, where `Scatter` puts them (`--grove <m>`, `--clearing <m>`; `--undergrowth shrub:2.5` adds a patchy layer of shrubs 2.5 m apart and clear of the trunks), on flat ground or on rolling hills (`--terrain <relief>`: every tree at its footing on a `FloraGround`), drawn from a `TreePool` per species (`--mode pool`, the default), as a `ProceduralTree` each (`--mode naive`), or as `GpuGrowth` trees, fully grown or growing for the whole run (`--mode gpu`, `gpu-live`; `--mode cpu-live` is the CPU-rebuilt equivalent), built in the frame or in the background (`--background`), in full or at levels of detail (`--tree-lod`: `TreeLod`), timed per frame or saved as a screenshot. `--offscreen` times the real frame cost without a window and the result line gives the mean, p95, median, minimum and CPU time per frame; `--no-impostors`, `--lod` and `--shadows` change the setup; `--sun <x,y,z>`, `--wind <strength>`, `--wind-dir <x,z>`, `--gust <speed>` and `--wind-animate` (the strength changes every frame) move the light and the weather, `--shake-animate` knocks the trees every few frames (every shake slot busy), `--leaf-fall-animate <s>` runs an autumn every `s` seconds (leaves always falling), `--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]` sets the season, `--fire <x>,<z>[,<radius>]` lights a `FloraFire` over the forest there (`--fire armed`: one that burns nothing), `--push <x>,<z>` stands a `FoliagePusher` there; `--see-through <x,y,z>[,<radius>]` stands a player in the forest for the camera to see through to (`SeeThroughTrees`) and `--prepass <none|depth|all>` gives the camera prepasses; `--deterministic` fixes the clock at 1/60 s, so two builds' `--screenshot`s compare byte for byte. |
 | `tree_file` | (`--features ron`) A tree from `examples/assets/trees/maple.tree.ron` (`--tree <path>` for another file); with `file_watcher` too it rebuilds when the file is saved, and a load error shows on screen while the last good tree stays. `--export <preset>` prints a preset as a tree file, `--screenshot <path>` saves the tree and exits. |
 

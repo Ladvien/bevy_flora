@@ -5,6 +5,47 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.32.0] - 2026-10-13
+
+Harvest. A fruiting tree's fruit can be picked, and a shake knocks fruit to the ground for the
+game to gather. New API only, hence a minor release.
+
+### Added
+
+- **`TreeFruit`**, a component the plugin keeps on every fruiting `ProceduralTree` drawn on the
+  CPU (`FoliageParams::fruit`, the apple): the fruit it grew (`Fruit { key, position, radius,
+  moment }`, in the tree's own space; `Fruit::world`, `Fruit::in_season`), `on_tree(&season)` for
+  the fruit hanging now, `nearest(&season, tree, at, max)` for the one nearest a hand, and
+  `pick(key)`: the shaders stop drawing the fruit on every level of detail (its vertices in the
+  tree's leaf meshes are marked), it stays picked when the tree is rebuilt, and the next blossom
+  brings it back (`regrow`). A fruit's key is its phase, which holds as the tree grows.
+- **Shakes knock fruit loose**: each new `TreeShake` picks a share of the hanging fruit of the
+  trees it reaches (`FallingFruit::per_shake`, 0.3 of it at strength 1, the leaves' falloff), each
+  by its own draw, and drops it as a **`FallenFruit`** entity (a sphere of the fruit's colour, its
+  scale its radius) that falls, bounces and lies on the ground (`FloraGround`, or the height the
+  tree stands at), despawned `FallingFruit::rest` (60) seconds after it comes to rest. A
+  **`FruitFell`** message tells of each. `FallingFruit` is a resource the plugin adds.
+- `harvest` module; `TreeFruit`, `Fruit`, `FallingFruit`, `FallenFruit` and `FruitFell` in the
+  crate root, all but `Fruit` in the prelude.
+- Examples: `capture_growth --harvest`, an apple tree shaken and another picked into a basket
+  (`docs/harvest.gif`).
+- README: "Picking fruit: `TreeFruit`", with `docs/harvest.gif`.
+
+### Measured
+
+- **Look.** The 424 gallery scenarios that are not the apple's render as in 0.31.0 on the CPU and
+  with `--gpu` (a mean difference of 0.000 of 255, no `ERROR`); the apple's 17 have no
+  `stats.tsv` flag and differ between the CPU and `--gpu` by a mean of means of 0.154. The
+  growth, grove, seasons, fire and push clips render as in 0.31.0 frame for frame; the shake, fell
+  and chop clips drop other leaves of the same trees.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.31.0): 1 000
+  individual oaks 24.63, 24.60 and 24.60 ms (0.31.0: 24.03, 24.63 and 24.63), 100 000 pooled oaks
+  7.62 and 7.58 ms (7.61 and 7.56): nothing runs for trees without fruit.
+- **Found and fixed before release.** The clip's first take framed a row of three trees and a
+  picker standing in front of the crown it picked: the apples were a few pixels across and a
+  picked one simply went; now two trees, the picker beyond the crown, and each picked apple flies
+  into a basket that fills.
+
 ## [0.31.0] - 2026-10-13
 
 Fruit. A tree can bear fruit (`FoliageParams::fruit`): round, hanging below some of its leaves and
@@ -1898,6 +1939,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.32.0]: https://github.com/Ladvien/bevy_flora/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/Ladvien/bevy_flora/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/Ladvien/bevy_flora/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/Ladvien/bevy_flora/compare/v0.28.0...v0.29.0

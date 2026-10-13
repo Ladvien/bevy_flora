@@ -224,14 +224,15 @@ const FRUIT_ROUGHNESS: f32 = 0.35;
 
 // Whether a leaf, a flower or a fruit draws nothing this season (it is then put outside the clip
 // volume): a fallen leaf; a flower that is not out (flowers open once the blossom passes their
-// moment and fall in the reverse order); a fruit while the blossom is out or once the leaf fall
-// has passed its moment, on any tree (an evergreen's fruit drops too).
+// moment and fall in the reverse order); a fruit while the blossom is out, once the leaf fall has
+// passed its moment, on any tree (an evergreen's fruit drops too), or once picked (alpha 0.375,
+// `TreeFruit::pick`).
 fn leaf_hidden(sway: vec4<f32>, color: vec4<f32>) -> bool {
     if is_flower(color) {
         return flower_moment(sway) >= flora_wind[5].w;
     }
     if is_fruit(color) {
-        return flora_wind[5].w > 0.0 || leaf_season_moment(sway) * FRUIT_FALL < flora_wind[5].y;
+        return color.a > 0.3125 || flora_wind[5].w > 0.0 || leaf_season_moment(sway) * FRUIT_FALL < flora_wind[5].y;
     }
     return leaf_has_fallen(sway);
 }

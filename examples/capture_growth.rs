@@ -54,7 +54,11 @@
 //! camera while a lumberjack asks `FloraIndex` for the nearest standing tree, walks to its bark
 //! (a yellow ring marks the tree it is after), notches it, walks round it and fells it toward the
 //! notch, then the next: a felled tree leaves the index at once (`docs/chop.gif`, encoded like the
-//! grove).
+//! grove). `--harvest` records two apple trees from a still camera: the left one is shaken and
+//! its apples fall, bounce and lie in the grass (`FallingFruit`), then a picker beyond the right
+//! one takes the apples nearest its hand off the tree one by one (`TreeFruit::nearest`,
+//! `TreeFruit::pick`; a yellow line marks each) into a basket (`docs/harvest.gif`, encoded like
+//! the grove).
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -81,8 +85,8 @@ use bevy::mesh::VertexAttributeValues;
 use bevy::post_process::bloom::Bloom;
 use bevy_flora::{
     FallingLeaves, FellTree, FireSpread, FloraFire, FloraIndex, FloraPlugin, FloraSeason, FloraWind, FoliagePusher,
-    GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeNotch, TreeParams, TreePreset, TreeShake, TreeShakes,
-    build_tree,
+    GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge, TreeFruit, TreeNotch, TreeParams, TreePreset, TreeShake,
+    TreeShakes, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -123,6 +127,20 @@ const CHOP_REACH: f32 = 0.6;
 const CHOP_BLOWS: u32 = 3;
 const CHOP_BLOW_FRAMES: u32 = 6;
 const CHOP_ROUND_FRAMES: u32 = 14;
+/// The harvest clip: two apple trees across the view (seed, x in metres); its shake (frame, the
+/// tree, strength); and its picker: the tree it picks from, where it stands (x, z, beyond that
+/// tree), its hand's height and reach (metres), the frame it starts, the frames it reaches for
+/// each apple before picking it and the frames a picked apple flies to its basket (x, z).
+const HARVEST_ROW: [(i32, f32); 2] = [(42, -2.9), (11, 2.9)];
+const HARVEST_SHAKES: [(u32, usize, f32); 1] = [(18, 0, 1.6)];
+const PICKER_TREE: usize = 1;
+const PICKER_AT: Vec2 = Vec2::new(5.5, 0.4);
+const PICKER_HAND: f32 = 1.7;
+const PICKER_REACH: f32 = 2.6;
+const PICKER_FROM: u32 = 66;
+const PICKER_FRAMES: u32 = 3;
+const BASKET_AT: Vec2 = Vec2::new(4.9, 1.2);
+const BASKET_FRAMES: u32 = 6;
 /// The push clip's plants: shrubs (seed and place: x, z, metres from the patch's middle), a row
 /// along the walker's path and a few behind it, none in front to hide it.
 const PUSH_PATCH: [(i32, [f32; 2]); 10] = [
@@ -213,11 +231,22 @@ enum Scene {
     /// The grove, fully grown, in a light wind, and a lumberjack who asks [`FloraIndex`] for the
     /// nearest tree, walks to it, notches it, walks round it and fells it, then the next.
     Chop,
+    /// A row of apple trees in a light wind: two are shaken and drop apples, then a picker takes
+    /// apples off the third ([`TreeFruit`]).
+    Harvest,
 }
 
 /// The push clip's walker.
 #[derive(Component)]
 struct Walker;
+
+/// A picked apple of the harvest clip on its way to the basket.
+#[derive(Component)]
+struct Flying {
+    from: Vec3,
+    to: Vec3,
+    start: u32,
+}
 
 /// A tree of the grove: species, seed, where it stands (in units of the grove's spacing, x and
 /// z), the frame it starts growing and how many frames it takes. The camera starts on the +z
@@ -294,6 +323,15 @@ struct Capture {
     fire_start: Vec3,
     /// What the chop clip's lumberjack is doing.
     chop: Chop,
+    /// How many of `HARVEST_SHAKES` have been sent.
+    harvest_shaken: usize,
+    /// The apple the harvest clip's picker reaches for: its tree, its key, where it hangs and the
+    /// frame it reached.
+    reach: Option<(Entity, u32, Vec3, u32)>,
+    /// The harvest clip's picked apple: its mesh and material.
+    apple: (Handle<Mesh>, Handle<StandardMaterial>),
+    /// How many apples are in the harvest clip's basket.
+    basketed: u32,
 }
 
 #[derive(Component)]
@@ -301,7 +339,7 @@ struct OrbitCam;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire | --push | --chop] [--gpu]"
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire | --push | --chop | --harvest] [--gpu]"
     );
     std::process::exit(2);
 }
@@ -319,7 +357,7 @@ fn main() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
-            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" | "--push" | "--chop" => {
+            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" | "--push" | "--chop" | "--harvest" => {
                 if clip.is_some() {
                     usage();
                 }
@@ -330,7 +368,8 @@ fn main() {
                     "--fell" => "fell",
                     "--fire" => "fire",
                     "--push" => "push",
-                    _ => "chop",
+                    "--chop" => "chop",
+                    _ => "harvest",
                 });
             }
             "--preset" => {
@@ -366,7 +405,8 @@ fn main() {
         Some("fell") => Scene::Fell,
         Some("fire") => Scene::Fire,
         Some("push") => Scene::Push,
-        Some(_) => Scene::Chop,
+        Some("chop") => Scene::Chop,
+        Some(_) => Scene::Harvest,
         None => {
             let mut params = preset.unwrap_or(TreePreset::Maple).params();
             params.style = style;
@@ -398,7 +438,7 @@ fn main() {
     // A light wind in the shake, fell and push clips, so the knocks, the falls and the walker are
     // what moves.
     .insert_resource(FloraWind {
-        strength: if matches!(scene, Scene::Shake | Scene::Fell | Scene::Push | Scene::Chop) { 0.15 } else { 0.5 },
+        strength: if matches!(scene, Scene::Shake | Scene::Fell | Scene::Push | Scene::Chop | Scene::Harvest) { 0.15 } else { 0.5 },
         direction: wind,
         speed: 1.4,
         ..default()
@@ -436,12 +476,16 @@ fn main() {
         shaken: 0,
         felled: 0,
         chop: Chop::Seek(None),
+        harvest_shaken: 0,
+        reach: None,
+        apple: (Handle::default(), Handle::default()),
+        basketed: 0,
         scorch: Handle::default(),
         fire_start: Vec3::ZERO,
     })
     .insert_resource(UseGpu(gpu))
     .add_systems(Startup, setup)
-    .add_systems(Update, (drive, chop).chain())
+    .add_systems(Update, (drive, chop, harvest).chain())
     .run();
 }
 
@@ -536,6 +580,23 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
             (fit * 0.95, focus)
         }
+        // Seen from +z: the row of apple trees and the picker beside the last.
+        Scene::Harvest => {
+            let (min, mut max) = harvest_row()
+                .iter()
+                .map(|(params, at, ..)| bounds(params, *at))
+                .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+            max.x = max.x.max(PICKER_AT.x + 1.3);
+            let half_width = 0.5 * (max.x - min.x);
+            let focus = Vec3::new(0.5 * (min.x + max.x), 0.45 * max.y, 0.0);
+            let half_height = (max.y - focus.y).max(focus.y);
+            let aspect = size.x as f32 / size.y as f32;
+            let half_h_fov = ((FOV * 0.5).tan() * aspect).atan();
+            let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
+            // The crowns' near halves, the picker and its basket stand nearer the camera than the
+            // row: a wide margin.
+            (fit * 1.35, focus)
+        }
     }
 }
 
@@ -562,6 +623,11 @@ fn push_patch() -> Vec<(TreeParams, Vec3, u32, u32)> {
 /// The chop clip's row of trees, mature, at their places in metres.
 fn chop_row() -> Vec<(TreeParams, Vec3, u32, u32)> {
     CHOP_ROW.iter().map(|&(preset, seed, x)| (TreeParams { seed, ..preset.params() }, Vec3::new(x, 0.0, 0.0), 0, 1)).collect()
+}
+
+/// The harvest clip's apple trees, mature, at their places in metres.
+fn harvest_row() -> Vec<(TreeParams, Vec3, u32, u32)> {
+    HARVEST_ROW.iter().map(|&(seed, x)| (TreeParams { seed, ..TreePreset::Apple.params() }, Vec3::new(x, 0.0, 0.0), 0, 1)).collect()
 }
 
 /// Half the mean crown width of the grove's species: the grid its positions are given in.
@@ -640,6 +706,7 @@ fn setup(
             (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect())
         }
         Scene::Chop => (1.0, chop_row()),
+        Scene::Harvest => (1.0, harvest_row()),
         Scene::Fell => (1.0, fell_grove()),
         Scene::Push => (1.0, push_patch()),
     };
@@ -693,6 +760,23 @@ fn setup(
             Walker,
         ));
     }
+    // The harvest clip's picker: the same stand-in, beyond the right tree, facing it, with a
+    // basket at its feet, and the look of the apples it picks.
+    if matches!(capture.scene, Scene::Harvest) {
+        commands.spawn((
+            Mesh3d(meshes.add(Capsule3d::new(0.3, 1.2))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.15, 0.12), ..default() })),
+            Transform::from_translation(PICKER_AT.extend(0.9).xzy()),
+            Walker,
+        ));
+        commands.spawn((
+            Mesh3d(meshes.add(Cylinder::new(0.26, 0.3))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.45, 0.30, 0.15), ..default() })),
+            Transform::from_translation(BASKET_AT.extend(0.15).xzy()),
+        ));
+        let red = StandardMaterial { base_color: Color::srgb(0.72, 0.08, 0.06), perceptual_roughness: 0.35, ..default() };
+        capture.apple = (meshes.add(Sphere::new(0.05)), materials.add(red));
+    }
     let mut camera = commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),
@@ -722,7 +806,7 @@ fn camera_at(capture: &Capture, frame: u32) -> Transform {
         Scene::Shake | Scene::Fire => orbit(capture, 0.5),
         // From +z, square to the row: the lumberjack works from left to right and each tree
         // falls to the left, across the view.
-        Scene::Chop => {
+        Scene::Chop | Scene::Harvest => {
             let pitch = 10f32.to_radians();
             let dir = Vec3::new(0.0, pitch.sin(), pitch.cos());
             Transform::from_translation(capture.focus + dir * capture.distance).looking_at(capture.focus, Vec3::Y)
@@ -975,6 +1059,74 @@ fn chop(
                 Chop::Seek(Some(tree))
             }
         }
+    };
+}
+
+/// The harvest clip, one step a captured frame: the shake at its frame; then the picker reaches
+/// for the apple on its tree nearest its hand (a yellow line marks it), picks it a few frames later
+/// (`TreeFruit::pick`) and drops it into its basket, and reaches for the next.
+#[allow(clippy::too_many_arguments)]
+fn harvest(
+    mut commands: Commands,
+    mut capture: ResMut<Capture>,
+    mut shakes: ResMut<TreeShakes>,
+    time: Res<Time>,
+    season: Res<FloraSeason>,
+    mut trees: Query<(&GlobalTransform, &mut TreeFruit)>,
+    mut flying: Query<(Entity, &Flying, &mut Transform)>,
+    mut gizmos: Gizmos,
+    mut stepped: Local<Option<u32>>,
+) {
+    if !matches!(capture.scene, Scene::Harvest) {
+        return;
+    }
+    // The picker's hand, at its shoulder on the tree's side.
+    let hand = Vec3::new(PICKER_AT.x - 0.3, PICKER_HAND, PICKER_AT.y);
+    if let Some((_, _, apple, _)) = capture.reach {
+        gizmos.line(hand, apple, Color::srgb(1.0, 0.85, 0.1));
+    }
+    if *stepped == Some(capture.frame) {
+        return;
+    }
+    *stepped = Some(capture.frame);
+    let frame = capture.frame;
+    // Across the view, so the crown swings and the apples fly sideways.
+    while let Some(&(at_frame, tree, strength)) = HARVEST_SHAKES.get(capture.harvest_shaken) {
+        if frame < at_frame {
+            break;
+        }
+        capture.harvest_shaken += 1;
+        let at = capture.trees[tree].xz();
+        shakes.shake(TreeShake { at, radius: 1.5, strength, direction: Vec2::X, duration: 2.5, ..default() }, &time);
+    }
+    // Picked apples arc into the basket and stay there.
+    for (entity, apple, mut transform) in &mut flying {
+        let t = ((frame - apple.start) as f32 / BASKET_FRAMES as f32).min(1.0);
+        transform.translation = apple.from.lerp(apple.to, t) + Vec3::Y * (2.4 * t * (1.0 - t));
+        if t >= 1.0 {
+            commands.entity(entity).remove::<Flying>();
+        }
+    }
+    if frame < PICKER_FROM {
+        return;
+    }
+    let Some(tree) = capture.entities[PICKER_TREE] else { return };
+    let Ok((transform, mut fruit)) = trees.get_mut(tree) else { return };
+    capture.reach = match capture.reach {
+        Some((_, key, from, since)) if frame >= since + PICKER_FRAMES => {
+            if fruit.pick(key) {
+                // A loose heap in the basket.
+                let n = capture.basketed;
+                capture.basketed += 1;
+                let spot = Vec2::from_angle(n as f32 * 2.4) * 0.17 * ((n % 7) as f32 / 7.0).sqrt();
+                let to = Vec3::new(BASKET_AT.x + spot.x, 0.33 + 0.03 * (n / 7) as f32, BASKET_AT.y + spot.y);
+                let (mesh, material) = capture.apple.clone();
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::from_translation(from), Flying { from, to, start: frame }));
+            }
+            None
+        }
+        Some(reach) => Some(reach),
+        None => fruit.nearest(&season, transform, hand, PICKER_REACH).map(|(apple, at)| (tree, apple.key, at, frame)),
     };
 }
 
