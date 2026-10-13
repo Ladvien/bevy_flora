@@ -5,6 +5,63 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.28.0] - 2026-10-13
+
+Before the saw, the axe. A `TreeNotch` carves an axe's wedge out of a standing trunk, deeper with
+each blow, its floor and face showing the end grain; a notched tree is felled at the notch's floor,
+the floor staying on the stump and the face going with the tree. `mesh::cut` now cuts across any
+plane. Nothing that existed changes, but the new API makes this a minor release.
+
+### Added
+
+- **`TreeNotch { direction, height, depth }`**, a component (+x, 0.5 m, 0.25): a wedge out of the
+  trunk on the side `direction` points to, its floor level `height` above the base (with a
+  `FloraGround`, above the uphill side, as `FellTree::cut_height`), its face rising from the floor
+  at 45°, reaching `depth` of the way through the trunk (at most 0.9). Each change of `depth`
+  carves the trunk again on the CPU; removing the component makes it whole. Only the trunk is
+  carved: a limb is its own piece of the wood, its root buried in the trunk, and is left whole
+  however near the notch it passes. The end grain's rings centre on the trunk's pith on both
+  faces. A pooled tree becomes its variant's `ProceduralTree` and a `GpuGrowth` tree moves to the
+  CPU path, as for felling; a notched tree stops growing; with `TreeLod` only its nearest level is
+  notched. In the crate root and the prelude.
+- `FellTree` on a notched tree cuts at the notch's floor whatever `cut_height` says: the stump's
+  face is the whole cut, the falling tree carries the notch's face and the cut behind its back.
+- `mesh::cut`: `Plane` and `cut_plane` (a cut across any plane; `cut` is the level one), `Notch`,
+  `carve_notch` and `fell_notched` (the carving itself, for a mesh of your own), `clip_outline`
+  and `fill` (cut faces of any outline, fanned where a fan holds, else ear-clipped).
+- Examples: `inspect --notch <bearing>,<depth>[,<height>]`; `showcase`'s `X` key, an axe's blow
+  (the fourth fells the tree toward the notch); the fell clip notches the oak with four blows,
+  each shivering its crown, before the saw goes in (`docs/fell.gif`).
+- README: "Notching: `TreeNotch`", with `docs/notch.jpg`.
+
+### Measured
+
+- **Look.** The 424 gallery scenarios render as in 0.27.0 on the CPU and with `--gpu` (a mean
+  difference of 0.000 of 255, no `ERROR`), and so do the growth, grove, seasons, shake, fire and
+  push clips frame for frame; level cuts (felling, bucking) come out vertex for vertex as before.
+  The notch, photographed and zoomed: an oak from a quarter and head on, pine, birch, baobab,
+  spruce, willow, cypress, a Japanese maple, a pooled maple, a deep notch a metre up a spruce,
+  an oak and a pine felled at their notches, and the fell clip's blows frame by frame.
+- **Robustness.** Carved into every preset at 3 seeds, 3 ages, 2 heights and 3 depths (900
+  trees), the trunk stays closed in 879; 12 of the other 21 are the shrub, whose trunk is a
+  0.5 m stub its stems leave from, and the rest a willow, young baobabs and dragon trees, a bonsai
+  and a redwood, left with 1 to 7 open edges (one baobab also with 4 faces wound inward). A carve
+  takes at most 1.7 ms (release, Apple M4 Pro).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.27.0): 1 000
+  individual oaks 24.51 and 24.64 ms (0.27.0: 23.95 and 24.47), 100 000 pooled oaks 7.70 and
+  7.80 ms (7.69 and 7.73): no notch, no cost.
+- **Found and fixed before release.** Each face fanned from its own middle put the end grain's
+  pith and checks in the middle of every notch face, spokes on the slanted one: the rings now
+  centre on the trunk's pith. Lobed cross-sections (a redwood's buttresses, a baobab's root
+  lobes, a deep notch) cross the notch's back more than twice and closed into overlapping faces:
+  the cut's runs are now joined along the back in order, as a polygon cut by a line closes, and a
+  face whose fan would fold is ear-clipped. The floor's ring spanned the point where the face
+  split it (a crack along the back): the wood below is split there too. The wedge cut everything
+  in it, so a deep notch a metre up a spruce took slabs out of its lowest limbs: only the trunk is
+  carved. The trunk was the cut's longest outline and the piece with the most triangles, either
+  of which can be a willow's long hanging twig: it is now the outline round the tree's base and
+  the piece whose cut surrounds the axis.
+
 ## [0.27.0] - 2026-10-13
 
 Undergrowth gives way. A `FoliagePusher` on the player or an NPC pushes the leaves and thin stems
@@ -1722,6 +1779,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.28.0]: https://github.com/Ladvien/bevy_flora/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/Ladvien/bevy_flora/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/Ladvien/bevy_flora/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Ladvien/bevy_flora/compare/v0.24.0...v0.25.0

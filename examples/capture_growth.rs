@@ -40,8 +40,9 @@
 //! `--shake` records it fully grown from a still camera, knocked with `TreeShakes`
 //! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on the birch, then a blast
 //! that swings every tree, each hit knocking leaves off (`FallingLeaves`). `--fell` records a few
-//! grown trees from a still camera while the oak in front is felled (`FellTree`), crashes to the
-//! ground, sheds leaves and leaves its stump (`docs/fell.gif`, encoded like the grove). `--fire`
+//! grown trees from a still camera while the oak in front is notched by four blows of an axe
+//! (`TreeNotch`), felled at the notch (`FellTree`), crashes to the ground, sheds leaves and
+//! leaves its stump (`docs/fell.gif`, encoded like the grove). `--fire`
 //! records the grove at dusk from a still camera while a fire (`FloraFire`) lit on its upwind edge
 //! runs through it, the leaves scorching and burning away and the wood charring, its embers
 //! glowing and then cooling (`docs/fire.gif`, encoded like the grove). Its fire is sped up like
@@ -76,7 +77,8 @@ use bevy::mesh::VertexAttributeValues;
 use bevy::post_process::bloom::Bloom;
 use bevy_flora::{
     FallingLeaves, FellTree, FireSpread, FloraFire, FloraPlugin, FloraSeason, FloraWind, FoliagePusher, GpuGrowth,
-    GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
+    GustFront, ProceduralTree, RenderStyle, TreeAge, TreeNotch, TreeParams, TreePreset, TreeShake, TreeShakes,
+    build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -97,10 +99,14 @@ const FELL_GROVE: [(TreePreset, i32, [f32; 2]); 5] = [
     (TreePreset::Birch, 8, [0.3, -1.4]),
     (TreePreset::Cypress, 2, [-2.3, 1.9]),
 ];
-/// The fell clip's cut: (frame, the tree in `FELL_GROVE`, bearing it falls toward in degrees
-/// from +x toward +z). The camera looks from +x, so the oak falls to the left across open
+/// The fell clip's felling: the tree in `FELL_GROVE`, the bearing it falls toward in degrees from
+/// +x toward +z, the frames of the axe's blows, each cutting its notch (`TreeNotch`) on that side
+/// [`NOTCH_STEP`] deeper and shivering its crown, and the frame the saw goes in (`FellTree`). The
+/// camera looks from +x, so the notch shows in profile and the oak falls to the left across open
 /// ground, square to the view.
-const FELLS: [(u32, usize, f32); 1] = [(24, 0, 90.0)];
+const FELL: (usize, f32, [u32; 4], u32) = (0, 90.0, [6, 14, 22, 30], 40);
+/// How much deeper each blow of the fell clip's axe cuts the notch, a share of the trunk's width.
+const NOTCH_STEP: f32 = 0.08;
 /// The push clip's plants: shrubs (seed and place: x, z, metres from the patch's middle), a row
 /// along the walker's path and a few behind it, none in front to hide it.
 const PUSH_PATCH: [(i32, [f32; 2]); 10] = [
@@ -261,7 +267,7 @@ struct Capture {
     entities: Vec<Option<Entity>>,
     /// How many of `SHAKES` have been sent.
     shaken: usize,
-    /// How many of `FELLS` have been cut.
+    /// How many of the fell clip's blows (`FELL`), then its saw, have landed.
     felled: usize,
     /// The fire clip's patch of ground that scorches.
     scorch: Handle<Mesh>,
@@ -460,14 +466,14 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
                 .iter()
                 .map(|(params, at, ..)| bounds(params, *at))
                 .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
-            for &(_, tree, bearing) in &FELLS {
-                let (params, at, ..) = &placed[tree];
-                let (sin, cos) = bearing.to_radians().sin_cos();
-                let (lo, hi) = bounds(params, Vec3::ZERO);
-                let crown = 0.5 * (hi.x - lo.x).max(hi.z - lo.z);
-                let lying = *at + Vec3::new(cos, 0.0, sin) * (hi.y + 0.5 * crown);
-                (min, max) = (min.min(lying), max.max(lying));
-            }
+            // Where the felled tree will lie.
+            let (tree, bearing, ..) = FELL;
+            let (params, at, ..) = &placed[tree];
+            let (sin, cos) = bearing.to_radians().sin_cos();
+            let (lo, hi) = bounds(params, Vec3::ZERO);
+            let crown = 0.5 * (hi.x - lo.x).max(hi.z - lo.z);
+            let lying = *at + Vec3::new(cos, 0.0, sin) * (hi.y + 0.5 * crown);
+            (min, max) = (min.min(lying), max.max(lying));
             let half_width = 0.55 * (max.z - min.z);
             let focus = Vec3::new(0.5 * (min.x + max.x), 0.42 * max.y, 0.5 * (min.z + max.z));
             let half_height = (max.y - focus.y).max(focus.y);
@@ -745,15 +751,26 @@ fn drive(
         };
         shakes.shake(TreeShake { at, radius, strength, direction, duration, ..default() }, &time);
     }
-    // The fell clip's cuts, each once, at its frame.
-    while let Some(&(at_frame, tree, bearing)) = FELLS.get(capture.felled) {
-        if !matches!(capture.scene, Scene::Fell) || frame < at_frame {
-            break;
-        }
-        capture.felled += 1;
+    // The fell clip's axe, each blow once at its frame, then the saw.
+    if matches!(capture.scene, Scene::Fell) {
+        let (tree, bearing, blows, saw) = FELL;
         let (sin, cos) = bearing.to_radians().sin_cos();
-        if let Some(entity) = capture.entities[tree] {
-            commands.entity(entity).insert(FellTree { direction: Vec2::new(cos, sin), ..default() });
+        let direction = Vec2::new(cos, sin);
+        while capture.felled < blows.len() && frame >= blows[capture.felled] {
+            capture.felled += 1;
+            if let Some(entity) = capture.entities[tree] {
+                let depth = NOTCH_STEP * capture.felled as f32;
+                commands.entity(entity).insert(TreeNotch { direction, depth, ..default() });
+            }
+            // The blow lands on the notch's side and shivers the crown away from it.
+            let knock = TreeShake { at: capture.trees[tree].xz(), radius: 1.0, strength: 1.5, direction: -direction, duration: 1.5, ..default() };
+            shakes.shake(knock, &time);
+        }
+        if capture.felled == blows.len() && frame >= saw {
+            capture.felled += 1;
+            if let Some(entity) = capture.entities[tree] {
+                commands.entity(entity).insert(FellTree { direction, ..default() });
+            }
         }
     }
     // The push clip's walker: across the patch at a steady pace, from its frame to its last.

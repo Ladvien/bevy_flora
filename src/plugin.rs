@@ -57,7 +57,7 @@ use crate::shading::{
     expire_shakes, flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
-use crate::felling::{Felled, TreeLanded, buck_trees, drive_felling, start_felling};
+use crate::felling::{Felled, TreeLanded, buck_trees, carve_notches, drive_felling, start_felling};
 use crate::tree_asset::sync_tree_assets;
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
@@ -242,6 +242,7 @@ impl bevy::app::Plugin for FloraPlugin {
                     rebuild_trees.run_if(flora_decided),
                     rebuild_gpu_trees,
                     update_tree_shapes,
+                    carve_notches,
                     start_felling,
                     drive_felling,
                     buck_trees,

@@ -9,7 +9,7 @@
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
 //!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
-//!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]]
+//!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -37,6 +37,9 @@
 //! `--fell <deg>` cuts the tree half a metre up (`FellTree`) and lets it fall toward that bearing
 //! (degrees from +x toward +z), fast; the photographs are taken once it lies still. `--buck <m>`
 //! then cuts its trunk into logs `m` metres long (`BuckTree`), photographed once they lie there.
+//! `--notch <deg>,<depth>[,<height>]` cuts an axe's notch (`TreeNotch`) into the trunk from that
+//! bearing's side, `depth` of the way through, its floor `height` metres up (0.5 by default); with
+//! `--fell` the tree is then felled at the notch.
 //!
 //! `--slope <deg>` tilts the ground so it falls toward +x and makes it the `FloraGround`: the
 //! tree stands at its footing (`FloraGround::footing`), so the downhill side of its trunk meets
@@ -74,8 +77,8 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
     BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind,
-    FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool,
-    TreePreset, TreeShape, build_pool, build_tree,
+    FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreeNotch,
+    TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -143,6 +146,9 @@ struct Args {
     /// A body pushing foliage aside: where it stands (x, z), its radius and the velocity it walks at
     /// once the tree is ready.
     push: Option<(Vec2, f32, Vec2)>,
+    /// An axe's notch: the bearing of the side it is cut from (degrees from +x toward +z), its
+    /// depth (share of the trunk's width) and the height of its floor.
+    notch: Option<(f32, f32, f32)>,
 }
 
 fn usage() -> ! {
@@ -153,7 +159,7 @@ fn usage() -> ! {
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
-         [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]]"
+         [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]"
     );
     std::process::exit(2);
 }
@@ -195,6 +201,7 @@ fn parse_args() -> Args {
         autumn: None,
         burn: None,
         push: None,
+        notch: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -309,6 +316,14 @@ fn parse_args() -> Args {
                     [x, z] => Some((Vec2::new(x, z), 0.45, Vec2::ZERO)),
                     [x, z, radius] => Some((Vec2::new(x, z), radius, Vec2::ZERO)),
                     [x, z, radius, vx, vz] => Some((Vec2::new(x, z), radius, Vec2::new(vx, vz))),
+                    _ => usage(),
+                };
+            }
+            "--notch" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.notch = match p[..] {
+                    [degrees, depth] => Some((degrees, depth, 0.5)),
+                    [degrees, depth, height] => Some((degrees, depth, height)),
                     _ => usage(),
                 };
             }
@@ -570,10 +585,14 @@ fn setup(
     fell(&mut commands, tree, &shoot.args);
 }
 
-/// With `--fell`: cut the tree and let it fall toward the bearing (degrees from +x toward +z),
-/// fast, and with `--buck` cut its trunk into logs that long; the photographs wait until it
-/// lies still, or its logs do.
+/// With `--notch`: cut an axe's notch on that bearing's side. With `--fell`: cut the tree and let
+/// it fall toward the bearing (degrees from +x toward +z), fast, and with `--buck` cut its trunk
+/// into logs that long; the photographs wait until it lies still, or its logs do.
 fn fell(commands: &mut Commands, tree: Entity, args: &Args) {
+    if let Some((degrees, depth, height)) = args.notch {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        commands.entity(tree).insert(TreeNotch { direction: Vec2::new(cos, sin), depth, height });
+    }
     if let Some(degrees) = args.fell {
         let (sin, cos) = degrees.to_radians().sin_cos();
         commands.entity(tree).insert(FellTree { direction: Vec2::new(cos, sin), speed: 4.0, ..default() });

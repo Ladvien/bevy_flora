@@ -5,7 +5,8 @@
 //! `N` reseed, `Space` toggle growing, `R` restart growth, `M` mature, `G` rebuild,
 //! `U` grow in the vertex shader (`GpuGrowth`) or rebuild on the CPU, `C` show the gameplay shape (`TreeShape`),
 //! `Y` run the year (`FloraSeason`): the leaves turn, fall and come back, `H` hit the tree (`TreeShakes`),
-//! `F` fell it (`FellTree`), then `B` buck it into logs (`BuckTree`); any other key brings a new tree.
+//! `X` an axe's blow (`TreeNotch`; the fourth fells it), `F` fell it (`FellTree`), then `B` buck it into
+//! logs (`BuckTree`); any other key brings a new tree.
 
 use std::f32::consts::PI;
 
@@ -13,7 +14,7 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy_flora::{
     BuckTree, FellTree, Felled, FloraPlugin, FloraSeason, GpuGrowth, Growing, ProceduralTree, TreeAge,
-    TreeGenerated, TreeLog, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
+    TreeGenerated, TreeLog, TreeNotch, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
 };
 
 #[derive(Resource)]
@@ -127,12 +128,13 @@ fn handle_keys(
         Has<GpuGrowth>,
         Has<TreeShape>,
         Option<&Felled>,
+        Option<&TreeNotch>,
     )>,
     camera: Single<&Transform, With<Camera3d>>,
     mut shakes: ResMut<TreeShakes>,
     time: Res<Time>,
 ) {
-    let (entity, mut tree, mut age, growing, gpu, shaped, felled) = tree.into_inner();
+    let (entity, mut tree, mut age, growing, gpu, shaped, felled, notch) = tree.into_inner();
     if let Some(felled) = felled {
         // A felled tree lies as it fell: `B` bucks it into logs once it is still, and any other
         // key brings a new one, standing.
@@ -208,10 +210,23 @@ fn handle_keys(
         let hit = TreeShake { at: Vec2::ZERO, radius: 1.0, strength: 2.0, direction: Vec2::X, ..default() };
         shakes.shake(hit, &time);
     }
+    // Across the view, to the right, so the notch and the fall show in profile.
+    let right = camera.right();
+    let right = Vec2::new(right.x, right.z);
+    if keys.just_pressed(KeyCode::KeyX) {
+        // An axe's blow on the side the tree will fall to: the notch deepens and the crown
+        // shivers; the fourth blow fells it toward the notch.
+        let notch = notch.copied().unwrap_or(TreeNotch { direction: right, depth: 0.0, ..default() });
+        let depth = notch.depth + 0.08;
+        commands.entity(entity).insert(TreeNotch { depth, ..notch });
+        let blow = TreeShake { at: Vec2::ZERO, radius: 1.0, strength: 1.5, direction: -notch.direction, duration: 1.5, ..default() };
+        shakes.shake(blow, &time);
+        if depth >= 0.3 {
+            commands.entity(entity).insert(FellTree { direction: notch.direction, ..default() });
+        }
+    }
     if keys.just_pressed(KeyCode::KeyF) {
-        // Across the view, to the right, so the fall shows in profile.
-        let right = camera.right();
-        commands.entity(entity).insert(FellTree { direction: Vec2::new(right.x, right.z), ..default() });
+        commands.entity(entity).insert(FellTree { direction: right, ..default() });
     }
 }
 
@@ -307,7 +322,7 @@ fn update_hud(
          right-drag: orbit   wheel: zoom\n[ / ]: preset   N: reseed\n\
          Space: toggle growing   R: restart   M: mature   G: rebuild\n\
          U: grow in the vertex shader or rebuild on the CPU   C: show the gameplay shape\n\
-         Y: run the year (or stop it)   H: hit the tree   F: fell it, then B: buck it into logs (any key: a new one)",
+         Y: run the year (or stop it)   H: hit the tree   X: an axe's blow (the fourth fells it)   F: fell it, then B: buck it into logs (any key: a new one)",
         showcase.preset().name(),
         showcase.preset + 1,
         TreePreset::ALL.len(),
