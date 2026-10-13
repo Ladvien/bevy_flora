@@ -12,8 +12,7 @@
 
 use bevy::math::Vec3;
 
-use crate::foliage::{LeafPoint, collect_leaf_points, foliage_mesh_coarse};
-use crate::mesh::MeshData;
+use crate::foliage::{FoliageMeshes, LeafPoint, collect_leaf_points, foliage_meshes_coarse};
 use crate::mesh::branch::{Coarseness, skeleton_mesh_coarse};
 use crate::params::TreeParams;
 use crate::pipeline::{TreeMeshes, build_aged};
@@ -170,9 +169,11 @@ impl Source<'_> {
         let rings = AXIS_POINTS[level as usize];
         let trunk = skeleton_mesh_coarse(&skeleton, &wood_params, Coarseness { sides, rings });
 
+        let crown = self.coarse_leaves(leaf_keep);
         TreeMeshes {
             trunk,
-            foliage: self.coarse_leaves(leaf_keep),
+            foliage: crown.leaves,
+            flowers: crown.flowers,
             skeleton,
             mature_at: self.fine.mature_at,
         }
@@ -182,7 +183,7 @@ impl Source<'_> {
     /// fall short, each as large as the room to the full tree's bounds allows, up
     /// to `sqrt(keep)` times its size: fewer, bigger leaves cover about as much of
     /// the crown.
-    fn coarse_leaves(&self, keep: u32) -> MeshData {
+    fn coarse_leaves(&self, keep: u32) -> FoliageMeshes {
         let keep = keep.max(1) as usize;
         let scale = (keep as f32).sqrt();
         let mut chosen: Vec<bool> = (0..self.points.len()).map(|i| i % keep == 0).collect();
@@ -217,9 +218,9 @@ impl Source<'_> {
             })
             .collect();
         if kept.is_empty() {
-            MeshData::default()
+            FoliageMeshes::default()
         } else {
-            foliage_mesh_coarse(&kept, &self.params.foliage, self.params.style)
+            foliage_meshes_coarse(&kept, &self.params.foliage, self.params.style)
         }
     }
 
@@ -279,6 +280,7 @@ fn bounds(meshes: &TreeMeshes) -> Option<(Vec3, Vec3)> {
         .positions
         .iter()
         .chain(&meshes.foliage.positions)
+        .chain(&meshes.flowers.positions)
         .copied();
     let first = points.next()?;
     Some(points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p))))
@@ -328,7 +330,7 @@ mod tests {
     const SMALL_LEVEL_2_TRIANGLES: usize = 500;
 
     fn triangles(m: &TreeMeshes) -> usize {
-        (m.trunk.indices.len() + m.foliage.indices.len()) / 3
+        (m.trunk.indices.len() + m.foliage.indices.len() + m.flowers.indices.len()) / 3
     }
 
     #[test]
@@ -377,6 +379,8 @@ mod tests {
                 }
                 assert_indices_valid(&lod.trunk, &format!("{name} level {level} wood"));
                 assert_indices_valid(&lod.foliage, &format!("{name} level {level} leaves"));
+                assert_indices_valid(&lod.flowers, &format!("{name} level {level} flowers"));
+                assert_eq!(lod.flowers.is_empty(), params.foliage.blossom.is_none() || lod.foliage.is_empty(), "{name}");
             }
         }
         assert!(problems.is_empty(), "{}", problems.join("\n"));
@@ -384,11 +388,14 @@ mod tests {
 
     #[test]
     fn level_zero_is_build_tree() {
-        let params = TreePreset::Oak.params();
-        let lods = build_lods(&params, f32::INFINITY, &LodSettings::default());
-        let fine = crate::build_tree(&params, f32::INFINITY);
-        assert_eq!(lods[0].trunk, fine.trunk);
-        assert_eq!(lods[0].foliage, fine.foliage);
+        for preset in [TreePreset::Oak, TreePreset::Cherry] {
+            let params = preset.params();
+            let lods = build_lods(&params, f32::INFINITY, &LodSettings::default());
+            let fine = crate::build_tree(&params, f32::INFINITY);
+            assert_eq!(lods[0].trunk, fine.trunk);
+            assert_eq!(lods[0].foliage, fine.foliage);
+            assert_eq!(lods[0].flowers, fine.flowers);
+        }
     }
 
     #[test]

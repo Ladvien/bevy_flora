@@ -83,6 +83,10 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     return out;
 }
 
+// How much of a leafy texel a crown's open flowers cover, on a bare tree: a blossoming crown is
+// a little more open than a leafy one.
+const BLOSSOM_COVER: f32 = 0.8;
+
 @fragment
 fn fragment(in: VertexOutput) -> FragmentOutput {
 @if(VISIBILITY_RANGE_DITHER)
@@ -102,7 +106,21 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     let spread = saturate(max(fwidth(spot.x), fwidth(spot.y)) - 0.5);
     let turned = mix(smoothstep(moment, moment + 0.2, season.x), saturate((season.x - 0.1) / 0.8), spread);
     let turn = turned * leafy;
+    let summer = color;
     color = vec4<f32>(color.rgb * mix(vec3<f32>(1.0), flora.autumn.rgb, turn), color.a * (1.0 - season.y * leafy));
+    // A flowering tree (`FoliageParams::blossom`) wears its flowers in patches as they open, over
+    // its leaves or on the bare crown in early spring; the picture was baked without them.
+    let flower_spot = fract(sin(dot(floor(spot), vec2<f32>(39.346, 11.135))) * 24634.634);
+    let bloomed = mix(step(flower_spot, season.w), season.w, spread) * saturate(baked.a) * flora.blossom.w;
+    var flower_share = 0.0;
+    if bloomed > 0.0 {
+        let leaves = 1.0 - season.y * leafy;
+        flower_share = bloomed / max(bloomed + leaves, 1.0e-3);
+        color = vec4<f32>(
+            mix(color.rgb, summer.rgb * flora.blossom.rgb, flower_share),
+            max(color.a, summer.a * bloomed * BLOSSOM_COVER),
+        );
+    }
     // Alpha is the share of the texel the tree covers, averaged down the mipmaps. With MSAA it
     // becomes the share of the pixel's samples drawn (alpha to coverage), so a far crown is as
     // airy as the leaves it was baked from: the sky shows through its gaps in the same
@@ -152,7 +170,9 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     } else {
         out.color = apply_pbr_lighting(p);
     }
-    let through = color.rgb * flora.tint.rgb * flora.leaf.x * baked.a * (1.0 - snowed);
+    // Light through a flower takes its own colour, as on the meshes (`leaf_transmission`).
+    let tint = mix(flora.tint.rgb, vec3<f32>(1.0), flower_share);
+    let through = color.rgb * tint * flora.leaf.x * baked.a * (1.0 - snowed);
     out.color = vec4<f32>(
         out.color.rgb + view.exposure * transmitted_light(
             p.world_position, N, N, p.V, p.frag_coord, p.flags, baked.b, through, baked.b

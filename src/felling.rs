@@ -299,8 +299,8 @@ pub(crate) fn start_felling(
         };
         let (rest, contact) = rest_angle(&contact_set, hinge, axis, clearance);
         let length = above.kept.positions.iter().map(|p| (*p - hinge).length()).fold(trunk_reach, f32::max) * scale;
-        let crown_radius =
-            built.foliage.positions.iter().map(|p| Vec2::new(p.x, p.z).length()).fold(0.0, f32::max) * scale;
+        let crown = built.foliage.positions.iter().chain(&built.flowers.positions);
+        let crown_radius = crown.map(|p| Vec2::new(p.x, p.z).length()).fold(0.0, f32::max) * scale;
 
         // The tree keeps the wood above the cut and gains its face.
         commands.entity(render.trunk).insert((Mesh3d(meshes.add(above.kept.into_bevy_mesh())), Visibility::Inherited));
@@ -313,8 +313,11 @@ pub(crate) fn start_felling(
         if let (Paint::Flora { .. }, Some(wind)) = (&paint, wind.as_deref()) {
             let calm = TreeParams { wind: crate::WindResponse { sway: 0.0, ..tree.0.wind.clone() }, ..tree.0.clone() };
             still.push((render.trunk, shared.resolve(&mut flora, &textures.wood(&calm), wind)));
-            if let Some((leaves_child, _)) = &render.foliage {
-                still.push((*leaves_child, shared.resolve(&mut flora, &textures.leaves(&calm), wind)));
+            if render.foliage.is_some() {
+                let leaves = shared.resolve(&mut flora, &textures.leaves(&calm), wind);
+                for (child, _) in render.foliage.iter().chain(&render.flowers) {
+                    still.push((*child, leaves.clone()));
+                }
             }
         }
         let speed = fell.speed.max(0.01);

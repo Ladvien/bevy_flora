@@ -9,7 +9,7 @@ import bevy_render::globals::Globals;
 import package::shading::common::{flutter_offset, shake_at, wind_bend};
 
 @if(FLORA_LEAF)
-import package::shading::common::{leaf_has_fallen, FALLEN_LEAF_CLIP};
+import package::shading::common::{leaf_has_fallen, leaf_hidden, FALLEN_LEAF_CLIP};
 
 // The prepass's view bind group (view, globals, previous view); `bevy_pbr` has no WESL
 // declaration of it.
@@ -23,6 +23,19 @@ fn vertex(
 ) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
+    // Hidden leaves and flowers leave early, as in `vertex.wesl`.
+@if(FLORA_LEAF && VERTEX_COLORS) {
+    if leaf_hidden(sway, vertex.color) {
+        out.position = FALLEN_LEAF_CLIP;
+        return out;
+    }
+}
+@if(FLORA_LEAF && !VERTEX_COLORS) {
+    if leaf_has_fallen(sway) {
+        out.position = FALLEN_LEAF_CLIP;
+        return out;
+    }
+}
     let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
 
     let origin = world_from_local[3].xyz;
@@ -40,11 +53,6 @@ fn vertex(
 @if(UNCLIPPED_DEPTH_ORTHO_EMULATION) {
     out.unclipped_depth = out.position.z;
     out.position.z = min(out.position.z, 1.0);
-}
-@if(FLORA_LEAF) {
-    if leaf_has_fallen(sway) {
-        out.position = FALLEN_LEAF_CLIP;
-    }
 }
 
 @if(VERTEX_UVS_A)

@@ -63,7 +63,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.7 ms a frame (1080p, Apple M4 Pro).
+//! 7.5 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -129,10 +129,11 @@
 //! # Seasons
 //!
 //! The [`FloraSeason`] resource turns deciduous trees ([`FoliageParams::autumn`], set on the
-//! oak, willow, birch, bonsai, maple, poplar, baobab and Japanese maple presets) to their autumn
-//! colour, sheds their leaves one leaf at a time (evergreens keep theirs) and lays snow on every
-//! tree, on what faces up. It shares the wind's buffer, so a season that changes every frame
-//! costs no material change and nothing per tree.
+//! oak, willow, birch, bonsai, maple, poplar, baobab, Japanese maple and cherry presets) to their
+//! autumn colour, sheds their leaves one leaf at a time (evergreens keep theirs), lays snow on
+//! every tree, on what faces up, and brings flowering trees ([`FoliageParams::blossom`], the
+//! cherry) into blossom, one flower at a time. It shares the wind's buffer, so a season that
+//! changes every frame costs no material change and nothing per tree.
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;

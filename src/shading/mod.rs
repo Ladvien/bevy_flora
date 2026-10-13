@@ -251,6 +251,12 @@ pub struct FloraUniform {
     ///
     /// [`FoliageParams::autumn`]: crate::FoliageParams::autumn
     pub autumn: Vec4,
+    /// What a flower's colour is multiplied by (linear rgb: the blossom colour over the leaf
+    /// colour, at most 1000 a channel) and 1, for a flowering tree ([`FoliageParams::blossom`]
+    /// is set); zero otherwise and for wood.
+    ///
+    /// [`FoliageParams::blossom`]: crate::FoliageParams::blossom
+    pub blossom: Vec4,
 }
 
 /// Most a channel of the leaf colour may be multiplied by to reach the autumn colour: enough for
@@ -267,8 +273,9 @@ const AUTUMN_RATIO_MAX: f32 = 1000.0;
 /// fall one by one, each at its own moment, in the order they turned; leaf fall also takes the
 /// leaves out of the shadows. For spring, set `autumn` to 0 while the trees are bare (nothing
 /// shows it), then bring `leaf_fall` back to 0 and the leaves return green, as [`Self::of_year`]
-/// does. Snow settles on the surfaces that face up, wood, needles and leaves alike, first on the
-/// flattest and with more of it on steeper ones.
+/// does; flowering trees blossom with `blossom` before that. Snow settles on the surfaces that
+/// face up, wood, needles and leaves alike, first on the flattest and with more of it on steeper
+/// ones.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct FloraSeason {
@@ -278,35 +285,59 @@ pub struct FloraSeason {
     pub leaf_fall: f32,
     /// How much snow lies on the trees, 0 (none) to 1 (every surface that faces up is white).
     pub snow: f32,
+    /// Share of a flowering species' flowers out ([`FoliageParams::blossom`](crate::FoliageParams::blossom)),
+    /// 0 (none) to 1 (in full blossom). They open one by one and fall in the reverse order. At 0
+    /// the plugin does not draw a tree's flowers at all.
+    pub blossom: f32,
 }
 
 impl FloraSeason {
     /// Full summer: green, every leaf on the tree.
-    pub const SUMMER: Self = Self { autumn: 0.0, leaf_fall: 0.0, snow: 0.0 };
+    pub const SUMMER: Self = Self { autumn: 0.0, leaf_fall: 0.0, snow: 0.0, blossom: 0.0 };
     /// Every leaf turned, none fallen.
-    pub const AUTUMN: Self = Self { autumn: 1.0, leaf_fall: 0.0, snow: 0.0 };
+    pub const AUTUMN: Self = Self { autumn: 1.0, leaf_fall: 0.0, snow: 0.0, blossom: 0.0 };
     /// Bare deciduous trees.
-    pub const WINTER: Self = Self { autumn: 1.0, leaf_fall: 1.0, snow: 0.0 };
+    pub const WINTER: Self = Self { autumn: 1.0, leaf_fall: 1.0, snow: 0.0, blossom: 0.0 };
     /// Bare deciduous trees, and snow on every tree.
-    pub const SNOW: Self = Self { autumn: 1.0, leaf_fall: 1.0, snow: 1.0 };
+    pub const SNOW: Self = Self { autumn: 1.0, leaf_fall: 1.0, snow: 1.0, blossom: 0.0 };
+    /// Early spring: flowering trees in full blossom on bare branches, the other deciduous trees
+    /// still bare.
+    pub const BLOSSOM: Self = Self { autumn: 0.0, leaf_fall: 1.0, snow: 0.0, blossom: 1.0 };
 
     /// A season from the year's progress `t` (0..1, wraps): green until 0.55, turning to 0.75,
-    /// falling to 0.9, snow settling from 0.88 to 0.92 and melting from 0.98, and green again
-    /// from 0.05 (leaves are back by then).
+    /// falling to 0.9, snow settling from 0.88 to 0.92 and melting from 0.98 to the year's end,
+    /// blossom opening on the bare branches from 0 to 0.015 and falling from 0.03 to 0.07, and
+    /// the leaves coming back green from 0.02 to 0.07.
     pub fn of_year(t: f32) -> Self {
         let t = t.rem_euclid(1.0);
         let ramp = |a: f32, b: f32| ((t - a) / (b - a)).clamp(0.0, 1.0);
-        if t < 0.05 {
-            // Late winter into spring: the snow is gone and the leaves come back green.
-            Self { autumn: 0.0, leaf_fall: 1.0 - ramp(0.0, 0.05), snow: 0.0 }
+        if t < 0.07 {
+            // Spring: the snow is gone; flowering trees blossom on bare branches, then the
+            // leaves come back green as the flowers fall.
+            Self {
+                autumn: 0.0,
+                leaf_fall: 1.0 - ramp(0.02, 0.07),
+                snow: 0.0,
+                blossom: ramp(0.0, 0.015).min(1.0 - ramp(0.03, 0.07)),
+            }
         } else {
             Self {
                 autumn: ramp(0.55, 0.75),
                 leaf_fall: ramp(0.7, 0.9),
                 snow: ramp(0.88, 0.92) * (1.0 - ramp(0.98, 1.0)),
+                blossom: 0.0,
             }
         }
     }
+}
+
+/// What `from` is multiplied by to become `to`, per linear channel (capped at
+/// [`AUTUMN_RATIO_MAX`]), and 1: a turned leaf's colour, or a flower's, from the leaf colour, so
+/// a scan's own variation stays.
+fn colour_ratio(to: bevy::color::Color, from: bevy::color::Color) -> Vec4 {
+    let (to, from) = (to.to_linear(), from.to_linear());
+    let ratio = |a: f32, b: f32| (a / b.max(1e-4)).clamp(0.0, AUTUMN_RATIO_MAX);
+    Vec4::new(ratio(to.red, from.red), ratio(to.green, from.green), ratio(to.blue, from.blue), 1.0)
 }
 
 impl FloraUniform {
@@ -333,16 +364,8 @@ impl FloraUniform {
             tint: Vec4::new(tint.red, tint.green, tint.blue, 0.0),
             bark: Vec4::ZERO,
             bark_mean: Vec4::ZERO,
-            autumn: match params.foliage.autumn {
-                // What the leaf colour is multiplied by when the leaf has turned: the autumn
-                // colour over the summer one, so a scan's own variation stays.
-                Some(autumn) => {
-                    let (to, from) = (autumn.to_linear(), params.foliage.color.to_linear());
-                    let ratio = |a: f32, b: f32| (a / b.max(1e-4)).clamp(0.0, AUTUMN_RATIO_MAX);
-                    Vec4::new(ratio(to.red, from.red), ratio(to.green, from.green), ratio(to.blue, from.blue), 1.0)
-                }
-                None => Vec4::ZERO,
-            },
+            autumn: params.foliage.autumn.map_or(Vec4::ZERO, |autumn| colour_ratio(autumn, params.foliage.color)),
+            blossom: params.foliage.blossom.map_or(Vec4::ZERO, |blossom| colour_ratio(blossom, params.foliage.color)),
         }
     }
 
@@ -350,7 +373,7 @@ impl FloraUniform {
     /// so changing how leaves are shaded does not touch the wood's material. The wood bends like
     /// the species does.
     pub(crate) fn wood(self) -> Self {
-        Self { leaf: Vec4::ZERO, tint: Vec4::ZERO, autumn: Vec4::ZERO, ..self }
+        Self { leaf: Vec4::ZERO, tint: Vec4::ZERO, autumn: Vec4::ZERO, blossom: Vec4::ZERO, ..self }
     }
 }
 
@@ -361,7 +384,7 @@ pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX;
 /// of the shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend,
 /// flutter, gust strength, turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front`
 /// (origin x, origin z, direction x, direction z), `front_shape` (speed, width, strength, start
-/// time), `season` (autumn, leaf fall, snow, 0), the shakes' header (the render time the last of
+/// time), `season` (autumn, leaf fall, snow, blossom), the shakes' header (the render time the last of
 /// them ends, -1 without any, 0, 0) and two per shake slot, (at x, at z, radius, strength) and
 /// (direction x, direction z, start, duration), all zero for an empty slot. `front` and
 /// `front_shape` are zero without a [`GustFront`], or with one that has no direction. Directions
@@ -385,7 +408,12 @@ pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason, shakes: &Tree
         Vec4::new(wind.gust_frequency.max(0.0), wind.flutter_frequency.max(0.0), 0.0, 0.0),
         front,
         front_shape,
-        Vec4::new(season.autumn.clamp(0.0, 1.0), season.leaf_fall.clamp(0.0, 1.0), season.snow.clamp(0.0, 1.0), 0.0),
+        Vec4::new(
+            season.autumn.clamp(0.0, 1.0),
+            season.leaf_fall.clamp(0.0, 1.0),
+            season.snow.clamp(0.0, 1.0),
+            season.blossom.clamp(0.0, 1.0),
+        ),
     ]);
     // Shakes that cannot move anything are left out, and the header says when the last one ends,
     // so the shaders skip them all, every vertex, once it has.
@@ -590,6 +618,10 @@ impl Surface {
             uniform.leaf.z = 0.0;
         }
         let color = leaf_scan.as_ref().map_or(params.foliage.color, |scan| scan.base_color(params.foliage.color));
+        // Flowers wear no scan: their colour is the material's base colour times this ratio.
+        if let Some(blossom) = params.foliage.blossom {
+            uniform.blossom = colour_ratio(blossom, color);
+        }
         Self { color, uniform, leaf: true, style: params.style, bark: None, leaf_scan, venation }
     }
 
@@ -838,6 +870,7 @@ mod tests {
         let steps = 2000;
         let mut last = FloraSeason::of_year(0.0);
         let mut snowed = false;
+        let mut blossomed = 0.0f32;
         for i in 1..=steps {
             let now = FloraSeason::of_year(i as f32 / steps as f32);
             // The colour only goes back to green while the trees are bare, so no turned leaf
@@ -860,9 +893,20 @@ mod tests {
                 snowed = true;
             }
             assert!((now.snow - last.snow).abs() < 0.05, "snow jumped at step {i}");
+            // Flowering trees blossom on bare branches once the snow has gone, and the flowers
+            // open and fall over many steps, not at once.
+            if now.blossom > 0.0 {
+                assert!(now.snow == 0.0 && now.autumn == 0.0, "blossom in snow or autumn at step {i}: {now:?}");
+                blossomed = blossomed.max(now.blossom);
+            }
+            if now.blossom == 1.0 {
+                assert!(now.leaf_fall > 0.5, "full blossom on a tree in leaf at step {i}: {now:?}");
+            }
+            assert!((now.blossom - last.blossom).abs() < 0.05, "blossom jumped at step {i}");
             last = now;
         }
         assert!(snowed, "a year without snow");
+        assert_eq!(blossomed, 1.0, "a year without full blossom");
     }
 
     #[test]
@@ -880,13 +924,13 @@ mod tests {
             gust: None,
         };
         let [wind, motion, rate, front, front_shape, season, ..] =
-            wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0, snow: 3.0 }, &TreeShakes::default());
+            wind_vectors(&gale, &FloraSeason { autumn: 2.0, leaf_fall: -1.0, snow: 3.0, blossom: 4.0 }, &TreeShakes::default());
         // Direction normalised, a negative speed stopped, strength not capped, the rest clamped.
         assert_eq!(wind, Vec4::new(0.0, -1.0, 7.0, 0.0));
         assert_eq!(motion, Vec4::new(3.0, 2.0, 1.0, 0.0));
         assert_eq!(rate, Vec4::new(0.5, 4.0, 0.0, 0.0));
         assert_eq!((front, front_shape), (Vec4::ZERO, Vec4::ZERO));
-        assert_eq!(season, Vec4::new(1.0, 0.0, 1.0, 0.0), "the season is clamped to 0..1");
+        assert_eq!(season, Vec4::new(1.0, 0.0, 1.0, 1.0), "the season is clamped to 0..1");
         let (calm, still) = (FloraSeason::default(), TreeShakes::default());
         assert_ne!(
             wind_vectors(&FloraWind { strength: 0.0, ..gale }, &calm, &still),

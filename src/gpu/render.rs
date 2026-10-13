@@ -14,8 +14,8 @@ use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
 use crate::felling::Felled;
 use crate::params::TreeParams;
 use crate::plugin::{
-    Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh, build_in_batches,
-    replace_mesh,
+    FLOWERS_SPAWN, Paint, ProceduralTree, TreeAge, TreeFoliageMesh, TreeGenerated, TreeRender, TreeTrunkMesh,
+    build_in_batches, replace_mesh, sync_leaf_child,
 };
 use crate::shading::{FloraWindBuffer, Surface, TextureLibrary};
 use crate::skeleton::generate_skeleton;
@@ -79,7 +79,7 @@ pub(crate) fn sync_growth_mode(
         let wanted = gpu && support.0;
         if wanted != matches!(render.paint, Paint::Growth(_)) {
             commands.entity(render.trunk).despawn();
-            if let Some((child, _)) = &render.foliage {
+            for (child, _) in render.foliage.iter().chain(&render.flowers) {
                 commands.entity(*child).despawn();
             }
             commands.entity(entity).remove::<TreeRender>();
@@ -126,6 +126,18 @@ fn sync_growth(materials: &mut Assets<GrowthMaterial>, handle: &Handle<GrowthMat
         material.extension.venation = surface.venation.clone();
         material.extension.style = surface.style;
     }
+}
+
+/// Spawn a GPU-grown tree's leaf child (`marker` tells which: the leaves or the flowers) with
+/// `mesh` and the leaf material.
+fn spawn_growth_leaf(
+    commands: &mut Commands,
+    mesh: Handle<Mesh>,
+    material: &Handle<GrowthMaterial>,
+    marker: impl Bundle,
+    tree: Entity,
+) -> Entity {
+    commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), marker, ChildOf(tree))).id()
 }
 
 /// Build (or bring up to date) the render state of trees that grow on the GPU.
@@ -183,10 +195,10 @@ pub(crate) fn rebuild_gpu_trees(
         let full = generate_skeleton(&job.params);
         let mut data = build_growth_data(&full, &job.params);
         let state = std::mem::take(&mut data.state);
-        let (wood, leaves) = data.into_meshes();
-        (job.entity, job.age, full, state, wood, leaves)
+        let (wood, leaves, flowers) = data.into_meshes();
+        (job.entity, job.age, full, state, wood, leaves, flowers)
     };
-    build_in_batches(jobs, true, build, |(entity, age, full, state, wood, leaves)| {
+    build_in_batches(jobs, true, build, |(entity, age, full, state, wood, leaves, flowers)| {
         let Ok((_, tree, _, mut render, _)) = trees.get_mut(entity) else { return };
         let params = &tree.0;
         let progress;
@@ -203,28 +215,13 @@ pub(crate) fn rebuild_gpu_trees(
                 }
                 sync_growth(&mut materials, &paint.trunk, &textures.wood(params));
                 sync_growth(&mut materials, &paint.foliage, &textures.leaves(params));
-                match (&mut render.foliage, leaves) {
-                    (Some((child, handle)), Some(leaves)) => {
-                        replace_mesh(&mut commands, &mut meshes, *child, handle, leaves);
-                    }
-                    (None, Some(leaves)) => {
-                        let handle = meshes.add(leaves);
-                        let child = commands
-                            .spawn((
-                                Mesh3d(handle.clone()),
-                                MeshMaterial3d(paint.foliage.clone()),
-                                TreeFoliageMesh,
-                                ChildOf(entity),
-                            ))
-                            .id();
-                        render.foliage = Some((child, handle));
-                    }
-                    (Some((child, _)), None) => {
-                        commands.entity(*child).despawn();
-                        render.foliage = None;
-                    }
-                    (None, None) => {}
-                }
+                let material = &paint.foliage;
+                sync_leaf_child(&mut commands, &mut meshes, &mut render.foliage, leaves, |commands, mesh| {
+                    spawn_growth_leaf(commands, mesh, material, TreeFoliageMesh, entity)
+                });
+                sync_leaf_child(&mut commands, &mut meshes, &mut render.flowers, flowers, |commands, mesh| {
+                    spawn_growth_leaf(commands, mesh, material, FLOWERS_SPAWN, entity)
+                });
             }
             None => {
                 let mut state = state;
@@ -243,17 +240,13 @@ pub(crate) fn rebuild_gpu_trees(
                         ChildOf(entity),
                     ))
                     .id();
-                let foliage = leaves.map(|leaves| {
-                    let handle = meshes.add(leaves);
-                    let child = commands
-                        .spawn((
-                            Mesh3d(handle.clone()),
-                            MeshMaterial3d(foliage_material.clone()),
-                            TreeFoliageMesh,
-                            ChildOf(entity),
-                        ))
-                        .id();
-                    (child, handle)
+                let mut foliage = None;
+                sync_leaf_child(&mut commands, &mut meshes, &mut foliage, leaves, |commands, mesh| {
+                    spawn_growth_leaf(commands, mesh, &foliage_material, TreeFoliageMesh, entity)
+                });
+                let mut flowers_child = None;
+                sync_leaf_child(&mut commands, &mut meshes, &mut flowers_child, flowers, |commands, mesh| {
+                    spawn_growth_leaf(commands, mesh, &foliage_material, FLOWERS_SPAWN, entity)
                 });
                 commands.entity(entity).insert(TreeRender {
                     trunk,
@@ -265,6 +258,7 @@ pub(crate) fn rebuild_gpu_trees(
                         state,
                     }),
                     foliage,
+                    flowers: flowers_child,
                     mature_at: full.mature_at(&params.growth),
                     full,
                 });

@@ -325,108 +325,148 @@ pub fn foliage_mesh(points: &[LeafPoint], foliage: &FoliageParams) -> MeshData {
     foliage_mesh_styled(points, foliage, RenderStyle::Natural)
 }
 
-/// Geometry for all `points` in `foliage.style`.
+/// Geometry for all `points` in `foliage.style`: the leaves and, for a flowering tree
+/// ([`FoliageParams::blossom`]), one flower per leaf after them, in one mesh.
+/// [`build_tree`](crate::build_tree) keeps the two apart ([`TreeMeshes::flowers`](crate::TreeMeshes::flowers)).
 ///
 /// Each leaf gets a vertex colour (its tint scaled by
-/// [`FoliageParams::color_variation`], its hue by [`FoliageParams::hue_variation`]), and the
-/// leaf shader's inputs are baked in: `uv1.x` flags the upper side of each card, `uv1.y` is the
-/// crown visibility ([`FoliageParams::occlusion`]) and `sway` is the flutter vector. Every
-/// normal is bent toward pointing out of the crown by [`FoliageParams::normal_bend`] in the
-/// natural style; in the painterly and toon styles every leaf takes the normal pointing out of
-/// its clump's centre instead (see [`RenderStyle::Painterly`]).
+/// [`FoliageParams::color_variation`], its hue by [`FoliageParams::hue_variation`]; a flower's has
+/// alpha 0, which is how the shaders tell it), and the leaf shader's inputs are baked in: `uv1.x`
+/// flags the upper side of each card, `uv1.y` is the crown visibility
+/// ([`FoliageParams::occlusion`]) and `sway` is the flutter vector. Every normal is bent toward
+/// pointing out of the crown by [`FoliageParams::normal_bend`] in the natural style; in the
+/// painterly and toon styles every leaf takes the normal pointing out of its clump's centre
+/// instead (see [`RenderStyle::Painterly`]).
 pub fn foliage_mesh_styled(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle) -> MeshData {
-    foliage_mesh_with(points, foliage, style, None)
+    foliage_meshes(points, foliage, style).merged()
 }
 
-/// [`foliage_mesh_styled`] that also records, when `firsts` is given, the index of
-/// each leaf's first vertex (one entry per point, in order).
-pub(crate) fn foliage_mesh_with(
-    points: &[LeafPoint],
-    foliage: &FoliageParams,
-    style: RenderStyle,
-    firsts: Option<&mut Vec<u32>>,
-) -> MeshData {
-    build_foliage(points, foliage, style, firsts, false)
+/// A crown's leaf cards and, for a flowering tree ([`FoliageParams::blossom`]), its flowers, one
+/// per leaf, as two meshes: the plugin draws the flowers apart so that out of season they cost
+/// nothing.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FoliageMeshes {
+    pub(crate) leaves: MeshData,
+    /// Empty for a tree without flowers.
+    pub(crate) flowers: MeshData,
+    /// Each point's first vertex in `leaves` and in `flowers` (one entry per point, in order;
+    /// none in `flowers` for a tree without flowers).
+    pub(crate) firsts: [Vec<u32>; 2],
 }
 
-/// [`foliage_mesh_styled`] for the coarse levels of detail: cards cut to a scanned leaf use its
-/// coarse outline (6 to 10 points), so a distant leaf costs about what a procedural one does.
-pub(crate) fn foliage_mesh_coarse(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle) -> MeshData {
-    build_foliage(points, foliage, style, None, true)
+impl FoliageMeshes {
+    /// The leaves with the flowers after them.
+    pub(crate) fn merged(mut self) -> MeshData {
+        self.leaves.extend(&self.flowers);
+        self.leaves
+    }
 }
 
-fn build_foliage(
-    points: &[LeafPoint],
-    foliage: &FoliageParams,
-    style: RenderStyle,
-    mut firsts: Option<&mut Vec<u32>>,
-    coarse: bool,
-) -> MeshData {
-    let mut mesh = MeshData::default();
+/// The leaves and the flowers of `points`, apart: see [`foliage_mesh_styled`].
+pub(crate) fn foliage_meshes(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle) -> FoliageMeshes {
+    build_foliage(points, foliage, style, false)
+}
+
+/// [`foliage_meshes`] for the coarse levels of detail: cards cut to a scanned leaf use its
+/// coarse outline (6 to 10 points), so a distant leaf costs about what a procedural one does, and
+/// flowers are simpler ([`PETAL_COARSE`]).
+pub(crate) fn foliage_meshes_coarse(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle) -> FoliageMeshes {
+    build_foliage(points, foliage, style, true)
+}
+
+fn build_foliage(points: &[LeafPoint], foliage: &FoliageParams, style: RenderStyle, coarse: bool) -> FoliageMeshes {
+    let mut out = FoliageMeshes::default();
     if points.is_empty() {
-        return mesh;
+        return out;
     }
     let variation = foliage.color_variation.clamp(0.0, 0.5);
     let hue_span = foliage.hue_variation.clamp(0.0, 0.5);
-    let mut ranges = Vec::with_capacity(points.len());
+    let flowering = foliage.blossom.is_some();
+    let rigid = foliage.style == LeafStyle::ClusterSphere;
+    // Each point's vertices, in the leaves and in the flowers.
+    let mut ranges = [Vec::with_capacity(points.len()), Vec::new()];
     for point in points {
-        let first = mesh.positions.len();
-        if let Some(firsts) = firsts.as_deref_mut() {
-            firsts.push(first as u32);
-        }
+        let FoliageMeshes { leaves, flowers, firsts } = &mut out;
+        let first = leaves.positions.len();
+        firsts[0].push(first as u32);
         let card = scanned_card(foliage, point, coarse);
         match foliage.style {
-            LeafStyle::CrossedPlanes => crossed_planes(&mut mesh, point, card.as_ref()),
-            LeafStyle::SingleQuad => single_quad(&mut mesh, point, card.as_ref()),
-            LeafStyle::ClusterSphere => cluster_sphere(&mut mesh, point),
-            LeafStyle::StarBurst => star_burst(&mut mesh, point, card.as_ref()),
-            LeafStyle::NeedleCluster => needle_cluster(&mut mesh, point),
+            LeafStyle::CrossedPlanes => crossed_planes(leaves, point, card.as_ref()),
+            LeafStyle::SingleQuad => single_quad(leaves, point, card.as_ref()),
+            LeafStyle::ClusterSphere => cluster_sphere(leaves, point),
+            LeafStyle::StarBurst => star_burst(leaves, point, card.as_ref()),
+            LeafStyle::NeedleCluster => needle_cluster(leaves, point),
         }
-        let end = mesh.positions.len();
-        ranges.push((first, end));
-
-        // Normals are still the cards' own here, which is what tells the sides apart.
         let factor = 1.0 + point.tint * variation;
         let hue = point.hue * hue_span;
-        mesh.colors.resize(
-            end,
-            Vec4::new(
-                factor * (1.0 + 0.6 * hue),
-                factor * (1.0 + 0.1 * hue),
-                factor * (1.0 - 0.6 * hue),
-                1.0,
-            ),
-        );
-        mesh.uv1.extend(
-            mesh.normals[first..end]
-                .iter()
-                .map(|&n| Vec2::new(if is_upper(n) { 1.0 } else { 0.0 }, 1.0)),
-        );
+        let colour = Vec4::new(factor * (1.0 + 0.6 * hue), factor * (1.0 + 0.1 * hue), factor * (1.0 - 0.6 * hue), 1.0);
+        leaves.colors.resize(leaves.positions.len(), colour);
+        bake_leaf_inputs(leaves, point, first, rigid);
+        ranges[0].push((first, leaves.positions.len()));
 
-        // One flutter direction and phase per leaf; both faces and both crossed cards share them.
-        // The phase also picks the moment the leaf turns and falls in autumn (`FloraSeason`), so it
-        // hashes the leaf's own draws, which never change as the tree grows, not its position,
-        // which does: a growing leaf keeps its phase, the same as on the mature mesh `GpuGrowth`
-        // shrinks and on the levels of detail.
-        let (_, _, forward) = build_basis(point.direction, point.rotation);
-        let phase = leaf_phase(point);
-        let rigid = foliage.style == LeafStyle::ClusterSphere;
-        for &vertex in &mesh.positions[first..end] {
-            let lever = if rigid { point.size * 0.4 } else { (vertex - point.position).length() };
-            mesh.sway.push((forward * lever).extend(phase));
+        // A flowering tree's flower, at the leaf's stem, in the leaf's colour and variation.
+        if flowering {
+            let first = flowers.positions.len();
+            firsts[1].push(first as u32);
+            let side = flower(flowers, point, coarse);
+            // A flower's alpha is 0, which the shaders tell it by; its centre is a little darker.
+            for k in first..flowers.positions.len() {
+                let shade = if (k - first) % side == 0 { FLOWER_CENTRE } else { 1.0 };
+                flowers.colors.push((colour.truncate() * shade).extend(0.0));
+            }
+            bake_leaf_inputs(flowers, point, first, rigid);
+            ranges[1].push((first, flowers.positions.len()));
         }
     }
 
     let center = points.iter().map(|p| p.position).sum::<Vec3>() / points.len() as f32;
+    let [leaf_ranges, flower_ranges] = &ranges;
+    shade_crown(&mut out.leaves, points, leaf_ranges, center, foliage, style);
+    shade_crown(&mut out.flowers, points, flower_ranges, center, foliage, style);
+    out
+}
 
-    // Leaves deep in the crown see less sky.
+/// The leaf shader's per-vertex inputs for the vertices of `point` from `first` on: which side of
+/// the card (`uv1.x`; the crown visibility, `uv1.y`, is set by [`shade_crown`]) and the flutter.
+fn bake_leaf_inputs(mesh: &mut MeshData, point: &LeafPoint, first: usize, rigid: bool) {
+    // Normals are still the cards' own here, which is what tells the sides apart.
+    let MeshData { positions, normals, uv1, sway, .. } = mesh;
+    uv1.extend(normals[first..].iter().map(|&n| Vec2::new(if is_upper(n) { 1.0 } else { 0.0 }, 1.0)));
+
+    // One flutter direction and phase per leaf; both faces, both crossed cards and its flower
+    // share them. The phase also picks the moment the leaf turns and falls in autumn and its
+    // flower opens in spring (`FloraSeason`), so it hashes the leaf's own draws, which never
+    // change as the tree grows, not its position, which does: a growing leaf keeps its phase, the
+    // same as on the mature mesh `GpuGrowth` shrinks and on the levels of detail.
+    let (_, _, forward) = build_basis(point.direction, point.rotation);
+    let phase = leaf_phase(point);
+    for &vertex in &positions[first..] {
+        let lever = if rigid { point.size * 0.4 } else { (vertex - point.position).length() };
+        sway.push((forward * lever).extend(phase));
+    }
+}
+
+/// Crown-wide shading baked into `mesh`, whose vertices `ranges` assigns to `points`: leaves deep
+/// in the crown see less sky, and normals point out of the crown (natural) or out of the leaf's
+/// clump (painterly, toon).
+fn shade_crown(
+    mesh: &mut MeshData,
+    points: &[LeafPoint],
+    ranges: &[(usize, usize)],
+    center: Vec3,
+    foliage: &FoliageParams,
+    style: RenderStyle,
+) {
+    if mesh.is_empty() {
+        return;
+    }
     if points.len() >= 2 {
         let occlusion = foliage.occlusion.clamp(0.0, 1.0);
         let extent = points
             .iter()
             .fold(Vec3::ZERO, |m, p| m.max((p.position - center).abs()))
             .max(Vec3::splat(1e-3));
-        for (point, &(first, end)) in points.iter().zip(&ranges) {
+        for (point, &(first, end)) in points.iter().zip(ranges) {
             let rel = (point.position - center) / extent;
             let d = rel.length().min(1.0);
             let up = rel.y.clamp(-1.0, 1.0);
@@ -456,7 +496,7 @@ fn build_foliage(
             entry.0 += point.position;
             entry.1 += 1.0;
         }
-        for (point, &(first, end)) in points.iter().zip(&ranges) {
+        for (point, &(first, end)) in points.iter().zip(ranges) {
             let (sum, count) = sums[&point.clump];
             let clump_center = sum / count;
             for k in first..end {
@@ -464,7 +504,6 @@ fn build_foliage(
             }
         }
     }
-    mesh
 }
 
 /// Two leaf cards at 90° sharing `up`. Their bases meet at the leaf point and
@@ -483,6 +522,53 @@ fn single_quad(mesh: &mut MeshData, point: &LeafPoint, card: Option<&Card>) {
     let half = point.size * 0.5;
     let (right, up, _) = build_basis(point.direction, point.rotation);
     add_double_sided_leaf(mesh, point.position + up * half, right * half, up * half, card);
+}
+
+/// A flower's width as a share of its leaf's length: a card stands for a little cluster of
+/// blossom.
+const FLOWER_SIZE: f32 = 0.8;
+/// How much darker a flower's centre is than its petals.
+const FLOWER_CENTRE: f32 = 0.8;
+/// One petal's outline, from its left side to the gap before the next petal: (angle from the
+/// petal's middle, in degrees; reach, a share of the flower's radius). A rounded petal with a
+/// notched tip, as a cherry's; the coarse levels of detail take its tip and the gap alone.
+const PETAL: [(f32, f32); 6] = [(-26.0, 0.78), (-12.0, 0.99), (0.0, 0.88), (12.0, 0.99), (26.0, 0.78), (36.0, 0.42)];
+const PETAL_COARSE: [(f32, f32); 2] = [(0.0, 0.95), (36.0, 0.45)];
+
+/// A five-petalled flower at the leaf's stem, [`FLOWER_SIZE`] of the leaf's length across,
+/// facing out along the leaf and up: a fan over the five petals' outlines ([`PETAL`], or
+/// [`PETAL_COARSE`] for a coarse level), both sides. Its centre is the first vertex of each side;
+/// returns the vertices a side has.
+fn flower(mesh: &mut MeshData, point: &LeafPoint, coarse: bool) -> usize {
+    let petal: &[(f32, f32)] = if coarse { &PETAL_COARSE } else { &PETAL };
+    let radius = point.size * FLOWER_SIZE * 0.5;
+    let (_, up, _) = build_basis(point.direction, point.rotation);
+    let facing = (up + Vec3::Y * 0.7).normalize_or(Vec3::Y);
+    let a = facing.any_orthogonal_vector().normalize();
+    let b = facing.cross(a);
+    let centre = point.position + up * radius * 0.6;
+    let n = 5 * petal.len() as u32;
+    for (normal, front) in [(facing, true), (-facing, false)] {
+        let base = mesh.positions.len() as u32;
+        mesh.positions.push(centre);
+        mesh.normals.push(normal);
+        mesh.uvs.push(Vec2::splat(0.5));
+        for k in 0..5 {
+            let middle = point.rotation + k as f32 * TAU / 5.0;
+            for &(angle, reach) in petal {
+                let (sin, cos) = (middle + angle.to_radians()).sin_cos();
+                mesh.positions.push(centre + (a * cos + b * sin) * radius * reach);
+                mesh.normals.push(normal);
+                mesh.uvs.push(Vec2::new(0.5 + 0.5 * cos * reach, 0.5 + 0.5 * sin * reach));
+            }
+        }
+        // Counter-clockwise seen from `facing` (a x b = facing) is the front.
+        for k in 0..n {
+            let (i, j) = (base + 1 + k, base + 1 + (k + 1) % n);
+            mesh.indices.extend_from_slice(&if front { [base, i, j] } else { [base, j, i] });
+        }
+    }
+    n as usize + 1
 }
 
 /// Octahedron.
@@ -760,9 +846,9 @@ mod tests {
     /// Per leaf, the number of vertices its cards have, of a mesh built with `foliage`.
     #[cfg(feature = "textures")]
     fn vertices_per_leaf(points: &[LeafPoint], foliage: &FoliageParams) -> Vec<usize> {
-        let mut firsts = Vec::new();
-        let mesh = foliage_mesh_with(points, foliage, RenderStyle::Natural, Some(&mut firsts));
-        let ends = firsts.iter().skip(1).copied().chain([mesh.positions.len() as u32]);
+        let built = foliage_meshes(points, foliage, RenderStyle::Natural);
+        let firsts = &built.firsts[0];
+        let ends = firsts.iter().skip(1).copied().chain([built.leaves.positions.len() as u32]);
         firsts.iter().zip(ends).map(|(&a, b)| (b - a) as usize).collect()
     }
 
@@ -820,8 +906,8 @@ mod tests {
         let young = collect_leaf_points(&skeleton, &params.foliage, &params.growth, &params.trunk, params.seed);
         assert!(!young.is_empty() && young.len() < mature.len());
         let phases = |points: &[LeafPoint]| {
-            let mut firsts = Vec::new();
-            let mesh = foliage_mesh_with(points, &params.foliage, RenderStyle::Natural, Some(&mut firsts));
+            let built = foliage_meshes(points, &params.foliage, RenderStyle::Natural);
+            let (mesh, firsts) = (built.leaves, built.firsts[0].clone());
             let key = |p: &LeafPoint| (p.tint.to_bits(), p.hue.to_bits());
             points
                 .iter()
@@ -933,6 +1019,33 @@ mod tests {
     }
 
     #[test]
+    fn a_flowering_tree_has_a_flower_per_leaf_in_a_mesh_of_its_own() {
+        let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
+        let plain = foliage_meshes(&points, &params.foliage, RenderStyle::Natural);
+        assert!(plain.flowers.is_empty() && plain.firsts[1].is_empty(), "a tree without blossom has flowers");
+        let flowering = FoliageParams { blossom: Some(bevy::color::Color::srgb(1.0, 0.8, 0.9)), ..params.foliage.clone() };
+        let built = foliage_meshes(&points, &flowering, RenderStyle::Natural);
+        // The leaves are the same with or without flowers, and opaque.
+        assert_eq!(built.leaves, plain.leaves);
+        assert!(built.leaves.colors.iter().all(|c| c.w == 1.0));
+        assert_indices_valid(&built.flowers, "flowering oak");
+        let flower = 2 * (5 * PETAL.len() + 1);
+        assert_eq!(built.flowers.positions.len(), points.len() * flower);
+        assert_eq!(built.firsts[1].len(), points.len());
+        assert!(built.flowers.colors.iter().all(|c| c.w == 0.0), "a flower is flagged by its alpha");
+        for (p, (&leaf, &first)) in built.firsts[0].iter().zip(&built.firsts[1]).enumerate() {
+            assert_eq!(first as usize, p * flower);
+            // A flower opens, sways and grows with its leaf: it shares the leaf's phase.
+            let phase = built.leaves.sway[leaf as usize].w;
+            assert!(built.flowers.sway[first as usize..first as usize + flower].iter().all(|s| s.w == phase));
+        }
+        // In one mesh, the flowers come after all the leaves.
+        let merged = foliage_mesh(&points, &flowering);
+        assert_eq!(merged.positions.len(), built.leaves.positions.len() + built.flowers.positions.len());
+        assert_eq!(merged.positions[..built.leaves.positions.len()], built.leaves.positions[..]);
+    }
+
+    #[test]
     fn bent_normals_point_out_of_the_crown() {
         let (params, points) = oak_leaf_points(FoliagePlacement::AllBranches, f32::INFINITY);
         assert!(!points.is_empty());
@@ -962,9 +1075,9 @@ mod tests {
         }
         assert!(sums.len() > 3, "an oak has several clumps, found {}", sums.len());
 
-        let mut firsts = Vec::new();
-        let painted = foliage_mesh_with(&points, &params.foliage, RenderStyle::Painterly, Some(&mut firsts));
-        assert_indices_valid(&painted, "painterly oak");
+        let built = foliage_meshes(&points, &params.foliage, RenderStyle::Painterly);
+        let (painted, firsts) = (&built.leaves, &built.firsts[0]);
+        assert_indices_valid(painted, "painterly oak");
         for (i, point) in points.iter().enumerate() {
             let end = firsts.get(i + 1).map_or(painted.positions.len(), |&n| n as usize);
             let (sum, count) = sums[&point.clump];

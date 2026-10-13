@@ -34,8 +34,14 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     out.world_normal = vertex.normal;
 @if(VERTEX_UVS_B)
     out.uv_b = vertex.uv_b;
-@if(VERTEX_COLORS)
+@if(VERTEX_COLORS) {
     out.color = vertex.color;
+    // Flowers (colour alpha 0) are left out of the picture, which is summer's; the impostor
+    // paints its blossom over it in season.
+    if vertex.color.a < 0.5 {
+        out.position = vec4<f32>(2.0, 2.0, 0.5, 1.0);
+    }
+}
     return out;
 }
 

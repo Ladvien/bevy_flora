@@ -403,6 +403,16 @@ pub struct FoliageParams {
     /// moment, and drop as [`FloraSeason::leaf_fall`](crate::FloraSeason::leaf_fall) rises, in the
     /// order they turned. Drawn by the flora shaders; plain materials ignore it.
     pub autumn: Option<Color>,
+    /// The colour of the tree's flowers, or `None` for a tree without them. With a colour, every
+    /// leaf has a five-petalled flower at its stem that opens as
+    /// [`FloraSeason::blossom`](crate::FloraSeason::blossom) rises, each at its own moment, and
+    /// falls as it drops. The flowers are a mesh of their own
+    /// ([`TreeMeshes::flowers`](crate::TreeMeshes::flowers)) that the plugin does not draw while
+    /// the blossom is 0, so out of season a tree drawn as a `ProceduralTree` costs what it would
+    /// without them; a pool keeps them in its leaf meshes, where the shaders hide them. Drawn by
+    /// the flora shaders: with plain materials every flower is out while the blossom is above 0
+    /// (a pool's all year).
+    pub blossom: Option<Color>,
 }
 
 impl Default for FoliageParams {
@@ -429,6 +439,7 @@ impl Default for FoliageParams {
             shading: LeafShading::default(),
             scan: None,
             autumn: None,
+            blossom: None,
         }
     }
 }

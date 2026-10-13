@@ -120,7 +120,8 @@ pub enum PoolMaterials {
 pub struct PoolVariant {
     /// The wood at levels 0 (finest), 1 and 2.
     pub lods: [Handle<Mesh>; 3],
-    /// The leaves at levels 0, 1 and 2; `None` for a tree without leaves.
+    /// The leaves at levels 0, 1 and 2, with a flowering tree's flowers after them
+    /// ([`TreeMeshes::flowers`]); `None` for a tree without leaves.
     pub leaves: [Option<Handle<Mesh>>; 3],
     /// Bounds of wood and leaves at each level.
     pub bounds: [Aabb; 3],
@@ -150,7 +151,7 @@ pub struct PoolVariant {
 ///
 /// The children are drawn by distance (see [`LodDistances`]). The impostor casts
 /// no shadow; the three levels of detail do. (In the `forest` example, 100 000
-/// trees with a shadow-casting sun cost 7.7 ms a frame on an Apple M4 Pro, leaf shading and
+/// trees with a shadow-casting sun cost 7.5 ms a frame on an Apple M4 Pro, leaf shading and
 /// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
 /// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
 #[derive(Component, Clone, Debug)]
@@ -221,11 +222,17 @@ pub fn build_pool(
             let bounds = lods.each_ref().map(bounds_of);
             let [fine, middle, coarse] = lods;
             let wood = [add(fine.trunk), add(middle.trunk), add(coarse.trunk)];
-            let mut leaves = |data: MeshData| (!data.is_empty()).then(|| add(data));
+            // A flowering tree's flowers go in its leaf mesh: a pooled tree's flowers are hidden
+            // by the shaders out of season, not left out (a pool's trees are mostly the coarser
+            // levels and impostors, and one entity fewer per level keeps a big forest cheap).
+            let mut leaves = |mut data: MeshData, flowers: MeshData| {
+                data.extend(&flowers);
+                (!data.is_empty()).then(|| add(data))
+            };
             let leaves = [
-                leaves(fine.foliage),
-                leaves(middle.foliage),
-                leaves(coarse.foliage),
+                leaves(fine.foliage, fine.flowers),
+                leaves(middle.foliage, middle.flowers),
+                leaves(coarse.foliage, coarse.flowers),
             ];
             let shape = TreeShape::from_skeleton(&fine.skeleton, params, TreeShape::DEFAULT_LIMB_RADIUS);
             PoolVariant {
@@ -304,7 +311,7 @@ fn build_variants(
 
 /// Height of the tree and how far its crown reaches from the trunk axis.
 fn reach(tree: &TreeMeshes) -> (f32, f32) {
-    let points = tree.trunk.positions.iter().chain(&tree.foliage.positions);
+    let points = tree.trunk.positions.iter().chain(&tree.foliage.positions).chain(&tree.flowers.positions);
     points.fold((0.0f32, 0.0f32), |(height, radius), p| {
         (height.max(p.y), radius.max(p.x.hypot(p.z)))
     })
@@ -317,6 +324,7 @@ fn bounds_of(tree: &TreeMeshes) -> Aabb {
         .positions
         .iter()
         .chain(&tree.foliage.positions)
+        .chain(&tree.flowers.positions)
         .copied();
     let first = points.next().unwrap_or(Vec3::ZERO);
     let (min, max) = points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)));
