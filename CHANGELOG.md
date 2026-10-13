@@ -12,6 +12,13 @@ several ages, in several looks, drew every pool and look with materials of its o
 its own in the main pass and every shadow cascade (Sanctuary: 72 materials for 12 pools, about 2 ms
 of its frame, and 60 lines and a 120-frame wait to share them by hand).
 
+On crates.io this is the release after 0.36.0: 0.37.0, 0.38.0, 0.38.1, 0.39.0 and 0.39.1 were merged
+but not published there (crates.io takes only a few versions of a crate a day), so 0.40.0 carries
+all of their changes too, entered below: impostors for cameras that look down, pools built in the
+background, pooled forests that load three times faster, hull crowns and prism trunks, world
+units, colour looks and recolouring, pooled deadfall, the juniper and fern presets, and falling
+leaves that do not depend on spawn order. Upgrading from 0.36 meets the breaking changes of 0.39.0.
+
 ### Changed
 
 - A pool's flora materials are shared by every pool whose surfaces are equal: the ages of one
