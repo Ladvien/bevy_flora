@@ -42,7 +42,7 @@ use crate::pipeline::{aged_skeleton, build_aged};
 use crate::plugin::{CoarseLevel, Growing, Paint, ProceduralTree, TreeAge, TreeRender, paint_child};
 use crate::shape::WoodCapsule;
 use crate::pool::{PoolColors, PoolRecolors, PooledLook, PooledShapeFilled, PooledTree, PooledTreeSpawned, TreePool};
-use crate::recolor::{CutWood, TreeColors};
+use crate::recolor::{CutWood, FromPool, TreeColors};
 use crate::shading::{FloraMaterial, FloraWindBuffer, SharedFlora, TextureLibrary, TreeShake, TreeShakes};
 use crate::params::TreeParams;
 use crate::skeleton::{NodeKind, Skeleton, trunk_wobble};
@@ -338,9 +338,10 @@ pub(crate) fn start_felling(
         Option<&NotchCarved>,
         Option<&PooledLook>,
         Option<&TreeColors>,
+        Option<&FromPool>,
     )>,
 ) {
-    for (entity, fell, transform, tree, age, render, pooled, gpu, growing, notch, carved, look, colors) in &trees {
+    for (entity, fell, transform, tree, age, render, pooled, gpu, growing, notch, carved, look, colors, from) in &trees {
         if let Some(pooled) = pooled {
             let Some(pool) = pools.as_deref().and_then(|pools| pools.get(&pooled.pool)) else { continue };
             let (params, colors) = pooled_to_tree(pool, pooled, look, &recolors);
@@ -348,7 +349,7 @@ pub(crate) fn start_felling(
                 .entity(entity)
                 .despawn_related::<Children>()
                 .remove::<(PooledTree, PooledTreeSpawned, PooledShapeFilled, PooledLook)>()
-                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors)));
+                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors), from_pool(pooled, look)));
             continue;
         }
         let Some(tree) = tree else { continue };
@@ -397,6 +398,9 @@ pub(crate) fn start_felling(
         let (centre, radius) = log_end(&above.outlines).unwrap_or((Vec3::new(0.0, cut_y, 0.0), tree.0.trunk.radius));
         let capsule = WoodCapsule { a: Vec3::new(centre.x, 0.0, centre.z), b: Vec3::new(centre.x, cut_y, centre.z), radius };
         let stump = commands.spawn((*transform, Visibility::Inherited, TreeStump { tree: Some(entity), capsule }, cut_wood)).id();
+        if let Some(from) = from {
+            commands.entity(stump).insert(*from);
+        }
         let mut wood = commands.spawn((Mesh3d(meshes.add(below.kept.into_bevy_mesh())), ChildOf(stump)));
         paint_child(&mut wood, &paint, false);
         if !below.faces.is_empty() {
@@ -511,7 +515,7 @@ pub(crate) fn carve_notches(
                 .entity(entity)
                 .despawn_related::<Children>()
                 .remove::<(PooledTree, PooledTreeSpawned, PooledShapeFilled, PooledLook)>()
-                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors)));
+                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors), from_pool(pooled, look)));
             continue;
         }
         let Some(tree) = tree else { continue };
@@ -578,6 +582,11 @@ fn pooled_to_tree(
     let look = look.map_or(0, |look| look.0);
     let colors = recolors.colors(pooled.pool.id(), look, pool);
     (colors.apply(&pool.tree_params_for(pooled.variant, look)), colors)
+}
+
+/// The pool and look a pooled tree leaves when it is cut or notched.
+fn from_pool(pooled: &PooledTree, look: Option<&PooledLook>) -> FromPool {
+    FromPool { pool: pooled.pool.id(), look: look.map_or(0, |look| look.0) }
 }
 
 /// `params` of a tree that does not sway in the wind: what a felled tree lying on the ground has.
@@ -740,11 +749,12 @@ pub(crate) fn buck_trees(
         Option<&TreeAge>,
         &TreeRender,
         Option<&TreeColors>,
+        Option<&FromPool>,
     )>,
     flora_wood: Query<&MeshMaterial3d<FloraMaterial>>,
     plain_wood: Query<&MeshMaterial3d<StandardMaterial>>,
 ) {
-    for (entity, buck, felled, lying, tree, age, render, colors) in &trees {
+    for (entity, buck, felled, lying, tree, age, render, colors, from) in &trees {
         if !felled.at_rest {
             continue;
         }
@@ -786,14 +796,16 @@ pub(crate) fn buck_trees(
             let place = lay_log(&fall.base, at, along, length, (c0, r0), (c1, r1), rest);
 
             let capsule = WoodCapsule { a: c0, b: c1, radius: r0 };
-            let log = commands
-                .spawn((
-                    place,
-                    Visibility::Inherited,
-                    TreeLog { stump: felled.stump, index: logs.len() as u32, capsule },
-                    cut_wood.clone(),
-                ))
-                .id();
+            let mut log = commands.spawn((
+                place,
+                Visibility::Inherited,
+                TreeLog { stump: felled.stump, index: logs.len() as u32, capsule },
+                cut_wood.clone(),
+            ));
+            if let Some(from) = from {
+                log.insert(*from);
+            }
+            let log = log.id();
             let mut wood = commands.spawn((Mesh3d(meshes.add(piece.kept.into_bevy_mesh())), ChildOf(log)));
             if let Ok(material) = flora_wood.get(render.trunk) {
                 wood.insert(material.clone());

@@ -454,7 +454,7 @@ pub use pool::{
     BackgroundPools, LodScale, PoolColors, PoolMaterials, PoolVariant, PooledLook, PooledTree, RecolorPool, TreePool,
     build_pool, build_pool_with_deadfall,
 };
-pub use recolor::RecolorTree;
+pub use recolor::{FromPool, RecolorTree};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
