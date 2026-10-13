@@ -66,6 +66,7 @@ impl From<&GrowthExtension> for FloraKey {
             venation: extension.venation.is_some(),
             style: extension.style,
             see_through: extension.see_through,
+            falling: false,
         }
     }
 }

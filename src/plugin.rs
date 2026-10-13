@@ -35,6 +35,9 @@ use bevy::time::Time;
 use bevy::transform::components::Transform;
 
 use crate::background::{BuildInBackground, PendingBuild};
+use crate::falling::{
+    DropLeaves, FallingLeaves, LeafBurst, drop_leaves, expire_bursts, shake_leaves_loose, shed_landed_leaves,
+};
 use crate::gpu::render::{GrowthPaint, detect_gpu_growth_support, rebuild_gpu_trees, sync_growth_mode};
 use crate::gpu::{GpuGrowth, GpuGrowthSupport};
 use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bakes};
@@ -51,7 +54,7 @@ use crate::shading::{
     expire_shakes, flora_decided, sync_wind,
 };
 use crate::skeleton::{Skeleton, generate_skeleton};
-use crate::felling::{Felled, buck_trees, drive_felling, start_felling};
+use crate::felling::{Felled, TreeLanded, buck_trees, drive_felling, start_felling};
 use crate::tree_asset::sync_tree_assets;
 
 /// Parameters of a procedural tree. Changing it rebuilds the meshes.
@@ -205,12 +208,15 @@ impl bevy::app::Plugin for FloraPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_message::<TreeGenerated>()
             .add_message::<TreeMature>()
+            .add_message::<DropLeaves>()
+            .init_resource::<FallingLeaves>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
             .register_type::<BuildInBackground>()
             .register_type::<SeeThroughTrees>()
             .register_type::<TreeLod>()
+            .register_type::<FallingLeaves>()
             .add_systems(
                 bevy::app::Update,
                 (
@@ -251,6 +257,23 @@ impl bevy::app::Plugin for FloraPlugin {
             .add_systems(
                 bevy::app::PostUpdate,
                 (arm_see_through, sync_see_through).after(bevy::transform::TransformSystems::Propagate),
+            )
+            // Falling leaves start from where the trees are this frame, and from their leaf meshes
+            // as they are this frame (a growing tree's change every frame). Nothing runs while
+            // nothing shakes, lands, drops or lies on the ground.
+            .add_systems(
+                bevy::app::PostUpdate,
+                (
+                    (
+                        shake_leaves_loose.run_if(resource_changed::<TreeShakes>),
+                        shed_landed_leaves.run_if(on_message::<TreeLanded>),
+                        drop_leaves.run_if(on_message::<DropLeaves>),
+                    )
+                        .chain(),
+                    expire_bursts.run_if(any_with_component::<LeafBurst>),
+                )
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .after(bevy::asset::AssetEventSystems),
             );
         // Before `gpu`: its shaders import the flora library.
         crate::shading::build(app);

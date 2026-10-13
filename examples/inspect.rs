@@ -7,7 +7,7 @@
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
-//!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre]
+//!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -43,6 +43,10 @@
 //! ground under it, and `--look` measures from the ground under the trunk, so `--on-centre`
 //! and the footing are photographed from the same place.
 //!
+//! `--drop <count>[,<after>[,<every>]]` makes the tree drop `count` leaves (`DropLeaves`) once it is
+//! ready, and takes the first photograph `after` seconds later and each further one `every` seconds
+//! after the one before; with one `--distance`, the frames follow the leaves as they fall and lie.
+//!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
 
@@ -58,7 +62,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    BuckTree, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings,
+    BuckTree, DropLeaves, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances, LodSettings,
     PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
 
@@ -66,6 +70,11 @@ use bevy_flora::{
 const WARMUP_FRAMES: u32 = 30;
 /// Frames between moving the camera and photographing (visibility ranges, shadows).
 const SETTLE_FRAMES: u32 = 3;
+
+/// Frames in `seconds`, at the fixed 1/60 s a frame.
+fn ticks(seconds: f32) -> u32 {
+    (seconds * 60.0).round().max(0.0) as u32
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -110,6 +119,9 @@ struct Args {
     slope: f32,
     /// Stand the tree at the ground's height under its centre, not at its footing.
     on_centre: bool,
+    /// Drop this many leaves from the tree once it is ready, photograph `.1` seconds later and every
+    /// `.2` seconds after that.
+    drop: Option<(u32, f32, f32)>,
 }
 
 fn usage() -> ! {
@@ -119,7 +131,7 @@ fn usage() -> ! {
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
-         [--on-centre]"
+         [--on-centre] [--drop <count>[,<after>[,<every>]]]"
     );
     std::process::exit(2);
 }
@@ -157,6 +169,7 @@ fn parse_args() -> Args {
         buck: None,
         slope: 0.0,
         on_centre: false,
+        drop: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -247,6 +260,15 @@ fn parse_args() -> Args {
             "--buck" => args.buck = Some(value(&mut it)),
             "--slope" => args.slope = value(&mut it),
             "--on-centre" => args.on_centre = true,
+            "--drop" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.drop = match p[..] {
+                    [count] => Some((count as u32, 0.0, 0.0)),
+                    [count, after] => Some((count as u32, after, 0.0)),
+                    [count, after, every] => Some((count as u32, after, every)),
+                    _ => usage(),
+                };
+            }
             _ => usage(),
         }
     }
@@ -477,7 +499,7 @@ fn pose(args: &Args, height: f32, frame: u32) -> (f32, f32) {
 /// A tree that has no render children yet.
 type Unfinished = (Or<(With<PooledTree>, With<ProceduralTree>)>, Without<Children>);
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn drive(
     mut commands: Commands,
     mut shoot: ResMut<Shoot>,
@@ -488,6 +510,8 @@ fn drive(
     felling: Query<&Felled>,
     cutting: Query<(), With<FellTree>>,
     bucking: Query<(), With<BuckTree>>,
+    standing: Query<Entity, Or<(With<ProceduralTree>, With<PooledTree>)>>,
+    mut drops: MessageWriter<DropLeaves>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if !shoot.ready {
@@ -504,6 +528,13 @@ fn drive(
         }
         shoot.ready = true;
         shoot.wait = SETTLE_FRAMES;
+        // `--drop`: the leaves let go now, and the first photograph waits for them.
+        if let Some((count, after, _)) = shoot.args.drop {
+            for tree in &standing {
+                drops.write(DropLeaves { tree, count });
+            }
+            shoot.wait = ticks(after).max(SETTLE_FRAMES);
+        }
     }
     if shoot.in_flight {
         if !screenshots.is_empty() {
@@ -511,7 +542,7 @@ fn drive(
         }
         shoot.in_flight = false;
         shoot.frame += 1;
-        shoot.wait = SETTLE_FRAMES;
+        shoot.wait = shoot.args.drop.map_or(SETTLE_FRAMES, |(_, _, every)| ticks(every).max(SETTLE_FRAMES));
         if shoot.frame == shoot.args.frames {
             let path = shoot.args.out.join("frames.tsv");
             fs::write(&path, &shoot.log).expect("write frames.tsv");

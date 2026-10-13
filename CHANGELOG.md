@@ -5,6 +5,56 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.24.0] - 2026-10-13
+
+Falling leaves. Hit a tree and leaves come off it; a felled tree sheds them as it lands; a game
+drops them from any tree whenever it wants. They tumble down, drift with the wind, lie on the
+ground a while and shrink away, all on the GPU, in the colours the tree wears this season.
+`FloraExtension` and `FloraKey` gain a field, which breaks struct literals, hence the minor bump.
+
+### Added
+
+- **Falling leaves** (`falling` module). A drop copies some of the tree's own leaf cards into a
+  burst (`LeafBurst`: one entity, one small mesh) whose vertex stage moves every card: it hangs
+  where it grew until its moment (a drop lets go over half a second), falls from rest to between
+  0.9 and 1.5 m/s, tumbles about an axis of its own, swings from side to side, drifts with
+  `FloraWind`, turns flat over its last 0.3 s (a leaf of crossed planes or a star folds flat),
+  lies 3 cm above the ground (`FloraGround`, or the height the tree stands at) for about
+  `FallingLeaves::rest` seconds and shrinks away; its shadow falls with it. The fragment stage is
+  the tree's leaves' own: scan, tint, veins, the season's colour, snow, toon, the see-through
+  fade. A deciduous tree drops none of the leaves it has shed, and no flowers. The tree keeps its
+  own leaves.
+- **`FallingLeaves`** (a resource, in the prelude): `per_shake` (12 leaves a tree for a shake of
+  strength 1 where it happens, fewer toward its radius), `per_landing` (80 for a felled tree as it
+  lands), `rest` (6 s), `max_leaves` (5 000 falling or lying at once).
+- **`DropLeaves { tree, count }`** (a message, in the prelude): drop leaves from any
+  `ProceduralTree` or `PooledTree` now. The plugin writes it for every new `TreeShake` and every
+  `TreeLanded`. `GpuGrowth` trees and trees drawn with plain `StandardMaterial`s drop none.
+- `FloraExtension::falling` and `FloraKey::falling`: a burst's material is a copy of its tree's
+  leaf material with `falling` set, whose pipelines take `falling.wesl` (and
+  `falling_prepass.wesl` for prepasses and shadows) as their vertex stage.
+- `inspect --drop <count>[,<after>[,<every>]]`: drop leaves once the tree is ready and photograph
+  them `after` seconds later, then every `every` seconds.
+- README: "Falling leaves: `DropLeaves`", with `docs/falling_leaves.jpg`; the shake and fell clips
+  show leaves falling.
+
+### Measured
+
+- **Look.** The 424 gallery scenarios render as in 0.23.0, on the CPU and with `--gpu` (a mean
+  difference of 0.000 of 255, no `ERROR`), and so do the growth, grove and seasons clips, frame
+  for frame; the shake and fell clips differ by their falling leaves. `inspect --drop` series of an
+  oak in summer and a maple in autumn from 0.25 to 11.5 s after the drop, from eye height and from
+  above: the leaves leave the crown, tumble, land flat around the trunk with their shadows and
+  shrink away, in the crown's colours.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.23.0). With
+  nothing falling no system of it runs: 100 000 pooled oaks take 7.52, 7.54 and 7.53 ms (0.23.0:
+  7.41, 7.50 and 7.46), 1 000 individual oaks 24.49 and 24.46 ms (24.56 and 24.48). With every
+  shake slot busy (`--shake-animate`, thousands of leaves always falling) 100 000 pooled oaks take
+  7.59 and 7.66 ms (7.50 and 7.53), 1 000 individual oaks 28.30 and 28.31 ms (27.27 and 27.28).
+  A material type of its own for falling leaves cost the pooled forest 0.08 ms a frame with
+  nothing falling (Bevy's render systems run per material type over every visible mesh), which is
+  why they are drawn with `FloraMaterial`.
+
 ## [0.23.0] - 2026-10-13
 
 Levels of detail for individual trees. A forest of `ProceduralTree`s, which grow, change and
@@ -1516,6 +1566,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.24.0]: https://github.com/Ladvien/bevy_flora/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Ladvien/bevy_flora/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/Ladvien/bevy_flora/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Ladvien/bevy_flora/compare/v0.20.0...v0.21.0

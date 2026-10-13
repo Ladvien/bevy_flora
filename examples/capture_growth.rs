@@ -37,9 +37,9 @@
 //!
 //! `--shake` records it fully grown from a still camera, knocked with `TreeShakes`
 //! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on the birch, then a blast
-//! that swings every tree. `--fell` records a few grown trees from a still camera while the oak in
-//! front is felled (`FellTree`), crashes to the ground and leaves its stump (`docs/fell.gif`,
-//! encoded like the grove).
+//! that swings every tree, each hit knocking leaves off (`FallingLeaves`). `--fell` records a few
+//! grown trees from a still camera while the oak in front is felled (`FellTree`), crashes to the
+//! ground, sheds leaves and leaves its stump (`docs/fell.gif`, encoded like the grove).
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The

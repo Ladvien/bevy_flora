@@ -100,7 +100,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.4 ms a frame (1080p, Apple M4 Pro).
+//! 7.5 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -199,6 +199,21 @@
 //! }
 //! ```
 //!
+//! A shake knocks leaves off the trees it reaches, and a felled tree sheds some as it lands: they
+//! fall, tumbling and swinging, drift with the wind, lie flat on the ground for a while and shrink
+//! away, all on the GPU, in the colours the tree's leaves wear this season. [`FallingLeaves`] sets
+//! how many; [`DropLeaves`] drops some from any tree; see [`falling`].
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::DropLeaves;
+//!
+//! // A bird lands in the tree.
+//! fn bird_lands(mut drops: MessageWriter<DropLeaves>, tree: Entity) {
+//!     drops.write(DropLeaves { tree, count: 6 });
+//! }
+//! ```
+//!
 //! Insert [`FellTree`] on a tree and it is cut: a [`TreeStump`] stays, and the tree falls about
 //! the hinge of the cut, lands on its limbs ([`TreeLanded`]) and lies still ([`Felled`]). Pooled
 //! and GPU-grown trees can be felled too, and [`BuckTree`] then cuts a felled tree's trunk into
@@ -249,6 +264,7 @@
 
 pub mod background;
 pub mod crown;
+pub mod falling;
 pub mod felling;
 pub mod foliage;
 mod gpu;
@@ -274,6 +290,7 @@ pub mod venation;
 
 pub use background::BuildInBackground;
 pub use crown::CrownShape;
+pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeStump};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
@@ -309,11 +326,11 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 /// shakes, felling, the ground, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, BuckTree, BuildInBackground, FellTree, Felled, FloraGround, FloraPlugin, FloraSeason,
-        FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafScan, LodDistances, LodSettings, PooledTree,
-        ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked,
-        TreeGenerated, TreeLanded, TreeLod, TreeLog, TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes,
-        TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,
+        BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraGround,
+        FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafBurst, LeafScan,
+        LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint,
+        SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog, TreeMature, TreeParams,
+        TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,
     };
 }
 
