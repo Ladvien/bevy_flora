@@ -5,6 +5,53 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.25.0] - 2026-10-13
+
+Autumn's leaves fall. As the season's leaf fall rises, the leaves the shaders stop drawing on a
+deciduous tree near a camera let go from where they hung and fall, tumble and come to lie on the
+ground. `LeafBurst::tree` becomes an `Option` and `FallingLeaves` gains a field, hence the minor
+bump.
+
+### Added
+
+- **The season's falling leaves.** While `FloraSeason::leaf_fall` rises, every tenth of a second
+  the leaves whose moment it has passed meanwhile (the very leaves it hides) let go on the trees
+  within `FallingLeaves::autumn_distance` (50 m) of a `Camera3d`, each from the time the leaf fall
+  passed it, and fall like a shake's, in one burst per look of leaves. A rise of more than 0.1 in
+  one frame (a season set, such as `FloraSeason::WINTER`) sheds without letting fall, and spring
+  drops nothing. CPU and pooled trees; `GpuGrowth` trees and plain-material trees shed where the
+  leaves hang, as before.
+- `FallingLeaves::autumn_distance` (0 lets none fall).
+- `inspect --autumn <seconds>[,<after>[,<every>]]`: the leaf fall rises from the `--season` value
+  to 1 over `seconds` once the tree is ready, photographed as with `--drop`.
+- `forest --leaf-fall-animate <seconds>`: an autumn every `seconds`, over and over.
+- README: the autumn in "Falling leaves", with `docs/autumn_fall.jpg`.
+
+### Changed
+
+- `LeafBurst::tree` is `Option<Entity>`: `None` for the season's leaves, which come from several
+  trees with one look.
+- The seasons clip (`capture_growth --seasons`, a year in eight seconds) sets
+  `autumn_distance` to 0: leaves falling at their own speed would still hang in the air in its
+  winter. It stays as it was.
+
+### Measured
+
+- **Look.** The 424 gallery scenarios render as in 0.24.0, on the CPU and with `--gpu` (a mean
+  difference of 0.000 of 255, no `ERROR`), and so do the growth, grove and seasons clips; the
+  shake and fell clips drop other leaves of the same trees (deterministically: two runs of 0.25.0
+  are frame for frame alike). `inspect --autumn` series of a maple
+  and an oak (the leaf fall 0 to 1 over 6 s, 14 frames from 0.5 to 10.25 s, and one from 7 m up at
+  9 s): the crown streams leaves and thins, the branches stand bare while the last leaves fall, and
+  the leaves lie in the crown's colours around the trunk.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.24.0). With
+  nothing falling: 1 000 individual oaks 24.45 and 24.49 ms (0.24.0: 24.53 and 24.46); 100 000
+  pooled oaks 7.65, 7.64 and 7.72 ms (7.46, 7.45 and 7.48), and as much (7.61, 7.58 and 7.68)
+  with only 0.24.0's systems registered, so the 2% is not the new systems'. An autumn every six
+  seconds (`--leaf-fall-animate 6`) against the same autumn standing still (`--season 1,0.5`):
+  1 000 individual oaks 23.16 and 23.14 ms (22.89 and 22.90), 100 000 pooled oaks 7.82 and 8.06 ms
+  (7.70 and 7.74).
+
 ## [0.24.0] - 2026-10-13
 
 Falling leaves. Hit a tree and leaves come off it; a felled tree sheds them as it lands; a game
@@ -1566,6 +1613,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.25.0]: https://github.com/Ladvien/bevy_flora/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Ladvien/bevy_flora/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Ladvien/bevy_flora/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/Ladvien/bevy_flora/compare/v0.21.0...v0.22.0

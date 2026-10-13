@@ -1,5 +1,6 @@
 //! Leaves that fall from the trees: knocked off by a shake ([`TreeShakes`]), shed by a felled tree
-//! as it lands ([`TreeLanded`]), or dropped on demand ([`DropLeaves`]).
+//! as it lands ([`TreeLanded`]), let go by the season ([`FloraSeason::leaf_fall`]), or dropped on
+//! demand ([`DropLeaves`]).
 //!
 //! A drop copies some of the tree's own leaf cards into a burst ([`LeafBurst`]): one entity with
 //! one small mesh, drawn with a copy of the tree's leaf material ([`FloraExtension::falling`]),
@@ -8,10 +9,18 @@
 //! from side to side, drifts with the [`FloraWind`], turns flat as it reaches the ground
 //! ([`FloraGround`], or the height the tree stands at), lies there for about
 //! [`FallingLeaves::rest`] seconds and shrinks away. Nothing moves on the CPU; the burst is
-//! despawned when its last leaf is gone. The leaves
-//! look like those still on the tree (the scan, the tint, the season's colour, snow) because they
-//! are drawn by the same fragment shader. The tree keeps its own leaves: a few falling copies are
-//! not missed from a crown of thousands.
+//! despawned when its last leaf is gone. The leaves look like those still on the tree (the scan,
+//! the tint, the season's colour, snow) because they are drawn by the same fragment shader. A
+//! shake's or a drop's leaves are copies: the tree keeps its own, and a few falling copies are not
+//! missed from a crown of thousands.
+//!
+//! In autumn the falling leaves are the tree's own. The shaders stop drawing a deciduous tree's
+//! leaf once the season's leaf fall passes the leaf's moment; as it rises, every tenth of a second
+//! the leaves it has passed meanwhile let go from where they hung, each from the moment it was
+//! passed, on the trees within [`FallingLeaves::autumn_distance`] of a camera (one burst per look
+//! of leaves, from many trees). A leaf fall that jumps by more than 0.1 in a frame (a season set,
+//! not one passing) sheds those leaves without letting them fall, and one that goes down (spring)
+//! drops nothing.
 //!
 //! [`FallingLeaves`] sets how many fall and how long they lie. Trees drawn on the CPU
 //! ([`ProceduralTree`]) and from a pool ([`PooledTree`]) drop leaves; a tree grown on the GPU
@@ -32,6 +41,7 @@ use std::ops::Range;
 use std::sync::RwLock;
 
 use bevy::asset::{AssetEvent, AssetId, Assets, Handle, RenderAssetUsages};
+use bevy::camera::Camera3d;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::prelude::*;
@@ -65,6 +75,10 @@ pub struct FallingLeaves {
     pub per_shake: f32,
     /// Leaves a felled tree sheds as it lands ([`TreeLanded`]). 0 sheds none.
     pub per_landing: u32,
+    /// Deciduous trees standing within this many metres of a camera let the leaves the season
+    /// sheds fall ([`FloraSeason::leaf_fall`]); farther ones lose them where they hang, as before.
+    /// 0 lets none fall.
+    pub autumn_distance: f32,
     /// Seconds a fallen leaf lies on the ground before it shrinks away, each a quarter more or less.
     pub rest: f32,
     /// Most leaves falling or lying at once; a drop past it drops fewer, or none.
@@ -73,7 +87,7 @@ pub struct FallingLeaves {
 
 impl Default for FallingLeaves {
     fn default() -> Self {
-        Self { per_shake: 12.0, per_landing: 80, rest: 6.0, max_leaves: 5000 }
+        Self { per_shake: 12.0, per_landing: 80, autumn_distance: 50.0, rest: 6.0, max_leaves: 5000 }
     }
 }
 
@@ -88,13 +102,14 @@ pub struct DropLeaves {
     pub count: u32,
 }
 
-/// A drop of falling leaves: one entity with one mesh, drawn with a copy of its tree's leaf material
-/// that moves them ([`FloraExtension::falling`]), standing where its tree stood when they let go,
-/// and despawned when the last of them is gone.
+/// A drop of falling leaves: one entity with one mesh, drawn with a copy of its trees' leaf
+/// material that moves them ([`FloraExtension::falling`]), and despawned when the last of them is
+/// gone.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct LeafBurst {
-    /// The tree they fell from.
-    pub tree: Entity,
+    /// The tree they fell from, or `None` for the leaves the season sheds, which may come from
+    /// several trees with one look.
+    pub tree: Option<Entity>,
     /// How many leaves.
     pub leaves: u32,
     /// When the last of them is gone, in [`Time::elapsed_secs`].
@@ -159,22 +174,85 @@ const LET_GO: f32 = 0.5;
 const SPEED: Range<f32> = 0.9..1.5;
 /// A leaf that hangs less than this above the ground (a felled tree's crown lies on it) stays put.
 const LOWEST: f32 = 0.05;
-/// Leaf meshes whose cards [`Caches`] keeps, at most: a pool's few variants, the trees that drop
-/// leaves often.
+/// Leaf meshes whose cards [`FallCaches`] keeps, at most: a pool's few variants, the trees that
+/// drop leaves often.
 const CACHED_MESHES: usize = 64;
+/// Seconds between the season's sheddings: the leaves whose moment the leaf fall passed meanwhile
+/// let go together, each from the time it passed, so a leaf shows a few centimetres down at most,
+/// a tenth of a second after its tree stopped drawing it.
+const SHED_EVERY: f32 = 0.1;
+/// A rise of the leaf fall bigger than this in one frame is a season set, not one passing: those
+/// leaves are gone at once and none falls.
+const SEASON_JUMP: f32 = 0.1;
+/// The render clock (`globals.time`, [`Time::elapsed_secs_wrapped`]) wraps every hour.
+const WRAP: f32 = 3600.0;
 
-/// What `drop_leaves` keeps between drops: the falling-leaf material made from each leaf material,
-/// and the cards of each leaf mesh it has read.
-#[derive(Default)]
-pub(crate) struct Caches {
+/// What the falling leaves keep between frames: the falling-leaf material made from each leaf
+/// material, and the cards of each leaf mesh read.
+#[derive(Resource, Default)]
+pub(crate) struct FallCaches {
     materials: HashMap<AssetId<FloraMaterial>, Handle<FloraMaterial>>,
     cards: HashMap<AssetId<Mesh>, MeshCards>,
 }
 
-/// The cards of a leaf mesh, and its vertex and index counts when they were read.
+impl FallCaches {
+    /// The cards of `source` (the mesh `id`), read now unless they were read from it as it is.
+    fn cards(&mut self, id: AssetId<Mesh>, source: &Mesh) -> &MeshCards {
+        if self.cards.len() >= CACHED_MESHES && !self.cards.contains_key(&id) {
+            self.cards.clear();
+        }
+        // Read again if the mesh is not the one read last time (its change not seen yet).
+        let size = (source.count_vertices(), source.indices().map_or(0, Indices::len));
+        let read = self.cards.entry(id).or_insert_with(|| MeshCards::read(source, size));
+        if read.size != size {
+            *read = MeshCards::read(source, size);
+        }
+        read
+    }
+
+    /// The material falling leaves of the leaf material `leaves` are drawn with: a copy with
+    /// [`FloraExtension::falling`] set, made once per look and again when the look changes.
+    fn material(&mut self, leaves: &Handle<FloraMaterial>, flora: &mut Assets<FloraMaterial>) -> Option<Handle<FloraMaterial>> {
+        let source = flora.get(leaves)?;
+        let look = FloraMaterial {
+            base: source.base.clone(),
+            extension: FloraExtension { falling: true, ..source.extension.clone() },
+        };
+        if let Some(made) = self.materials.get(&leaves.id())
+            && flora.get(made).is_some_and(|made| made.extension == look.extension)
+        {
+            return Some(made.clone());
+        }
+        let made = flora.add(look);
+        self.materials.insert(leaves.id(), made.clone());
+        Some(made)
+    }
+}
+
+/// The cards of a leaf mesh, its vertex and index counts when they were read, and its leaves in the
+/// order the season sheds them.
 struct MeshCards {
     size: (usize, usize),
     cards: Vec<Card>,
+    /// The leaf cards (not the flowers), by their moment in the season.
+    by_moment: Vec<u32>,
+}
+
+impl MeshCards {
+    fn read(mesh: &Mesh, size: (usize, usize)) -> Self {
+        let cards = leaf_cards(mesh);
+        let mut by_moment: Vec<u32> = (0..cards.len() as u32).filter(|&k| !cards[k as usize].flower).collect();
+        by_moment.sort_by(|a, b| cards[*a as usize].moment.total_cmp(&cards[*b as usize].moment));
+        Self { size, cards, by_moment }
+    }
+
+    /// The leaves whose moment the leaf fall passes as it rises from `from` to `to`, in that order.
+    fn shed_between(&self, from: f32, to: f32) -> impl Iterator<Item = &Card> {
+        let moment = |k: &u32| self.cards[*k as usize].moment;
+        let start = self.by_moment.partition_point(|k| moment(k) < from);
+        let end = self.by_moment.partition_point(|k| moment(k) < to);
+        self.by_moment[start..end].iter().map(|&k| &self.cards[k as usize])
+    }
 }
 
 /// Seconds a leaf that lets go `height` metres above the ground takes to reach it.
@@ -259,7 +337,7 @@ pub(crate) fn leaf_cards(mesh: &Mesh) -> Vec<Card> {
 /// How a drop falls: when it begins, how long its leaves lie and how the wind carries them.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Fall {
-    /// The render time ([`Time::elapsed_secs_wrapped`]) the first leaf lets go.
+    /// The render time ([`Time::elapsed_secs_wrapped`]) leaves' release times count from.
     pub now: f32,
     /// [`FallingLeaves::rest`].
     pub rest: f32,
@@ -267,8 +345,19 @@ pub(crate) struct Fall {
     pub drift: Vec2,
 }
 
-/// What a drop makes: the burst's mesh and bounds in the space of the burst standing at the
-/// tree's position, how many leaves it holds, and how many seconds until the last is gone.
+impl Fall {
+    /// The fall of leaves that let go now, under `wind`.
+    fn now(time: &Time, settings: &FallingLeaves, wind: &FloraWind) -> Self {
+        Self {
+            now: time.elapsed_secs_wrapped(),
+            rest: settings.rest,
+            drift: wind.direction.normalize_or_zero() * (wind.strength.max(0.0) * DRIFT),
+        }
+    }
+}
+
+/// What a burst is made of: its mesh and bounds in the space of the burst standing at its origin,
+/// how many leaves it holds, and how many seconds until the last is gone.
 pub(crate) struct Burst {
     pub mesh: Mesh,
     pub aabb: Aabb,
@@ -276,104 +365,143 @@ pub(crate) struct Burst {
     pub life: f32,
 }
 
-/// The burst of `cards` of `source` (a tree's leaf mesh) for the tree placed at `tree`: every
-/// vertex in world orientation and scale, relative to the tree's position, with the attributes
-/// `falling_common.wesl` reads. `ground` is the ground's height at a world (x, z). `None` when no
-/// card hangs above the ground.
-pub(crate) fn build_burst(
-    source: &Mesh,
-    cards: &[&Card],
-    tree: &GlobalTransform,
-    ground: impl Fn(Vec2) -> f32,
-    fall: Fall,
-    rng: &mut SeededRng,
-) -> Option<Burst> {
-    let floats3 = |id| match source.attribute(id) {
-        Some(VertexAttributeValues::Float32x3(v)) => Some(v),
-        _ => None,
-    };
-    let floats4 = |id| match source.attribute(id) {
-        Some(VertexAttributeValues::Float32x4(v)) => Some(v),
-        _ => None,
-    };
-    let floats2 = |id| match source.attribute(id) {
-        Some(VertexAttributeValues::Float32x2(v)) => Some(v),
-        _ => None,
-    };
-    let positions = floats3(Mesh::ATTRIBUTE_POSITION)?;
-    let normals = floats3(Mesh::ATTRIBUTE_NORMAL)?;
-    let uv0 = floats2(Mesh::ATTRIBUTE_UV_0)?;
-    let uv1 = floats2(Mesh::ATTRIBUTE_UV_1);
-    let colors = floats4(Mesh::ATTRIBUTE_COLOR);
-    let sway = floats4(ATTRIBUTE_LEAF_SWAY)?;
-    let source_indices: Vec<usize> = source.indices()?.iter().collect();
+/// A burst under construction: cards of one tree or of several, every vertex in world orientation
+/// and scale relative to `origin`, with the attributes `falling_common.wesl` reads.
+pub(crate) struct BurstBuilder {
+    pub origin: Vec3,
+    out: BurstBuffers,
+    lo: Vec3,
+    hi: Vec3,
+    life: f32,
+    leaves: u32,
+}
 
-    let origin = tree.translation();
-    let affine = tree.affine();
-    let mut out = BurstBuffers::default();
-    let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
-    let mut life: f32 = 0.0;
-    let mut leaves = 0;
-    for card in cards {
-        let world: Vec<Vec3> =
-            card.vertices.clone().map(|v| affine.transform_point3(Vec3::from_array(positions[v])) - origin).collect();
-        let anchor = world.iter().sum::<Vec3>() / world.len() as f32;
-        let reach = world.iter().map(|p| p.distance(anchor)).fold(0.0, f32::max);
-        // The ground under where it will land: under where it hangs, then where the wind takes it.
-        let speed = rng.range(SPEED.start, SPEED.end);
-        let at = anchor + origin;
-        let mut landing = at.xz();
-        let mut floor = ground(landing);
-        for _ in 0..2 {
-            landing = at.xz() + fall.drift * landing_time(at.y - floor, speed);
-            floor = ground(landing);
+impl BurstBuilder {
+    /// An empty burst standing at `origin` (world).
+    pub fn new(origin: Vec3) -> Self {
+        Self {
+            origin,
+            out: BurstBuffers::default(),
+            lo: Vec3::splat(f32::INFINITY),
+            hi: Vec3::splat(f32::NEG_INFINITY),
+            life: 0.0,
+            leaves: 0,
         }
-        let height = at.y - floor;
-        if height < LOWEST {
-            continue;
-        }
-        let land = landing_time(height, speed);
-        let delay = rng.range(0.0, LET_GO);
-        let rest = fall.rest.max(0.0) * rng.range(0.75, 1.25);
-        let seed = rng.next_f32();
-        life = life.max(delay + land + rest + SHRINK);
-        leaves += 1;
-
-        // The card's face, from its first triangle.
-        let first = &source_indices[card.indices.start..card.indices.start + 3];
-        let corner = |k: usize| affine.transform_point3(Vec3::from_array(positions[first[k]]));
-        let face = (corner(1) - corner(0)).cross(corner(2) - corner(0)).normalize_or(Vec3::Y);
-
-        let base = out.positions.len() as u32;
-        let local_floor = floor - origin.y;
-        for (k, v) in card.vertices.clone().enumerate() {
-            out.positions.push(world[k].to_array());
-            out.normals.push(affine.transform_vector3(Vec3::from_array(normals[v])).normalize_or(Vec3::Y).to_array());
-            out.uv0.push(uv0[v]);
-            if let Some(uv1) = uv1 {
-                out.uv1.push(uv1[v]);
-            }
-            if let Some(colors) = colors {
-                out.colors.push(colors[v]);
-            }
-            out.sway.push(sway[v]);
-            out.anchor.push(anchor.extend(fall.now + delay).to_array());
-            out.path.push([local_floor, seed, rest, speed]);
-            out.face.push(face.extend(0.0).to_array());
-        }
-        let start = card.vertices.start;
-        out.indices.extend(source_indices[card.indices.clone()].iter().map(|&i| base + (i - start) as u32));
-
-        // Bounds: where it hangs and where it lands, each with the card's reach and the swing.
-        let landed = Vec3::new(landing.x - origin.x, local_floor, landing.y - origin.z);
-        let margin = Vec3::splat(reach + SWING);
-        lo = lo.min(anchor - margin).min(landed - margin);
-        hi = hi.max(anchor + margin).max(landed + margin);
     }
-    if leaves == 0 {
-        return None;
+
+    /// Add `cards` of `source` (a tree's leaf mesh) for the tree placed at `tree`, each letting go
+    /// `release(card, rng)` seconds after `fall.now` (before it when negative). `ground` is the
+    /// ground's height at a world (x, z); a card hanging less than 5 cm above it stays. Returns how
+    /// many it added.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add<'a>(
+        &mut self,
+        source: &Mesh,
+        cards: impl IntoIterator<Item = &'a Card>,
+        tree: &GlobalTransform,
+        ground: impl Fn(Vec2) -> f32,
+        fall: Fall,
+        rng: &mut SeededRng,
+        mut release: impl FnMut(&Card, &mut SeededRng) -> f32,
+    ) -> u32 {
+        let floats3 = |id| match source.attribute(id) {
+            Some(VertexAttributeValues::Float32x3(v)) => Some(v),
+            _ => None,
+        };
+        let floats4 = |id| match source.attribute(id) {
+            Some(VertexAttributeValues::Float32x4(v)) => Some(v),
+            _ => None,
+        };
+        let floats2 = |id| match source.attribute(id) {
+            Some(VertexAttributeValues::Float32x2(v)) => Some(v),
+            _ => None,
+        };
+        let (Some(positions), Some(normals), Some(uv0), Some(sway), Some(source_indices)) = (
+            floats3(Mesh::ATTRIBUTE_POSITION),
+            floats3(Mesh::ATTRIBUTE_NORMAL),
+            floats2(Mesh::ATTRIBUTE_UV_0),
+            floats4(ATTRIBUTE_LEAF_SWAY),
+            source.indices(),
+        ) else {
+            return 0;
+        };
+        let uv1 = floats2(Mesh::ATTRIBUTE_UV_1);
+        let colors = floats4(Mesh::ATTRIBUTE_COLOR);
+        let source_indices: Vec<usize> = source_indices.iter().collect();
+
+        let origin = self.origin;
+        let affine = tree.affine();
+        let out = &mut self.out;
+        let mut added = 0;
+        for card in cards {
+            let world: Vec<Vec3> =
+                card.vertices.clone().map(|v| affine.transform_point3(Vec3::from_array(positions[v])) - origin).collect();
+            let anchor = world.iter().sum::<Vec3>() / world.len() as f32;
+            let reach = world.iter().map(|p| p.distance(anchor)).fold(0.0, f32::max);
+            // The ground under where it will land: under where it hangs, then where the wind takes it.
+            let speed = rng.range(SPEED.start, SPEED.end);
+            let at = anchor + origin;
+            let mut landing = at.xz();
+            let mut floor = ground(landing);
+            for _ in 0..2 {
+                landing = at.xz() + fall.drift * landing_time(at.y - floor, speed);
+                floor = ground(landing);
+            }
+            let height = at.y - floor;
+            if height < LOWEST {
+                continue;
+            }
+            let land = landing_time(height, speed);
+            let delay = release(card, rng);
+            let rest = fall.rest.max(0.0) * rng.range(0.75, 1.25);
+            let seed = rng.next_f32();
+            self.life = self.life.max(delay + land + rest + SHRINK);
+            added += 1;
+
+            // The card's face, from its first triangle.
+            let first = &source_indices[card.indices.start..card.indices.start + 3];
+            let corner = |k: usize| affine.transform_point3(Vec3::from_array(positions[first[k]]));
+            let face = (corner(1) - corner(0)).cross(corner(2) - corner(0)).normalize_or(Vec3::Y);
+
+            let base = out.positions.len() as u32;
+            let local_floor = floor - origin.y;
+            for (k, v) in card.vertices.clone().enumerate() {
+                out.positions.push(world[k].to_array());
+                out.normals.push(affine.transform_vector3(Vec3::from_array(normals[v])).normalize_or(Vec3::Y).to_array());
+                out.uv0.push(uv0[v]);
+                if let Some(uv1) = uv1 {
+                    out.uv1.push(uv1[v]);
+                }
+                if let Some(colors) = colors {
+                    out.colors.push(colors[v]);
+                }
+                out.sway.push(sway[v]);
+                out.anchor.push(anchor.extend(fall.now + delay).to_array());
+                out.path.push([local_floor, seed, rest, speed]);
+                out.face.push(face.extend(0.0).to_array());
+            }
+            let start = card.vertices.start;
+            out.indices.extend(source_indices[card.indices.clone()].iter().map(|&i| base + (i - start) as u32));
+
+            // Bounds: where it hangs and where it lands, each with the card's reach and the swing.
+            let landed = Vec3::new(landing.x - origin.x, local_floor, landing.y - origin.z);
+            let margin = Vec3::splat(reach + SWING);
+            self.lo = self.lo.min(anchor - margin).min(landed - margin);
+            self.hi = self.hi.max(anchor + margin).max(landed + margin);
+        }
+        self.leaves += added;
+        added
     }
-    Some(Burst { mesh: out.into_mesh(), aabb: Aabb::from_min_max(lo, hi), leaves, life })
+
+    /// The burst, or `None` when no card was added.
+    pub fn finish(self) -> Option<Burst> {
+        (self.leaves > 0).then(|| Burst {
+            mesh: self.out.into_mesh(),
+            aabb: Aabb::from_min_max(self.lo, self.hi),
+            leaves: self.leaves,
+            life: self.life,
+        })
+    }
 }
 
 /// The vertex buffers of a burst under construction.
@@ -463,6 +591,74 @@ pub(crate) fn shed_landed_leaves(
     }
 }
 
+/// What a tree's leaves fall as: its level-0 leaf mesh, its leaf material, and whether it sheds its
+/// leaves in autumn.
+struct LeafSource {
+    mesh: Handle<Mesh>,
+    material: Handle<FloraMaterial>,
+    deciduous: bool,
+}
+
+/// The leaves of a tree drawn on the CPU with [`FloraMaterial`]s, or from a pool's: `None` for any
+/// other tree, and a tree with no leaves.
+fn leaf_source(
+    render: Option<&TreeRender>,
+    tree: Option<&ProceduralTree>,
+    pooled: Option<&PooledTree>,
+    pools: Option<&Assets<TreePool>>,
+) -> Option<LeafSource> {
+    match (render, tree, pooled) {
+        (Some(render), Some(tree), _) => {
+            let (Paint::Flora { foliage, .. }, Some((_, mesh))) = (&render.paint, &render.foliage) else { return None };
+            Some(LeafSource { mesh: mesh.clone(), material: foliage.clone(), deciduous: tree.0.foliage.autumn.is_some() })
+        }
+        (_, _, Some(pooled)) => {
+            let pool = pools?.get(&pooled.pool)?;
+            let Some(PoolMaterials::Flora { leaves, .. }) = &pool.materials else { return None };
+            let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
+            Some(LeafSource {
+                mesh: variant.leaves[0].clone()?,
+                material: leaves.clone(),
+                deciduous: pool.params.foliage.autumn.is_some(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Spawn `burst`, standing at `origin` and drawn with `material`.
+fn spawn_burst(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    burst: Burst,
+    origin: Vec3,
+    material: Handle<FloraMaterial>,
+    tree: Option<Entity>,
+    time: &Time,
+) {
+    commands.spawn((
+        Mesh3d(meshes.add(burst.mesh)),
+        MeshMaterial3d(material),
+        // Spawned after this frame's transform propagation: its global transform is set here.
+        Transform::from_translation(origin),
+        GlobalTransform::from_translation(origin),
+        Visibility::default(),
+        burst.aabb,
+        LeafBurst { tree, leaves: burst.leaves, gone_at: time.elapsed_secs() + burst.life },
+    ));
+}
+
+/// Forget the cards of leaf meshes that changed (a growing tree's, every frame) or went.
+pub(crate) fn forget_changed_meshes(mut caches: ResMut<FallCaches>, mut changed: MessageReader<AssetEvent<Mesh>>) {
+    for event in changed.read() {
+        if let AssetEvent::Modified { id } | AssetEvent::Removed { id } | AssetEvent::Unused { id } = event
+            && caches.cards.contains_key(id)
+        {
+            caches.cards.remove(id);
+        }
+    }
+}
+
 /// Make the bursts the drops ask for.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn drop_leaves(
@@ -479,59 +675,21 @@ pub(crate) fn drop_leaves(
     trees: Query<(&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>, Option<&Felled>)>,
     stumps: Query<&GlobalTransform>,
     bursts: Query<&LeafBurst>,
-    mut caches: Local<Caches>,
-    mut changed: MessageReader<AssetEvent<Mesh>>,
+    mut caches: ResMut<FallCaches>,
 ) {
-    // A leaf mesh that changed (a growing tree's, every frame) is read again when it next drops.
-    for event in changed.read() {
-        if let AssetEvent::Modified { id } | AssetEvent::Removed { id } | AssetEvent::Unused { id } = event {
-            caches.cards.remove(id);
-        }
-    }
     let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
-    let fall = Fall {
-        now: time.elapsed_secs_wrapped(),
-        rest: settings.rest,
-        drift: wind.direction.normalize_or_zero() * (wind.strength.max(0.0) * DRIFT),
-    };
+    let fall = Fall::now(&time, &settings, &wind);
     for (k, drop) in drops.read().enumerate() {
         let budget = settings.max_leaves.saturating_sub(live).min(drop.count) as usize;
         if budget == 0 {
             continue;
         }
         let Ok((at, render, tree, pooled, felled)) = trees.get(drop.tree) else { continue };
-        // The tree's leaf mesh and material, and whether it sheds its leaves in autumn.
-        let (mesh, material, deciduous) = match (render, tree, pooled) {
-            (Some(render), Some(tree), _) => {
-                let (Paint::Flora { foliage, .. }, Some((_, mesh))) = (&render.paint, &render.foliage) else { continue };
-                (mesh.clone(), foliage.clone(), tree.0.foliage.autumn.is_some())
-            }
-            (_, _, Some(pooled)) => {
-                let Some(pool) = pools.as_deref().and_then(|pools| pools.get(&pooled.pool)) else { continue };
-                let Some(PoolMaterials::Flora { leaves, .. }) = &pool.materials else { continue };
-                let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
-                let Some(mesh) = &variant.leaves[0] else { continue };
-                (mesh.clone(), leaves.clone(), pool.tree_params(pooled.variant).foliage.autumn.is_some())
-            }
-            _ => continue,
-        };
-        let Some(leaf_material) = flora.get(&material) else { continue };
-        let look = FloraMaterial {
-            base: leaf_material.base.clone(),
-            extension: FloraExtension { falling: true, ..leaf_material.extension.clone() },
-        };
-        let Some(source) = meshes.get(&mesh) else { continue };
-        if caches.cards.len() >= CACHED_MESHES && !caches.cards.contains_key(&mesh.id()) {
-            caches.cards.clear();
-        }
-        // Read again if the mesh is not the one read last time (its change not seen yet).
-        let size = (source.count_vertices(), source.indices().map_or(0, Indices::len));
-        let read = caches.cards.entry(mesh.id()).or_insert_with(|| MeshCards { size, cards: leaf_cards(source) });
-        if read.size != size {
-            *read = MeshCards { size, cards: leaf_cards(source) };
-        }
-        let shed = deciduous.then_some(season.leaf_fall);
-        let mut cards: Vec<&Card> = read.cards.iter().filter(|card| card.on_tree(shed)).collect();
+        let Some(leaves) = leaf_source(render, tree, pooled, pools.as_deref()) else { continue };
+        let Some(source) = meshes.get(&leaves.mesh) else { continue };
+        let shed = leaves.deciduous.then_some(season.leaf_fall);
+        let mut cards: Vec<&Card> =
+            caches.cards(leaves.mesh.id(), source).cards.iter().filter(|card| card.on_tree(shed)).collect();
         if cards.is_empty() {
             continue;
         }
@@ -542,33 +700,118 @@ pub(crate) fn drop_leaves(
             let j = i + (rng.next_f32() * (cards.len() - i) as f32) as usize;
             cards.swap(i, j.min(last));
         }
-        let chosen = &cards[..chosen];
         // The ground: the terrain, or the height the tree stands at (a felled tree's: its stump's).
         let stood = felled.and_then(|felled| stumps.get(felled.stump).ok()).unwrap_or(at).translation().y;
         let height = |p: Vec2| ground.as_deref().map_or(stood, |ground| ground.height(p));
-        let Some(burst) = build_burst(source, chosen, at, height, fall, &mut rng) else { continue };
-
-        // The tree's leaf material, made to move falling leaves: one per look, made again when the
-        // look changes.
-        let handle = match caches.materials.get(&material.id()) {
-            Some(handle) if flora.get(handle).is_some_and(|made| made.extension == look.extension) => handle.clone(),
-            _ => {
-                let handle = flora.add(look);
-                caches.materials.insert(material.id(), handle.clone());
-                handle
-            }
-        };
+        let mut burst = BurstBuilder::new(at.translation());
+        burst.add(source, cards[..chosen].iter().copied(), at, height, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+        let Some(burst) = burst.finish() else { continue };
+        let Some(material) = caches.material(&leaves.material, &mut flora) else { continue };
         live += burst.leaves;
-        commands.spawn((
-            Mesh3d(meshes.add(burst.mesh)),
-            MeshMaterial3d(handle),
-            // Spawned after this frame's transform propagation: its global transform is set here.
-            Transform::from_translation(at.translation()),
-            GlobalTransform::from_translation(at.translation()),
-            Visibility::default(),
-            burst.aabb,
-            LeafBurst { tree: drop.tree, leaves: burst.leaves, gone_at: time.elapsed_secs() + burst.life },
-        ));
+        spawn_burst(&mut commands, &mut meshes, burst, at.translation(), material, Some(drop.tree), &time);
+    }
+}
+
+/// Where the season's shedding stands: the leaf fall shed up to and the render time it was, and
+/// the leaf fall of the last frame.
+#[derive(Resource, Default)]
+pub(crate) struct SeasonShed {
+    shed: Option<(f32, f32)>,
+    last: f32,
+}
+
+/// Whether [`shed_with_season`] has anything to do: the season changed, or leaves it passed are
+/// still to let go.
+pub(crate) fn season_sheds(season: Res<FloraSeason>, shed: Res<SeasonShed>) -> bool {
+    season.is_changed() || shed.shed.is_some_and(|(from, _)| from < shed.last)
+}
+
+/// Let the leaves the season sheds fall. Every [`SHED_EVERY`] seconds while the leaf fall rises,
+/// the leaves of the deciduous trees within [`FallingLeaves::autumn_distance`] of a camera whose
+/// moment it has passed since (the very leaves the shaders stop drawing) let go, each at the time
+/// the leaf fall passed it, in one burst per look of leaves.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(crate) fn shed_with_season(
+    mut commands: Commands,
+    settings: Res<FallingLeaves>,
+    season: Res<FloraSeason>,
+    time: Res<Time>,
+    wind: Res<FloraWind>,
+    ground: Option<Res<FloraGround>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut flora: ResMut<Assets<FloraMaterial>>,
+    pools: Option<Res<Assets<TreePool>>>,
+    mut caches: ResMut<FallCaches>,
+    mut state: ResMut<SeasonShed>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    trees: Query<(&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>), Without<Felled>>,
+    bursts: Query<&LeafBurst>,
+) {
+    let to = season.leaf_fall.clamp(0.0, 1.0);
+    let now = time.elapsed_secs_wrapped();
+    let last = std::mem::replace(&mut state.last, to);
+    let Some((from, since)) = state.shed else {
+        state.shed = Some((to, now));
+        return;
+    };
+    // Spring (the leaves come back) or a season set at once (they are gone at once): none falls.
+    if to < from || to - last > SEASON_JUMP {
+        state.shed = Some((to, now));
+        return;
+    }
+    let mut elapsed = now - since;
+    if elapsed < -0.5 * WRAP {
+        elapsed += WRAP;
+    }
+    if to == from {
+        state.shed = Some((to, now));
+        return;
+    }
+    if elapsed < SHED_EVERY {
+        return;
+    }
+    state.shed = Some((to, now));
+
+    let eyes: Vec<Vec3> = cameras.iter().map(GlobalTransform::translation).collect();
+    let reach = settings.autumn_distance * settings.autumn_distance;
+    if eyes.is_empty() || reach <= 0.0 {
+        return;
+    }
+    let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
+    let fall = Fall::now(&time, &settings, &wind);
+    let mut rng = SeededRng::from_parts(now.to_bits() as i32, 1);
+    let span = to - from;
+    let mut looks: HashMap<AssetId<FloraMaterial>, (Handle<FloraMaterial>, BurstBuilder)> = HashMap::default();
+    for (at, render, tree, pooled) in &trees {
+        let budget = settings.max_leaves.saturating_sub(live) as usize;
+        if budget == 0 {
+            break;
+        }
+        let position = at.translation();
+        if !eyes.iter().any(|eye| eye.distance_squared(position) <= reach) {
+            continue;
+        }
+        let Some(leaves) = leaf_source(render, tree, pooled, pools.as_deref()).filter(|leaves| leaves.deciduous) else {
+            continue;
+        };
+        let Some(source) = meshes.get(&leaves.mesh) else { continue };
+        let falling: Vec<&Card> = caches.cards(leaves.mesh.id(), source).shed_between(from, to).take(budget).collect();
+        if falling.is_empty() {
+            continue;
+        }
+        let height = |p: Vec2| ground.as_deref().map_or(position.y, |ground| ground.height(p));
+        let (_, burst) = looks
+            .entry(leaves.material.id())
+            .or_insert_with(|| (leaves.material.clone(), BurstBuilder::new(position)));
+        // Each lets go when the leaf fall passed its moment, assuming it rose evenly meanwhile.
+        live += burst.add(source, falling, at, height, fall, &mut rng, |card, _| {
+            ((card.moment - from) / span - 1.0) * elapsed
+        });
+    }
+    for (_, (leaf_material, burst)) in looks {
+        let origin = burst.origin;
+        let (Some(burst), Some(material)) = (burst.finish(), caches.material(&leaf_material, &mut flora)) else { continue };
+        spawn_burst(&mut commands, &mut meshes, burst, origin, material, None, &time);
     }
 }
 
@@ -660,7 +903,9 @@ mod tests {
         let tree = GlobalTransform::from(Transform::from_xyz(4.0, 1.0, -3.0).with_scale(Vec3::splat(1.5)));
         let fall = Fall { now: 10.0, rest: 6.0, drift: Vec2::new(0.5, 0.0) };
         let mut rng = SeededRng::new(3);
-        let burst = build_burst(&oak, &chosen, &tree, |_| 1.0, fall, &mut rng).expect("leaves above the ground");
+        let mut burst = BurstBuilder::new(tree.translation());
+        burst.add(&oak, chosen.iter().copied(), &tree, |_| 1.0, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+        let burst = burst.finish().expect("leaves above the ground");
         assert_eq!(burst.leaves as usize, chosen.len());
         let vertices: usize = chosen.iter().map(|card| card.vertices.len()).sum();
         assert_eq!(burst.mesh.count_vertices(), vertices);
@@ -730,13 +975,13 @@ mod tests {
         app.update();
         let shaken = bursts(&mut app);
         assert_eq!(shaken.len(), 1);
-        assert_eq!((shaken[0].tree, shaken[0].leaves), (near, 12));
+        assert_eq!((shaken[0].tree, shaken[0].leaves), (Some(near), 12));
 
         // A drop takes what is left under the cap.
         app.world_mut().resource_mut::<FallingLeaves>().max_leaves = 20;
         app.world_mut().resource_mut::<Messages<DropLeaves>>().write(DropLeaves { tree: far, count: 50 });
         app.update();
-        let dropped: Vec<LeafBurst> = bursts(&mut app).into_iter().filter(|burst| burst.tree == far).collect();
+        let dropped: Vec<LeafBurst> = bursts(&mut app).into_iter().filter(|burst| burst.tree == Some(far)).collect();
         assert_eq!(dropped.len(), 1);
         assert_eq!(dropped[0].leaves, 8);
 
@@ -752,7 +997,7 @@ mod tests {
             let mesh = world.resource::<Assets<Mesh>>().get(&render.foliage.as_ref().unwrap().1).unwrap();
             on_tree(mesh, None)
         };
-        let regrown: Vec<LeafBurst> = bursts(&mut app).into_iter().filter(|burst| burst.tree == far).collect();
+        let regrown: Vec<LeafBurst> = bursts(&mut app).into_iter().filter(|burst| burst.tree == Some(far)).collect();
         assert_eq!(regrown.len(), 2);
         assert_eq!(regrown.iter().map(|burst| burst.leaves).max(), Some(young as u32));
 
@@ -764,5 +1009,69 @@ mod tests {
             app.update();
         }
         assert!(bursts(&mut app).is_empty());
+    }
+
+    #[test]
+    fn a_pooled_tree_drops_leaves_from_its_variant() {
+        use crate::lod::LodSettings;
+        use crate::pool::build_pool;
+        let mut app = app();
+        let pool = {
+            let world = app.world_mut();
+            let built = world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+                let _ = world;
+                build_pool(&TreePreset::Pine.params(), 2, f32::INFINITY, &LodSettings::default(), &mut meshes)
+            });
+            world.resource_mut::<Assets<TreePool>>().add(built)
+        };
+        let tree = app.world_mut().spawn((PooledTree { pool, variant: 1 }, Transform::from_xyz(5.0, 0.0, 0.0))).id();
+        for _ in 0..5 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<Messages<DropLeaves>>().write(DropLeaves { tree, count: 15 });
+        app.update();
+        let dropped = bursts(&mut app);
+        assert_eq!(dropped.len(), 1);
+        assert_eq!((dropped[0].tree, dropped[0].leaves), (Some(tree), 15));
+    }
+
+    #[test]
+    fn the_leaves_the_season_sheds_near_a_camera_fall_and_none_when_it_is_set_at_once() {
+        let mut app = app();
+        let oak = TreePreset::Oak.params();
+        let near = app.world_mut().spawn((ProceduralTree(oak.clone()), Transform::default())).id();
+        app.world_mut().spawn((ProceduralTree(oak), Transform::from_xyz(200.0, 0.0, 0.0)));
+        app.world_mut().spawn((Camera3d::default(), Transform::from_xyz(0.0, 2.0, 12.0)));
+        *app.world_mut().resource_mut::<FloraSeason>() = FloraSeason { autumn: 1.0, leaf_fall: 0.3, ..FloraSeason::SUMMER };
+        app.update();
+        app.update();
+        let fallen = |app: &mut bevy::app::App| bursts(app).iter().map(|burst| burst.leaves).sum::<u32>();
+        assert_eq!(fallen(&mut app), 0);
+
+        // Leaf fall rises 0.3 -> 0.4 over a second: the near oak's leaves whose moment it passes
+        // fall (the very ones the shaders stop drawing), from no one tree; the far oak's do not.
+        for step in 1..=10 {
+            app.world_mut().resource_mut::<FloraSeason>().leaf_fall = 0.3 + 0.01 * step as f32;
+            app.update();
+        }
+        app.update();
+        let expected = {
+            let world = app.world();
+            let render = world.get::<TreeRender>(near).unwrap();
+            let mesh = world.resource::<Assets<Mesh>>().get(&render.foliage.as_ref().unwrap().1).unwrap();
+            let to = app.world().resource::<FloraSeason>().leaf_fall;
+            leaf_cards(mesh).iter().filter(|card| !card.flower && (0.3..to).contains(&card.moment)).count() as u32
+        };
+        assert!(expected > 20, "only {expected} leaves in a tenth of the season");
+        assert_eq!(fallen(&mut app), expected);
+        assert!(bursts(&mut app).iter().all(|burst| burst.tree.is_none()));
+
+        // A season set at once (to bare) and spring (back to green) drop none.
+        for leaf_fall in [0.9, 0.2] {
+            app.world_mut().resource_mut::<FloraSeason>().leaf_fall = leaf_fall;
+            app.update();
+            app.update();
+            assert_eq!(fallen(&mut app), expected, "at {leaf_fall}");
+        }
     }
 }

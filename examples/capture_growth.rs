@@ -17,7 +17,9 @@
 //! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`): the deciduous
 //! trees turn their autumn colours and shed their leaves, snow settles on every tree and melts,
 //! the cherry blossoms on bare branches, and the leaves come out again, while the pine and the
-//! cypress stay green. The blossom is too few pixels to win a pink in the grove's palette (it
+//! cypress stay green. The year is a time-lapse, so its leaves are shed where they hang: falling
+//! at their own speed, they would still be in the air in winter. The blossom is too few pixels to
+//! win a pink in the grove's palette (it
 //! comes out white), so the GIF takes 80 colours from the whole clip and 16 from the pink pixels
 //! of the cherry's crown while it blossoms:
 //!
@@ -63,8 +65,8 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    FellTree, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle, TreeAge,
-    TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
+    FallingLeaves, FellTree, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront, ProceduralTree, RenderStyle,
+    TreeAge, TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -310,6 +312,13 @@ fn main() {
             strength: if matches!(scene, Scene::Shake | Scene::Fell) { 0.15 } else { 0.5 },
             direction: wind,
             speed: 1.4,
+            ..default()
+        })
+        // The seasons clip is a time-lapse, a year in eight seconds: leaves falling at their own
+        // speed would still hang in the air in winter, so the season's leaves are shed where they
+        // hang, as before falling leaves (`FallingLeaves::autumn_distance` 0).
+        .insert_resource(FallingLeaves {
+            autumn_distance: if matches!(scene, Scene::Seasons) { 0.0 } else { FallingLeaves::default().autumn_distance },
             ..default()
         })
         // Time stands still until `drive` steps it, once per captured frame.

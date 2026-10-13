@@ -8,6 +8,7 @@
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
 //!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
+//!     [--autumn <seconds>[,<after>[,<every>]]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -46,6 +47,9 @@
 //! `--drop <count>[,<after>[,<every>]]` makes the tree drop `count` leaves (`DropLeaves`) once it is
 //! ready, and takes the first photograph `after` seconds later and each further one `every` seconds
 //! after the one before; with one `--distance`, the frames follow the leaves as they fall and lie.
+//! `--autumn <seconds>[,<after>[,<every>]]` instead lets the season's leaf fall rise from the
+//! `--season` value to 1 over `seconds` once the tree is ready, photographed the same way: the
+//! tree's own leaves let go as the season passes them.
 //!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
@@ -122,6 +126,9 @@ struct Args {
     /// Drop this many leaves from the tree once it is ready, photograph `.1` seconds later and every
     /// `.2` seconds after that.
     drop: Option<(u32, f32, f32)>,
+    /// Let the leaf fall rise to 1 over `.0` seconds once the tree is ready, photograph `.1` seconds
+    /// later and every `.2` seconds after that.
+    autumn: Option<(f32, f32, f32)>,
 }
 
 fn usage() -> ! {
@@ -131,7 +138,7 @@ fn usage() -> ! {
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
-         [--on-centre] [--drop <count>[,<after>[,<every>]]]"
+         [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]]"
     );
     std::process::exit(2);
 }
@@ -170,6 +177,7 @@ fn parse_args() -> Args {
         slope: 0.0,
         on_centre: false,
         drop: None,
+        autumn: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -269,6 +277,15 @@ fn parse_args() -> Args {
                     _ => usage(),
                 };
             }
+            "--autumn" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.autumn = match p[..] {
+                    [seconds] => Some((seconds, 0.0, 0.0)),
+                    [seconds, after] => Some((seconds, after, 0.0)),
+                    [seconds, after, every] => Some((seconds, after, every)),
+                    _ => usage(),
+                };
+            }
             _ => usage(),
         }
     }
@@ -335,9 +352,24 @@ fn main() {
         base: 0.0,
     })
     .add_systems(Startup, setup)
-    .add_systems(Update, (drive, draw_colliders))
+    .add_systems(Update, (drive, draw_colliders, autumn))
     .add_systems(Startup, gizmos_on_top);
     app.run();
+}
+
+/// With `--autumn`: once the tree is ready, the leaf fall rises from the `--season` value to 1 over
+/// the given seconds, so the leaves fall as a season passing lets them.
+fn autumn(shoot: Res<Shoot>, time: Res<Time>, mut season: ResMut<FloraSeason>, mut start: Local<Option<(f32, f32)>>) {
+    let Some((seconds, ..)) = shoot.args.autumn else { return };
+    if !shoot.ready {
+        return;
+    }
+    let (t0, from) = *start.get_or_insert((time.elapsed_secs(), season.leaf_fall));
+    let share = ((time.elapsed_secs() - t0) / seconds.max(0.01)).clamp(0.0, 1.0);
+    let leaf_fall = from + (1.0 - from) * share;
+    if season.leaf_fall != leaf_fall {
+        season.leaf_fall = leaf_fall;
+    }
 }
 
 /// The collider lines are drawn over the tree, not hidden inside its wood, and thick enough to
@@ -535,6 +567,10 @@ fn drive(
             }
             shoot.wait = ticks(after).max(SETTLE_FRAMES);
         }
+        // `--autumn`: the leaf fall starts rising now (`autumn`), and the first photograph waits.
+        if let Some((_, after, _)) = shoot.args.autumn {
+            shoot.wait = ticks(after).max(SETTLE_FRAMES);
+        }
     }
     if shoot.in_flight {
         if !screenshots.is_empty() {
@@ -542,7 +578,8 @@ fn drive(
         }
         shoot.in_flight = false;
         shoot.frame += 1;
-        shoot.wait = shoot.args.drop.map_or(SETTLE_FRAMES, |(_, _, every)| ticks(every).max(SETTLE_FRAMES));
+        let every = shoot.args.drop.map(|(_, _, every)| every).or(shoot.args.autumn.map(|(_, _, every)| every));
+        shoot.wait = every.map_or(SETTLE_FRAMES, |every| ticks(every).max(SETTLE_FRAMES));
         if shoot.frame == shoot.args.frames {
             let path = shoot.args.out.join("frames.tsv");
             fs::write(&path, &shoot.log).expect("write frames.tsv");
