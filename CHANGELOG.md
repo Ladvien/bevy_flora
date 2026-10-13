@@ -5,6 +5,63 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.36.0] - 2026-10-13
+
+Orthographic cameras, for a game with an isometric camera (issues #51 and #52): the levels of
+detail and impostors follow an orthographic camera's zoom, and the see-through fade takes the
+shape such a game's own fade has. `SeeThroughTrees` has four new fields, so a literal that names
+only `target` and `radius` needs `..default()`: a minor release.
+
+### Added
+
+- **Levels of detail by zoom.** While the main camera (the active `Camera3d` with the lowest
+  `order`) is orthographic, the plugin scales every level-of-detail band of pooled trees, their
+  impostors included, and of `TreeLod` trees by its zoom: a tree where the view meets the ground
+  (`FloraGround`, or y = 0) gets the level a 45° perspective camera gives it from where that camera
+  sees as tall a view. The bands are rewritten whenever the zoom moves by more than 2%, and trees
+  at different distances cross over at slightly different zooms (#51).
+- **`LodScale(f32)`** (a resource, in the prelude, 1 by default): multiplies every
+  level-of-detail distance, on top of the zoom; a quality setting under any camera.
+- **`SeeThroughTrees` under an orthographic camera** cuts a cylinder along the view, as every ray
+  is parallel, instead of a cone, and four new fields shape the cut to match a fade the game draws
+  on its own meshes: `keep`, the share of a tree kept at the centre (0 by default); `inner`, where
+  the edge starts to feather (0.7 of the radius); `in_front`, cutting only what stands more than
+  that many metres before the target (`None`: over the last tenth of the way, as before); `floor`,
+  a world height below which nothing is cut (`None`) (#52). With the defaults it cuts exactly as
+  before.
+- **`examples/isometric.rs`**: an orthographic camera at 35° following a walker through about
+  1 300 pooled trees, the see-through shaped like an isometric game's fade, zooming with the mouse
+  wheel while the levels of detail follow; `--demo` records `docs/isometric.gif`. README:
+  "Isometric and top-down games: orthographic cameras".
+- `forest --ortho <view height>`.
+
+### Changed
+
+- `SeeThroughTrees` has the four fields above.
+- The see-through fade takes four vectors of the shared buffer instead of two, so the pushers
+  start at slot 27 and the fire at 60.
+
+### Measured
+
+- **Look.** The 441 gallery scenarios render at a mean difference of 0.000 of 255 from 0.35.0's on
+  the CPU and with `--gpu` (byte for byte but the painterly and toon maple and oak; no `ERROR`), the
+  growth, grove, seasons and fire clips frame for frame and push but one frame by a level; the
+  shake, fell, chop and harvest clips and the playground's demo drop other leaves of the same
+  trees (the order the plugin's systems run in moved), every tree, stump, log and apple where it
+  was. A perspective `forest --see-through` screenshot is byte for byte 0.35.0's.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.35.0): 1 000
+  individual oaks 24.69, 24.62 and 24.67 ms (0.35.0: 24.11, 24.62 and 24.71), 100 000 pooled oaks
+  7.72 and 7.62 ms (7.63 and 7.81), 1 000 oaks seen through (`--see-through`) 27.33 and 27.29 ms
+  (27.21 and 27.23).
+- **The isometric demo** writes the same frames twice. A test holds the bands of a pooled and a
+  `TreeLod` tree to `LodScale` (a rebuilt tree's new levels included) and to an orthographic
+  camera's zoom at two view heights, back to their own distances under a perspective camera.
+- **Found and fixed before release.** The demo's first camera stood 90 m back: at the widest zoom
+  the ground at the screen's bottom was behind it, and the trees there, nearest the camera, stayed
+  finer than the rest. It now stands 400 m back, and `LodScale`'s docs say to stand an orthographic
+  camera well back. A forest scrolling and swaying under the camera made a 16 MB GIF; the demo's
+  camera holds still on a still day (7 MB).
+
 ## [0.35.0] - 2026-10-13
 
 Three requests from a game moving its forest onto the crate (issues #53, #55 and #58): trees kept
@@ -2072,6 +2129,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.36.0]: https://github.com/Ladvien/bevy_flora/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/Ladvien/bevy_flora/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/Ladvien/bevy_flora/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/Ladvien/bevy_flora/compare/v0.32.0...v0.33.0

@@ -322,7 +322,7 @@ pub(crate) fn start_felling(
             }
             let level0 = render.foliage.iter().chain(&render.flowers).map(|child| child.0);
             for child in std::iter::once(render.trunk).chain(level0) {
-                commands.entity(child).remove::<VisibilityRange>();
+                commands.entity(child).remove::<(VisibilityRange, crate::pool::LodBand)>();
             }
         }
 

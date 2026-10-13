@@ -50,7 +50,7 @@ use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{LeafStyle, RenderStyle, TreeParams};
 use crate::push::{PUSH_SLOT, PUSH_VECTORS, PushSlots};
-use crate::see_through::{SEE_THROUGH_SLOT, SeeThroughCapsule};
+use crate::see_through::{SEE_THROUGH_SLOT, SEE_THROUGH_VECTORS, SeeThroughCapsule};
 
 mod share;
 pub use share::SharedFlora;
@@ -418,9 +418,9 @@ impl FloraUniform {
 }
 
 /// How many `Vec4`s the shared buffer holds before the fire's grid: see [`wind_vectors`], and after
-/// them the two of the see-through fade (`see_through::SEE_THROUGH_SLOT`) and the pushers'
+/// them the see-through fade's (`see_through::SEE_THROUGH_SLOT`) and the pushers'
 /// (`push::PUSH_SLOT`).
-pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + 2 + PUSH_VECTORS;
+pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + SEE_THROUGH_VECTORS + PUSH_VECTORS;
 
 /// The shared buffer's slot whose third lane holds [`FloraWetness`] (`sync_wind` writes it).
 pub(crate) const WETNESS_SLOT: usize = 2;
@@ -869,8 +869,9 @@ pub(crate) fn sync_wind(
     let mut packed = wind_vectors(&wind, &season, &shakes).map(|v| v.to_array());
     packed[WETNESS_SLOT][2] = wetness.amount();
     // The see-through fade's slots are written by `sync_see_through`; keep them.
-    packed[SEE_THROUGH_SLOT] = capsule.0[0].to_array();
-    packed[SEE_THROUGH_SLOT + 1] = capsule.0[1].to_array();
+    for (i, vector) in capsule.0.iter().enumerate() {
+        packed[SEE_THROUGH_SLOT + i] = vector.to_array();
+    }
     // So are the pushers', by `push::sync_pushers`.
     packed[PUSH_SLOT..PUSH_SLOT + PUSH_VECTORS].copy_from_slice(&push.0);
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.

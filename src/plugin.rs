@@ -52,7 +52,10 @@ use crate::fire::{
 };
 use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
-use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees, sync_shadow_casting};
+use crate::pool::{
+    LodBand, LodScale, ZoomScale, banded, fill_pooled_shapes, follow_orthographic_zoom, scale_lod_bands,
+    spawn_pooled_trees, sync_shadow_casting,
+};
 use crate::shading::{
     FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWetness, FloraWind, FloraWindBuffer, SharedFlora,
     TextureLibrary, TreeShakes,
@@ -240,6 +243,9 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<TreeLod>()
             .register_type::<FallingLeaves>()
             .register_type::<Burnt>()
+            .init_resource::<LodScale>()
+            .init_resource::<ZoomScale>()
+            .register_type::<LodScale>()
             .add_systems(
                 bevy::app::Update,
                 (
@@ -292,6 +298,15 @@ impl bevy::app::Plugin for FloraPlugin {
                     sync_shadow_casting,
                 )
                     .after(bevy::transform::TransformSystems::Propagate),
+            )
+            // Levels of detail follow `LodScale` and an orthographic camera's zoom: after transform
+            // propagation (the camera is where it is this frame), before the ranges are checked.
+            .add_systems(
+                bevy::app::PostUpdate,
+                (follow_orthographic_zoom, scale_lod_bands)
+                    .chain()
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
             )
             // The fire steps after transform propagation (its fuel is where the trees stand this
             // frame) and is written into the shared buffer when it changed; the materials are
@@ -794,11 +809,11 @@ pub struct TreeLodMesh(pub u8);
 
 /// The distances level `level` of a tree drawn with [`TreeLod`] is drawn at: a pool's bands,
 /// with level 2 at every distance beyond `lod2` (an individual tree has no impostor).
-fn level_band(level: usize, distances: LodDistances) -> VisibilityRange {
+fn level_band(level: usize, distances: LodDistances) -> (LodBand, VisibilityRange) {
     match level {
-        0 => band(0.0, distances.lod1),
-        1 => band(distances.lod1, distances.lod2),
-        _ => band(distances.lod2, f32::INFINITY),
+        0 => banded(0.0, distances.lod1),
+        1 => banded(distances.lod1, distances.lod2),
+        _ => banded(distances.lod2, f32::INFINITY),
     }
 }
 
@@ -821,7 +836,7 @@ fn sync_levels(
                 commands.entity(child).despawn();
             }
             for child in level0.into_iter().flatten() {
-                commands.entity(child).remove::<VisibilityRange>();
+                commands.entity(child).remove::<(VisibilityRange, LodBand)>();
             }
         }
         return;
@@ -1582,7 +1597,7 @@ mod tests {
         assert_eq!(render.age, age);
         let level0 = [Some(render.trunk), render.foliage.as_ref().map(|c| c.0), render.flowers.as_ref().map(|c| c.0)];
         for child in level0.into_iter().flatten() {
-            assert_eq!(margins(child), band_of(level_band(0, lod.distances)));
+            assert_eq!(margins(child), band_of(level_band(0, lod.distances).1));
         }
         let expected = build_lods(params, age, lod);
         let (settings, levels) = render.lod.as_ref().expect("no coarse levels");
@@ -1593,7 +1608,7 @@ mod tests {
             let (leaves, _) = level.leaves.as_ref().expect("no coarse leaves");
             for child in [*wood, *leaves] {
                 assert_eq!(world.get::<TreeLodMesh>(child), Some(&TreeLodMesh(index as u8 + 1)));
-                assert_eq!(margins(child), band_of(level_band(index + 1, lod.distances)));
+                assert_eq!(margins(child), band_of(level_band(index + 1, lod.distances).1));
             }
             let wood_positions: Vec<[f32; 3]> = want.trunk.positions.iter().map(|p| p.to_array()).collect();
             assert_eq!(mesh(*wood), wood_positions, "level {} wood", index + 1);

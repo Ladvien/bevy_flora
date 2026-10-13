@@ -407,7 +407,7 @@ pub use params::{
 };
 pub use pipeline::{TreeMeshes, build_tree};
 pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeMature, TreeRender};
-pub use pool::{PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
+pub use pool::{LodScale, PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
@@ -433,7 +433,8 @@ pub mod prelude {
         FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
         Burnt, FallenFruit, FallingFruit, FruitFell, FruitParams, TreeBurnt, TreeFruit,
         GpuGrowth, Growing, GustFront,
-        LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
+        LeafBurst, LeafScan, LodDistances, LodScale, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset,
+        RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
         TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
         WindResponse, WoodCapsule, build_pool,
