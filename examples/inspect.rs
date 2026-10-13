@@ -6,7 +6,7 @@
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
-//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
+//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>]
 //!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
 //!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]
@@ -76,7 +76,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind,
+    BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWetness, FloraWind,
     FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreeNotch,
     TreePool, TreePreset, TreeShape, build_pool, build_tree,
 };
@@ -126,6 +126,8 @@ struct Args {
     colliders: bool,
     /// How far deciduous trees have turned and shed their leaves.
     season: FloraSeason,
+    /// How wet the trees are (`FloraWetness`).
+    wet: f32,
     /// Fell the tree toward this bearing (degrees from +x toward +z) and photograph it lying.
     fell: Option<f32>,
     /// With `--fell`, cut the trunk into logs this long once it lies still.
@@ -157,7 +159,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--fell <deg> [--buck <m>]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
          [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]"
     );
@@ -193,6 +195,7 @@ fn parse_args() -> Args {
         msaa: true,
         colliders: false,
         season: FloraSeason::SUMMER,
+        wet: 0.0,
         fell: None,
         buck: None,
         slope: 0.0,
@@ -288,6 +291,7 @@ fn parse_args() -> Args {
                 };
                 args.season = FloraSeason { autumn, leaf_fall, snow, blossom };
             }
+            "--wet" => args.wet = value(&mut it),
             "--fell" => args.fell = Some(value(&mut it)),
             "--buck" => args.buck = Some(value(&mut it)),
             "--slope" => args.slope = value(&mut it),
@@ -386,6 +390,7 @@ fn main() {
     })
     .insert_resource(FloraWind { strength: wind, ..default() })
     .insert_resource(season)
+    .insert_resource(FloraWetness(args.wet))
     .insert_resource(bevy::winit::WinitSettings::continuous())
     .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
     .insert_resource(Shoot {

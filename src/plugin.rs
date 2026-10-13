@@ -51,8 +51,8 @@ use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
 use crate::pool::{band, fill_pooled_shapes, spawn_pooled_trees};
 use crate::shading::{
-    FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWind, FloraWindBuffer, SharedFlora, TextureLibrary,
-    TreeShakes,
+    FloraMaterial, FloraMaterialSupport, FloraSeason, FloraWetness, FloraWind, FloraWindBuffer, SharedFlora,
+    TextureLibrary, TreeShakes,
     detect_flora_support,
     expire_shakes, flora_decided, sync_wind,
 };
@@ -232,8 +232,11 @@ impl bevy::app::Plugin for FloraPlugin {
                     detect_flora_support,
                     expire_shakes,
                     sync_wind.run_if(
-                        |wind: Res<FloraWind>, season: Res<FloraSeason>, shakes: Res<TreeShakes>| {
-                            wind.is_changed() || season.is_changed() || shakes.is_changed()
+                        |wind: Res<FloraWind>,
+                         season: Res<FloraSeason>,
+                         wetness: Res<FloraWetness>,
+                         shakes: Res<TreeShakes>| {
+                            wind.is_changed() || season.is_changed() || wetness.is_changed() || shakes.is_changed()
                         },
                     ),
                     sync_tree_assets.run_if(resource_exists::<Assets<TreeParams>>),
@@ -1435,6 +1438,14 @@ mod tests {
         let shakes = app.world().resource::<TreeShakes>().clone();
         assert_eq!(wind_buffer(&app), wind_vectors(&wind, &FloraSeason::AUTUMN, &shakes).map(|v| v.to_array()));
         assert_eq!(wind_buffer(&app)[7][0], 2.0);
+
+        // And the rain: one value of the buffer, as wet as it gets at 1, and no material.
+        app.world_mut().insert_resource(FloraWetness(0.7));
+        assert!(update_and_modified(&mut app).is_empty(), "the rain modified a material");
+        assert_eq!(wind_buffer(&app)[2][2], 0.7);
+        app.world_mut().insert_resource(FloraWetness(3.0));
+        app.update();
+        assert_eq!(wind_buffer(&app)[2][2], 1.0);
     }
 
     #[test]

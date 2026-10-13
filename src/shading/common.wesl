@@ -57,7 +57,7 @@ struct FloraUniform {
 // The weather, the same for every tree (`FloraWindBuffer`, `wind_vectors` in shading/mod.rs):
 //   0: wind direction x, direction z, strength, speed
 //   1: bend, flutter, gust strength, turbulence
-//   2: gust frequency, flutter frequency, 0, 0
+//   2: gust frequency, flutter frequency, how wet the trees are (`FloraWetness`), 0
 //   3: gust front origin x, origin z, direction x, direction z
 //   4: gust front speed, width, strength, start time
 //   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, snow, the
@@ -423,6 +423,37 @@ fn snow_on(p: ptr<function, PbrInput>, n: vec3<f32>, shelter: f32, frost: f32) -
     (*p).material.base_color = vec4<f32>(mix(base.rgb, SNOW_ALBEDO, cover), base.a);
     (*p).material.perceptual_roughness = mix((*p).material.perceptual_roughness, 0.9, cover);
     return cover;
+}
+
+// A soaked surface (`FloraWetness`). Bark, porous, darkens to about half (`WET_WOOD_ALBEDO`), its
+// colour deepens (its linear colour raised to `1 + WET_WOOD_DEEPEN`: darker and more saturated, as
+// water in a surface makes it) and it turns glossy, down to `WET_WOOD_ROUGHNESS`: the dark wet
+// bark is what says rain. A leaf, waxy, keeps its brightness and its roughness and only its
+// colour grows richer (`WET_LEAF_SATURATE` further from its own grey): a darker or glossier leaf
+// leaves the sky's and the sun's white sheen a bigger share of what it shows, and the crown
+// greys, reading as frost or dust, not rain.
+const WET_WOOD_ALBEDO: f32 = 0.55;
+const WET_WOOD_DEEPEN: f32 = 0.15;
+const WET_WOOD_ROUGHNESS: f32 = 0.5;
+const WET_LEAF_SATURATE: f32 = 0.25;
+
+// Wet a surface by the rain (`FloraWetness`): `leaf` is 1 for a leaf, 0 for wood (between for an
+// impostor's texel, by its baked translucency). Dry, the surface is exactly as it was. Before the
+// snow, which covers it.
+fn wet_on(p: ptr<function, PbrInput>, leaf: f32) {
+    let wet = flora_wind[2].z;
+    // Dry: nothing to do (and `pow(x, 1)` need not give back `x` to the last bit).
+    if wet <= 0.0 {
+        return;
+    }
+    let base = (*p).material.base_color;
+    let rgb = max(base.rgb, vec3<f32>(0.0));
+    let bark = pow(rgb, vec3<f32>(1.0 + WET_WOOD_DEEPEN * wet)) * mix(1.0, WET_WOOD_ALBEDO, wet);
+    let grey = vec3<f32>(dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722)));
+    let foliage = max(grey + (rgb - grey) * (1.0 + WET_LEAF_SATURATE * wet), vec3<f32>(0.0));
+    (*p).material.base_color = vec4<f32>(mix(bark, foliage, leaf), base.a);
+    let rough = (*p).material.perceptual_roughness;
+    (*p).material.perceptual_roughness = mix(rough, min(rough, WET_WOOD_ROUGHNESS), wet * (1.0 - leaf));
 }
 
 // The world normal of the flat face being drawn, on the side the camera sees. Snow on a leaf card

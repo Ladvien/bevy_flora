@@ -100,7 +100,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.7 ms a frame (1080p, Apple M4 Pro).
+//! 7.6 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -182,6 +182,10 @@
 //!     *season = FloraSeason::of_year(time.elapsed_secs() / 120.0);
 //! }
 //! ```
+//!
+//! [`FloraWetness`] is how wet the rain has made the trees, 0 (dry) to 1 (soaked): wet bark
+//! darkens and turns glossy and the leaves' green grows richer, on every way a tree is drawn, for
+//! one value written to the same buffer.
 //!
 //! # Trees that react
 //!
@@ -388,8 +392,8 @@ pub use scatter::{Scatter, ScatterPoint, poisson_disc};
 pub use see_through::SeeThroughTrees;
 pub use push::{FoliagePusher, MAX_PUSHERS};
 pub use shading::{
-    FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWind,
-    FloraWindBuffer, GustFront,
+    FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWetness,
+    FloraWind, FloraWindBuffer, GustFront,
     SharedFlora, TreeShake, TreeShakes,
 };
 pub use shape::{TreeShape, WoodCapsule};
@@ -404,8 +408,8 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
-        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWind, FoliageParams, FoliagePusher, GpuGrowth, Growing,
-        GustFront,
+        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
+        GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
         TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
