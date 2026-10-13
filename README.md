@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.40 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.41 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.40"
+bevy_flora = "0.41"
 ```
 
 | feature | default | what it does |
@@ -1011,6 +1011,7 @@ Which tree did the axe hit, which one is nearest the woodcutter, which ones stan
 - `within(at, radius)`: every tree whose bark at the foot is within `radius` metres.
 - `cast_ray(ray, max)`: the first trunk a ray meets, as `TreeHit { tree, point, normal, distance }`: the player's look, an arrow, a falling branch. Crowns and leaves do not stop it.
 - `get(entity)`, `iter()`, `len()`: each tree as an `IndexedTree { entity, base, axis, height, base_radius, top_radius }`.
+- `obstacles_within(at, radius)`, `obstacles()`: the lying wood a walker bumps into, which the queries above (standing trees) do not hold: every stump (felled or pooled, its `TreeStump::capsule` from its foot to its cut), bucked log (`TreeLog::capsule`) and the trunk and limbs above the cut of a tree lying on the ground (a felled tree at rest that has a `TreeShape`, and a pooled deadfall's lying tree), as `Obstacle { entity, kind, capsule }` in world space; `Obstacle::distance_to(at)` measures across the ground. A falling tree joins once it lies still, and anything goes with its entity.
 
 ```rust,no_run
 use bevy::prelude::*;
@@ -1033,6 +1034,11 @@ fn next_tree(index: &FloraIndex, woodcutter: Vec3) -> Option<Entity> {
 
 fn in_the_blast(index: &FloraIndex, at: Vec2) -> Vec<Entity> {
     index.within(at, 8.0).map(|tree| tree.entity).collect()
+}
+
+// A walker half a metre wide: can it step to `to`, or is a stump, a log or a fallen trunk there?
+fn free_to_step(index: &FloraIndex, to: Vec2) -> bool {
+    index.obstacles_within(to, 0.25).next().is_none() && index.within(to, 0.25).next().is_none()
 }
 ```
 

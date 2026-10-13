@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_flora"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "bevy",
  "ron",

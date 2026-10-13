@@ -5,9 +5,11 @@
 //! The plugin keeps it up to date: every [`ProceduralTree`] (a [`ProceduralTreeAsset`] tree once
 //! its asset has loaded) and every [`PooledTree`] (once its [`TreePool`] exists), at the age it
 //! shows, from where it stands after transform propagation. A tree moved, rebuilt or grown is
-//! updated that frame; a tree despawned or felled leaves it ([`Felled`] trees, their stumps and
-//! logs are not indexed). Each tree is its trunk, a cone from its foot to its top along the trunk's
-//! axis: what an axe or a bullet hits, not the crown, which a ray passes through.
+//! updated that frame; a tree despawned or felled leaves it. Each tree is its trunk, a cone from its
+//! foot to its top along the trunk's axis: what an axe or a bullet hits, not the crown, which a ray
+//! passes through. The lying wood is kept apart ([`FloraIndex::obstacles_within`]): stumps, logs,
+//! and the wood above the cut of a felled tree at rest (with a [`TreeShape`]) or a pooled
+//! deadfall's lying tree, each as capsules, for a game's collision on the forest floor.
 //!
 //! It is a grid of [`FloraIndex::CELL`] square cells, so a query costs the trees near it, not all
 //! of them: a hundred thousand pooled trees answer [`FloraIndex::nearest`] in microseconds.
@@ -22,7 +24,8 @@ use bevy::math::{IVec2, Vec2, Vec3, Vec3Swizzles};
 use bevy::shape::Ray3d;
 use bevy::transform::components::GlobalTransform;
 
-use crate::felling::Felled;
+use crate::felling::{Felled, TreeLog, TreeStump};
+use crate::shape::{TreeShape, WoodCapsule};
 use crate::growth::fraction;
 use crate::plugin::{ProceduralTree, TreeAge, TreeRender};
 use crate::pool::{PooledTree, TreePool};
@@ -36,6 +39,10 @@ pub struct FloraIndex {
     cells: HashMap<IVec2, Vec<Entity>>,
     /// Each tree, with the cells it is in (inclusive corners).
     trees: HashMap<Entity, (IndexedTree, IVec2, IVec2)>,
+    /// The entities with lying wood in each cell it reaches into.
+    obstacle_cells: HashMap<IVec2, Vec<Entity>>,
+    /// Each entity's lying wood, with the cells it is in (inclusive corners).
+    obstacles: HashMap<Entity, (Vec<Obstacle>, IVec2, IVec2)>,
 }
 
 /// A tree as [`FloraIndex`] knows it: its trunk, in world space.
@@ -66,6 +73,48 @@ pub struct TreeHit {
     pub normal: Vec3,
     /// How far along the ray, in world units.
     pub distance: f32,
+}
+
+/// Lying wood as [`FloraIndex`] knows it: what a walker bumps into on the forest floor
+/// ([`FloraIndex::obstacles_within`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Obstacle {
+    /// The entity it belongs to: the stump, the log, the felled tree, or the child of a pooled
+    /// deadfall that holds its lying tree's shape.
+    pub entity: Entity,
+    /// What it is.
+    pub kind: ObstacleKind,
+    /// The wood, in world space and world units.
+    pub capsule: WoodCapsule,
+}
+
+/// What an [`Obstacle`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ObstacleKind {
+    /// A stump ([`TreeStump`]), felled or pooled: from its foot to its cut.
+    Stump,
+    /// A bucked log ([`TreeLog`]).
+    Log,
+    /// The trunk or a limb of a tree lying on the ground, the wood above its cut: a felled tree at
+    /// rest that has a [`TreeShape`], or a pooled deadfall's lying tree.
+    Lying,
+}
+
+impl Obstacle {
+    /// How far its wood is from `at` (world x and z), across the ground: 0 at or inside it.
+    pub fn distance_to(&self, at: Vec2) -> f32 {
+        let (a, b) = (self.capsule.a.xz(), self.capsule.b.xz());
+        let ab = b - a;
+        let t = if ab.length_squared() > 0.0 { ((at - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        (at.distance(a + ab * t) - self.capsule.radius).max(0.0)
+    }
+}
+
+/// On the child of a pooled deadfall that holds its lying tree's [`TreeShape`]: the height of the
+/// cut in the tree's own space, below which the shape is the stump's.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct LyingWood {
+    pub(crate) cut_y: f32,
 }
 
 impl IndexedTree {
@@ -265,6 +314,64 @@ impl FloraIndex {
             }
         }
     }
+
+    /// The lying wood within `radius` world units of `at` (world x and z): every stump, log and
+    /// trunk or limb on the ground whose wood comes that near, in no order. What a walker bumps
+    /// into on the forest floor, which [`FloraIndex::within`] (standing trees) does not hold.
+    pub fn obstacles_within(&self, at: Vec2, radius: f32) -> impl Iterator<Item = &Obstacle> {
+        let (low, high) = (cell_of(at - Vec2::splat(radius)), cell_of(at + Vec2::splat(radius)));
+        (low.y..=high.y)
+            .flat_map(move |y| (low.x..=high.x).map(move |x| IVec2::new(x, y)))
+            .flat_map(move |cell| {
+                self.obstacle_cells.get(&cell).into_iter().flatten().flat_map(move |entity| {
+                    let found = self.obstacles.get(entity).filter(|(_, first, _)| first.max(low) == cell);
+                    found.into_iter().flat_map(move |(wood, ..)| wood.iter().filter(move |o| o.distance_to(at) <= radius))
+                })
+            })
+    }
+
+    /// Every obstacle (stump, log, lying wood), in no order.
+    pub fn obstacles(&self) -> impl Iterator<Item = &Obstacle> {
+        self.obstacles.values().flat_map(|(wood, ..)| wood)
+    }
+
+    /// Put `entity`'s lying wood in (again, if it was); none takes it out.
+    fn insert_obstacles(&mut self, entity: Entity, wood: Vec<Obstacle>) {
+        self.remove_obstacles(entity);
+        if wood.is_empty() {
+            return;
+        }
+        let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+        for capsule in wood.iter().map(|o| o.capsule) {
+            for p in [capsule.a.xz(), capsule.b.xz()] {
+                lo = lo.min(p - Vec2::splat(capsule.radius));
+                hi = hi.max(p + Vec2::splat(capsule.radius));
+            }
+        }
+        let (low, high) = (cell_of(lo), cell_of(hi));
+        for y in low.y..=high.y {
+            for x in low.x..=high.x {
+                self.obstacle_cells.entry(IVec2::new(x, y)).or_default().push(entity);
+            }
+        }
+        self.obstacles.insert(entity, (wood, low, high));
+    }
+
+    /// Take `entity`'s lying wood out, if it is in.
+    fn remove_obstacles(&mut self, entity: Entity) {
+        let Some((_, low, high)) = self.obstacles.remove(&entity) else { return };
+        for y in low.y..=high.y {
+            for x in low.x..=high.x {
+                let cell = IVec2::new(x, y);
+                if let Some(list) = self.obstacle_cells.get_mut(&cell) {
+                    list.retain(|e| *e != entity);
+                    if list.is_empty() {
+                        self.obstacle_cells.remove(&cell);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A trunk in its tree's own space.
@@ -373,6 +480,47 @@ pub(crate) fn index_trees(
                 add(entity, pooled, place);
             }
         }
+    }
+}
+
+/// Keep [`FloraIndex`]'s obstacles up to date: stumps and logs as they are made, moved or go; a
+/// felled tree's wood above its cut once it lies still (it needs a [`TreeShape`]); a pooled
+/// deadfall's lying tree ([`LyingWood`]).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(crate) fn index_obstacles(
+    mut index: ResMut<FloraIndex>,
+    mut gone_stumps: RemovedComponents<TreeStump>,
+    mut gone_logs: RemovedComponents<TreeLog>,
+    mut gone_felled: RemovedComponents<Felled>,
+    mut gone_lying: RemovedComponents<LyingWood>,
+    stumps: Query<(Entity, &TreeStump, &GlobalTransform), Or<(Changed<TreeStump>, Changed<GlobalTransform>)>>,
+    logs: Query<(Entity, &TreeLog, &GlobalTransform), Or<(Changed<TreeLog>, Changed<GlobalTransform>)>>,
+    felled: Query<(Entity, &Felled, &TreeShape, &GlobalTransform), Or<(Changed<Felled>, Changed<TreeShape>, Changed<GlobalTransform>)>>,
+    lying: Query<(Entity, &LyingWood, &TreeShape, &GlobalTransform), Or<(Changed<LyingWood>, Changed<TreeShape>, Changed<GlobalTransform>)>>,
+) {
+    for entity in gone_stumps.read().chain(gone_logs.read()).chain(gone_felled.read()).chain(gone_lying.read()) {
+        index.remove_obstacles(entity);
+    }
+    for (entity, stump, place) in &stumps {
+        index.insert_obstacles(entity, vec![Obstacle { entity, kind: ObstacleKind::Stump, capsule: stump.capsule.placed(place) }]);
+    }
+    for (entity, log, place) in &logs {
+        index.insert_obstacles(entity, vec![Obstacle { entity, kind: ObstacleKind::Log, capsule: log.capsule.placed(place) }]);
+    }
+    let lying_wood = |entity: Entity, shape: &TreeShape, cut_y: f32, place: &GlobalTransform| -> Vec<Obstacle> {
+        shape
+            .capsules()
+            .filter_map(|capsule| capsule.above(cut_y))
+            .map(|capsule| Obstacle { entity, kind: ObstacleKind::Lying, capsule: capsule.placed(place) })
+            .collect()
+    };
+    for (entity, fell, shape, place) in &felled {
+        // A falling tree is no obstacle yet: it is where it is only for a frame.
+        let wood = if fell.at_rest { lying_wood(entity, shape, fell.cut_y(), place) } else { Vec::new() };
+        index.insert_obstacles(entity, wood);
+    }
+    for (entity, wood, shape, place) in &lying {
+        index.insert_obstacles(entity, lying_wood(entity, shape, wood.cut_y, place));
     }
 }
 

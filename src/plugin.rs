@@ -323,6 +323,8 @@ impl bevy::app::Plugin for FloraPlugin {
                     // After the frame's asset events are written: a pool added this frame is
                     // indexed this frame, however the executor orders the two.
                     crate::index::index_trees.after(bevy::asset::AssetEventSystems),
+                    // The same index, the lying wood: after the standing trees.
+                    crate::index::index_obstacles.after(crate::index::index_trees),
                     sync_shadow_casting,
                 )
                     .after(bevy::transform::TransformSystems::Propagate),
