@@ -67,11 +67,79 @@ struct FloraUniform {
 //      direction z, start time, duration); all zero for an empty slot
 //   23, 24: the see-through fade (`SeeThroughTrees`): the fading camera's position and the
 //      clear radius at the target; the target and 1 while a camera has one (all zero otherwise)
-//   25: the fire's header (`FloraFire`), then its grid: see `FIRE`
+//   25: the foliage pushers (`FoliagePusher`): see `PUSH`
+//   58: the fire's header (`FloraFire`), then its grid: see `FIRE`
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> flora_wind: array<vec4<f32>>;
 
 // The see-through fade's slot (`see_through::SEE_THROUGH_SLOT`).
 const SEE_THROUGH: u32 = 23u;
+
+// The foliage pushers (`FoliagePusher`, push.rs), compiled in while one exists (`FLORA_PUSH`).
+// Slot `PUSH` holds how many samples follow (x) and the circle across the ground everything they
+// push lies in (centre x, z and radius: a vertex outside it reads no sample); each sample is two
+// vectors: the middle of a body (x, y, z) and its radius, and half its height and its strength
+// times the sample's weight. A body is sampled where it is and where it was over the last half
+// second, ever weaker, so what it parted closes up behind it.
+const PUSH: u32 = 25u;
+
+// The share of a pusher's radius around its axis whose foliage spreads over its breadth: what is
+// nearer still stays inside the body, which hides it, and a leaf across the axis stretches by
+// at most 1.05 / `PUSH_CORE`.
+const PUSH_CORE: f32 = 0.6;
+
+// How far the vertex at `world` of a plant standing at `origin` gives way to the pushers: out of a
+// body across the ground and a little down, as a pushed stem bends; `flex` of it (0 rigid wood to 1
+// a leaf). What is nearer a body's axis than its radius goes out to between 1.05 and 1.25 radii,
+// from its core (`PUSH_CORE` of the radius) out, keeping its order (no leaf folds over another),
+// and the push eases off to nothing at 1.5 radii and past the body's ends. Where samples overlap
+// their pushes are blended, the strongest most, so the push is continuous everywhere and a leaf
+// bends rather than tears. A plant stays rooted: nothing in its lowest 15 cm moves, and the push
+// grows over the next half metre.
+fn push_offset(world: vec3<f32>, origin: vec3<f32>, flex: f32) -> vec3<f32> {
+    let head = flora_wind[PUSH];
+    let count = min(u32(head.x), 16u);
+    if count == 0u || flex <= 0.0 || distance(world.xz, head.yz) > head.w {
+        return vec3<f32>(0.0);
+    }
+    var total = vec3<f32>(0.0);
+    var weights = 0.0;
+    for (var i = 0u; i < count; i++) {
+        let body = flora_wind[PUSH + 1u + 2u * i];
+        let shape = flora_wind[PUSH + 2u + 2u * i];
+        let r = body.w;
+        let across = world.xz - body.xz;
+        let d = length(across);
+        if r <= 0.0 || d >= 1.5 * r {
+            continue;
+        }
+        let beyond = abs(world.y - body.y) - shape.x;
+        let along = 1.0 - smoothstep(0.0, 0.5 * r, beyond);
+        // Where it goes: continuous through the axis and monotonic.
+        var to = d + 0.5 * (1.5 * r - d);
+        if d < PUSH_CORE * r {
+            to = d * (1.05 / PUSH_CORE);
+        } else if d < r {
+            to = r * (1.05 + 0.2 * (d / r - PUSH_CORE) / (1.0 - PUSH_CORE));
+        }
+        let push = (to - d) * shape.y * along;
+        if push > 0.0 {
+            let way = select(vec2<f32>(1.0, 0.0), across / d, d > 1.0e-4);
+            let weight = push * push * push;
+            total += vec3<f32>(way.x, -0.3, way.y) * push * weight;
+            weights += weight;
+        }
+    }
+    if weights <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    return total / weights * flex * smoothstep(0.15, 0.65, world.y - origin.y);
+}
+
+// How freely wood of radius `radius` (metres) gives way to a pusher: twigs fully, nothing from
+// 5 cm up.
+fn wood_flex(radius: f32) -> f32 {
+    return 1.0 - smoothstep(0.012, 0.05, radius);
+}
 
 // Discard a tree's fragment at `world` (pixel `frag_coord`) when it stands between the fading
 // camera and its target, in a cone around the line of sight a third as wide at the camera as
@@ -166,7 +234,7 @@ fn leaf_season_tint(sway: vec4<f32>, color: vec4<f32>) -> vec3<f32> {
 // anything); `FIRE + 1` the world x, z rectangle (min x, min z, max x, max z) outside which every
 // cell is empty. The cells follow two to a vector (char, heat, char, heat), row by row along x,
 // rows along z.
-const FIRE: u32 = 25u;
+const FIRE: u32 = 58u;
 
 // The cell (x, z) of a grid `side` cells wide: (char, heat), nothing off the grid.
 fn fire_cell(x: i32, z: i32, side: i32) -> vec2<f32> {

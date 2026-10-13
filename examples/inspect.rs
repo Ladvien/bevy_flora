@@ -9,6 +9,7 @@
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
 //!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
+//!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -52,7 +53,10 @@
 //! tree's own leaves let go as the season passes them. `--burn <after>[,<every>]` lights the
 //! tree's spot of a [`FloraFire`](bevy_flora::FloraFire) once it is ready (the fire is there from
 //! the start, 64 m in 1 m cells), photographed the same way: the leaves scorch and burn away, the
-//! wood chars from the ground up and its embers glow, then cool.
+//! wood chars from the ground up and its embers glow, then cool. `--push <x>,<z>[,<radius>[,<vx>,<vz>]]`
+//! stands a red body 1.8 m tall with a [`FoliagePusher`](bevy_flora::FoliagePusher) there
+//! (radius 0.45 m by default), and walks it at (vx, vz) m/s once the tree is ready, photographed
+//! every quarter of a second: the leaves and thin stems it walks through give way.
 //!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
@@ -69,9 +73,9 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind, LodDistances,
-    LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool, TreePreset, TreeShape, build_pool,
-    build_tree,
+    BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind,
+    FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreePool,
+    TreePreset, TreeShape, build_pool, build_tree,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -136,6 +140,9 @@ struct Args {
     /// Light the tree's cell of a `FloraFire` once it is ready, photograph `.0` seconds later and
     /// every `.1` seconds after that.
     burn: Option<(f32, f32)>,
+    /// A body pushing foliage aside: where it stands (x, z), its radius and the velocity it walks at
+    /// once the tree is ready.
+    push: Option<(Vec2, f32, Vec2)>,
 }
 
 fn usage() -> ! {
@@ -146,7 +153,7 @@ fn usage() -> ! {
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
-         [--burn <after>[,<every>]]"
+         [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]]"
     );
     std::process::exit(2);
 }
@@ -187,6 +194,7 @@ fn parse_args() -> Args {
         drop: None,
         autumn: None,
         burn: None,
+        push: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -295,6 +303,15 @@ fn parse_args() -> Args {
                     _ => usage(),
                 };
             }
+            "--push" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.push = match p[..] {
+                    [x, z] => Some((Vec2::new(x, z), 0.45, Vec2::ZERO)),
+                    [x, z, radius] => Some((Vec2::new(x, z), radius, Vec2::ZERO)),
+                    [x, z, radius, vx, vz] => Some((Vec2::new(x, z), radius, Vec2::new(vx, vz))),
+                    _ => usage(),
+                };
+            }
             "--burn" => {
                 let p = floats(&it.next().unwrap_or_else(|| usage()));
                 args.burn = match p[..] {
@@ -369,7 +386,7 @@ fn main() {
         base: 0.0,
     })
     .add_systems(Startup, setup)
-    .add_systems(Update, (drive, draw_colliders, autumn))
+    .add_systems(Update, (drive, draw_colliders, autumn, walk))
     .add_systems(Startup, gizmos_on_top);
     app.run();
 }
@@ -410,6 +427,22 @@ fn draw_colliders(mut gizmos: Gizmos, shapes: Query<(&GlobalTransform, &TreeShap
             let cuboid = Cuboid { half_size: half };
             gizmos.primitive_3d(&cuboid, tree * Isometry3d::from_translation(center), Color::srgb(0.1, 0.9, 1.0));
         }
+    }
+}
+
+/// The `--push` body.
+#[derive(Component)]
+struct Walker;
+
+/// With `--push` and a velocity: once the tree is ready the body walks at it, on the ground.
+fn walk(shoot: Res<Shoot>, time: Res<Time>, mut walkers: Query<&mut Transform, With<Walker>>) {
+    let Some((_, _, velocity)) = shoot.args.push else { return };
+    if !shoot.ready {
+        return;
+    }
+    for mut at in &mut walkers {
+        at.translation += Vec3::new(velocity.x, 0.0, velocity.y) * time.delta_secs();
+        at.translation.y = shoot.ground.height(at.translation.xz()) + 0.9;
     }
 }
 
@@ -479,6 +512,17 @@ fn setup(
     // others, in 1 m cells.
     if shoot.args.burn.is_some() {
         commands.insert_resource(FloraFire::with_cells(Vec2::ZERO, 64.0, 64));
+    }
+    // `--push`: a red body 1.8 m tall that pushes foliage aside, standing (or walking from) there.
+    if let Some((at, radius, _)) = shoot.args.push {
+        let base = shoot.ground.height(at);
+        commands.spawn((
+            Mesh3d(meshes.add(Capsule3d::new(radius * 0.8, 1.8 - 1.6 * radius))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.15, 0.12), ..default() })),
+            Transform::from_xyz(at.x, base + 0.9, at.y),
+            FoliagePusher { radius, height: 1.8, strength: 1.0 },
+            Walker,
+        ));
     }
     shoot.base = if shoot.args.on_centre {
         shoot.ground.height(Vec2::ZERO)
@@ -610,6 +654,9 @@ fn drive(
         shoot.frame += 1;
         let every = shoot.args.drop.map(|(_, _, every)| every).or(shoot.args.autumn.map(|(_, _, every)| every));
         let every = every.or(shoot.args.burn.map(|(_, every)| every));
+        // A walking `--push` body: a photograph every quarter of a second.
+        let walking = shoot.args.push.is_some_and(|(_, _, velocity)| velocity != Vec2::ZERO);
+        let every = every.or(walking.then_some(0.25));
         shoot.wait = every.map_or(SETTLE_FRAMES, |every| ticks(every).max(SETTLE_FRAMES));
         if shoot.frame == shoot.args.frames {
             let path = shoot.args.out.join("frames.tsv");

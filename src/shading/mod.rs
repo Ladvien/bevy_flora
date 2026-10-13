@@ -49,6 +49,7 @@ use crate::foliage::uses_scan;
 use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{LeafStyle, RenderStyle, TreeParams};
+use crate::push::{PUSH_SLOT, PUSH_VECTORS, PushSlots};
 use crate::see_through::{SEE_THROUGH_SLOT, SeeThroughCapsule};
 
 mod share;
@@ -380,9 +381,10 @@ impl FloraUniform {
     }
 }
 
-/// How many `Vec4`s the shared buffer holds: see [`wind_vectors`], and after them the two of the
-/// see-through fade (`see_through::SEE_THROUGH_SLOT`).
-pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + 2;
+/// How many `Vec4`s the shared buffer holds before the fire's grid: see [`wind_vectors`], and after
+/// them the two of the see-through fade (`see_through::SEE_THROUGH_SLOT`) and the pushers'
+/// (`push::PUSH_SLOT`).
+pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + 2 + PUSH_VECTORS;
 
 /// The `Vec4`s of [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] the shaders read, in the order
 /// of the shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend,
@@ -451,6 +453,8 @@ pub struct FloraKey {
     pub falling: bool,
     /// The fire: see [`FloraExtension::fire`].
     pub fire: bool,
+    /// The foliage pushers: see [`FloraExtension::push`].
+    pub push: bool,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -499,6 +503,10 @@ pub struct FloraExtension {
     /// sets it on every flora material while a `FloraFire` exists and clears it when none does,
     /// so that otherwise no pipeline carries the fire.
     pub fire: bool,
+    /// Whether foliage pushers ([`FoliagePusher`](crate::FoliagePusher)) bend this material's
+    /// leaves and thin stems aside. The plugin sets it on every flora material while an entity has
+    /// one and clears it when none has, so that otherwise no pipeline carries the push.
+    pub push: bool,
 }
 
 impl From<&FloraExtension> for FloraKey {
@@ -511,6 +519,7 @@ impl From<&FloraExtension> for FloraKey {
             see_through: extension.see_through,
             falling: extension.falling,
             fire: extension.fire,
+            push: extension.push,
         }
     }
 }
@@ -552,6 +561,11 @@ pub(crate) fn specialize_flora(
     key: FloraKey,
     mesh_key: MeshPipelineKey,
 ) -> Result<(), SpecializedMeshPipelineError> {
+    // The foliage pushers (`FoliagePusher`): leaves and thin stems bend out of a body's way, in the
+    // vertex stages (the main pass and the prepasses alike, so shadows follow).
+    if key.push {
+        descriptor.vertex.shader_defs.push("FLORA_PUSH".into());
+    }
     // The fire (`FloraFire`): leaves scorch and burn away and wood chars in the vertex stages, in
     // the main pass and the prepasses alike (so shadows lose the burnt leaves), and the fragment
     // stage blackens and lights the embers.
@@ -731,6 +745,7 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
             see_through: false,
             falling: false,
             fire: false,
+            push: false,
         },
     }
 }
@@ -797,6 +812,7 @@ pub(crate) fn sync_wind(
     season: Res<FloraSeason>,
     shakes: Res<TreeShakes>,
     capsule: Res<SeeThroughCapsule>,
+    push: Res<PushSlots>,
     buffer: Res<FloraWindBuffer>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
@@ -804,6 +820,8 @@ pub(crate) fn sync_wind(
     // The see-through fade's slots are written by `sync_see_through`; keep them.
     packed[SEE_THROUGH_SLOT] = capsule.0[0].to_array();
     packed[SEE_THROUGH_SLOT + 1] = capsule.0[1].to_array();
+    // So are the pushers', by `push::sync_pushers`.
+    packed[PUSH_SLOT..PUSH_SLOT + PUSH_VECTORS].copy_from_slice(&push.0);
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
     let current = buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>());
     if current.and_then(|slice| slice.get(..WIND_VECTORS)) == Some(&packed[..]) {

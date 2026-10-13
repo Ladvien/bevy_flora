@@ -45,6 +45,7 @@ use crate::impostor::{ImpostorSupport, drive_impostor_bakes, start_impostor_bake
 use crate::params::TreeParams;
 use crate::pipeline::{aged_skeleton, build_aged};
 use crate::see_through::{SeeThroughTrees, arm_see_through, sync_see_through};
+use crate::push::{FoliagePusher, PushSlots, arm_push, sync_pushers};
 use crate::fire::{FireRebind, arm_fire, burn, fire_burns, fire_changed, fire_rebinds, rebind_fire, sync_fire};
 use crate::shape::TreeShape;
 use crate::lod::{LodDistances, LodSettings, TreeLod, coarse_levels};
@@ -215,11 +216,13 @@ impl bevy::app::Plugin for FloraPlugin {
             .init_resource::<FallCaches>()
             .init_resource::<SeasonShed>()
             .init_resource::<FireRebind>()
+            .init_resource::<PushSlots>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
             .register_type::<BuildInBackground>()
             .register_type::<SeeThroughTrees>()
+            .register_type::<FoliagePusher>()
             .register_type::<TreeLod>()
             .register_type::<FallingLeaves>()
             .add_systems(
@@ -258,10 +261,11 @@ impl bevy::app::Plugin for FloraPlugin {
                     .chain(),
             )
             // After transform propagation: the shaders cut only in the view drawn from where the
-            // fading camera is this frame.
+            // fading camera is this frame, and push foliage from where the pushers are this frame.
             .add_systems(
                 bevy::app::PostUpdate,
-                (arm_see_through, sync_see_through).after(bevy::transform::TransformSystems::Propagate),
+                (arm_see_through, sync_see_through, arm_push, sync_pushers)
+                    .after(bevy::transform::TransformSystems::Propagate),
             )
             // The fire steps after transform propagation (its fuel is where the trees stand this
             // frame) and is written into the shared buffer when it changed; the materials are

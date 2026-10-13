@@ -5,6 +5,54 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.27.0] - 2026-10-13
+
+Undergrowth gives way. A `FoliagePusher` on the player or an NPC pushes the leaves and thin stems
+it walks through out of its way, shadows included, and they close up behind it; trunks stay put.
+The flora materials gain a `push` flag, hence the minor bump.
+
+### Added
+
+- **`FoliagePusher { radius, height, strength }`**, a component (0.45 m round, 1.8 m tall centred on
+  the entity's translation, strength 1): leaves and wood thinner than 5 cm nearer its axis than
+  its radius go out of its way, a little down, as a pushed stem bends, and the plant stays rooted
+  at its foot. The plugin writes the `MAX_PUSHERS` (4) bodies nearest the camera into the shared
+  buffer when they move, each where it is and where it was 0.15, 0.3 and 0.45 s ago, ever weaker,
+  so what it parted closes up behind it. The four mesh vertex stages carry it (main pass and
+  shadows, `ProceduralTree`, `TreeLod`, pools, `GpuGrowth`), only while an entity has one
+  (`FLORA_PUSH`). `FoliagePusher` and `MAX_PUSHERS` in the crate root, `FoliagePusher` in the
+  prelude.
+- Examples: `inspect --push <x>,<z>[,<radius>[,<vx>,<vz>]]` (a red body standing in the tree or
+  walking through it), `forest --push <x>,<z>`, `capture_growth --push` (a body walking through a
+  patch of shrubs; `docs/push.gif`).
+- README: "Walking through undergrowth: `FoliagePusher`", with `docs/push.gif`.
+
+### Changed
+
+- `FloraKey`, `FloraExtension` and `GrowthExtension` gain `push: bool` (the plugin sets it while an
+  entity has a `FoliagePusher`; a material built by hand starts with `false`).
+- The shared buffer (`FloraWindBuffer`) holds 33 more vectors after the see-through fade, the
+  pushers'; the fire's header and grid now start at slot 58.
+
+### Measured
+
+- **Look.** With no pusher the 424 gallery scenarios render as in 0.26.0, on the CPU and with
+  `--gpu` (a mean difference of 0.000 of 255, no `ERROR`), and so do the growth, grove, seasons
+  and fire clips; the shake and fell clips drop other leaves of the same trees. The push,
+  photographed: a shrub with the body standing in its middle, the body walking through a shrub
+  (16 frames a quarter of a second apart, from the side and along its path, zoomed where it is
+  inside) and past an oak's trunk, and the push clip.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.26.0). With no
+  pusher: 1 000 individual oaks 24.50 and 24.47 ms (0.26.0: 24.49 and 24.47), 100 000 pooled oaks
+  7.54 and 7.64 ms (7.41 and 7.54). With one standing in the forest: 24.94 and 24.95 ms against
+  24.53, and 7.56 and 7.58 ms against 7.50 and 7.53.
+- **Found and fixed before release.** Pushing each vertex from the body's axis straight to its
+  surface, by the strongest sample, tore leaf cards across the body into streaks (a card across
+  the axis, or across the line where two samples push alike): the map from the axis is now
+  continuous and the samples are blended, the strongest most. Every leaf vertex of every tree
+  looped over the samples, 7% on 1 000 oaks with one pusher: the header now carries the circle
+  everything the pushers reach lies in, and a vertex outside it stops there (2%).
+
 ## [0.26.0] - 2026-10-13
 
 Trees burn. A `FloraFire` over the game's world spreads a fire from where the game lights it
@@ -1674,6 +1722,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.27.0]: https://github.com/Ladvien/bevy_flora/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/Ladvien/bevy_flora/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Ladvien/bevy_flora/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Ladvien/bevy_flora/compare/v0.23.0...v0.24.0

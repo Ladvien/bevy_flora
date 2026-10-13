@@ -46,7 +46,10 @@
 //! runs through it, the leaves scorching and burning away and the wood charring, its embers
 //! glowing and then cooling (`docs/fire.gif`, encoded like the grove). Its fire is sped up like
 //! the rest of a clip (`FireSpread` 3.5 m/s, each spot burnt through in two seconds), and its
-//! ground scorches by the fire's char, as a game's own ground would read it.
+//! ground scorches by the fire's char, as a game's own ground would read it. `--push` records a
+//! patch of shrubs from a still camera while a red stand-in for a character walks through it
+//! (`FoliagePusher`): the leaves and stems give way around it and close up behind it
+//! (`docs/push.gif`, encoded like the grove).
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of
 //! them (20 fps) because its camera orbits and every leaf moves, which makes a large GIF. The
@@ -72,8 +75,8 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::mesh::VertexAttributeValues;
 use bevy::post_process::bloom::Bloom;
 use bevy_flora::{
-    FallingLeaves, FellTree, FireSpread, FloraFire, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, GustFront,
-    ProceduralTree, RenderStyle, TreeAge, TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
+    FallingLeaves, FellTree, FireSpread, FloraFire, FloraPlugin, FloraSeason, FloraWind, FoliagePusher, GpuGrowth,
+    GustFront, ProceduralTree, RenderStyle, TreeAge, TreeParams, TreePreset, TreeShake, TreeShakes, build_tree,
 };
 
 /// Frames per second of the clips, and so the clock's step per captured frame.
@@ -98,6 +101,26 @@ const FELL_GROVE: [(TreePreset, i32, [f32; 2]); 5] = [
 /// from +x toward +z). The camera looks from +x, so the oak falls to the left across open
 /// ground, square to the view.
 const FELLS: [(u32, usize, f32); 1] = [(24, 0, 90.0)];
+/// The push clip's plants: shrubs (seed and place: x, z, metres from the patch's middle), a row
+/// along the walker's path and a few behind it, none in front to hide it.
+const PUSH_PATCH: [(i32, [f32; 2]); 10] = [
+    (1, [-3.0, 0.25]),
+    (2, [-1.8, -0.2]),
+    (3, [-0.6, 0.3]),
+    (4, [0.6, -0.25]),
+    (5, [1.8, 0.2]),
+    (6, [3.0, -0.15]),
+    (7, [-2.4, -1.7]),
+    (8, [-0.1, -1.9]),
+    (9, [2.3, -1.6]),
+    (10, [4.2, -1.2]),
+];
+/// The push clip's walker: along x from `WALK_X.0` to `WALK_X.1` at z `WALK_Z` (metres from the
+/// patch's middle), from frame `WALK_FROM` to `WALK_TO` (some 1.4 m/s), then still.
+const WALK_X: (f32, f32) = (-4.0, 4.0);
+const WALK_Z: f32 = 0.0;
+const WALK_FROM: u32 = 12;
+const WALK_TO: u32 = 150;
 /// Frames rendered before the first capture so meshes and shadows exist.
 const WARMUP_FRAMES: u32 = 10;
 /// Frames between setting an age and capturing it (mesh upload, shadows).
@@ -162,7 +185,14 @@ enum Scene {
     /// The grove, fully grown, at dusk in a wind: a fire lit on its upwind edge runs through it,
     /// scorching the leaves, burning them away and charring the wood, and the embers cool.
     Fire,
+    /// A patch of shrubs in a light wind and a body walking through it (`FoliagePusher`): the
+    /// leaves and stems give way and close up behind it.
+    Push,
 }
+
+/// The push clip's walker.
+#[derive(Component)]
+struct Walker;
 
 /// A tree of the grove: species, seed, where it stands (in units of the grove's spacing, x and
 /// z), the frame it starts growing and how many frames it takes. The camera starts on the +z
@@ -244,7 +274,7 @@ struct OrbitCam;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire] [--gpu]"
+        "usage: capture_growth [--out <dir>] [--preset <name> [--style <natural|painterly|toon>] | --grove | --seasons | --shake | --fell | --fire | --push] [--gpu]"
     );
     std::process::exit(2);
 }
@@ -252,8 +282,8 @@ fn usage() -> ! {
 fn main() {
     let mut out = None;
     let mut preset = None;
-    // The grove clips: "grove", "seasons", "shake", "fell" or "fire"; none is the single growing
-    // tree.
+    // The grove clips: "grove", "seasons", "shake", "fell", "fire" or "push"; none is the single
+    // growing tree.
     let mut clip: Option<&'static str> = None;
     let mut gpu = false;
     let mut style = RenderStyle::Natural;
@@ -262,7 +292,7 @@ fn main() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
             "--gpu" => gpu = true,
-            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" => {
+            "--grove" | "--seasons" | "--shake" | "--fell" | "--fire" | "--push" => {
                 if clip.is_some() {
                     usage();
                 }
@@ -271,7 +301,8 @@ fn main() {
                     "--seasons" => "seasons",
                     "--shake" => "shake",
                     "--fell" => "fell",
-                    _ => "fire",
+                    "--fire" => "fire",
+                    _ => "push",
                 });
             }
             "--preset" => {
@@ -305,7 +336,8 @@ fn main() {
         Some("seasons") => Scene::Seasons,
         Some("shake") => Scene::Shake,
         Some("fell") => Scene::Fell,
-        Some(_) => Scene::Fire,
+        Some("fire") => Scene::Fire,
+        Some(_) => Scene::Push,
         None => {
             let mut params = preset.unwrap_or(TreePreset::Maple).params();
             params.style = style;
@@ -334,9 +366,10 @@ fn main() {
         brightness: 300.0,
         ..default()
     })
-    // A light wind in the shake and fell clips, so the knocks and the falls are what moves.
+    // A light wind in the shake, fell and push clips, so the knocks, the falls and the walker are
+    // what moves.
     .insert_resource(FloraWind {
-        strength: if matches!(scene, Scene::Shake | Scene::Fell) { 0.15 } else { 0.5 },
+        strength: if matches!(scene, Scene::Shake | Scene::Fell | Scene::Push) { 0.15 } else { 0.5 },
         direction: wind,
         speed: 1.4,
         ..default()
@@ -443,6 +476,20 @@ fn frame_scene(scene: &Scene, size: UVec2) -> (f32, Vec3) {
             let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
             (fit * 0.9 + 0.25 * (max.x - min.x), focus)
         }
+        // Seen from +z: the patch, as wide as it is, and the walker's path through it.
+        Scene::Push => {
+            let (min, max) = push_patch()
+                .iter()
+                .map(|(params, at, ..)| bounds(params, *at))
+                .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+            let half_width = 0.5 * (max.x - min.x).max(WALK_X.1 - WALK_X.0);
+            let focus = Vec3::new(0.5 * (min.x + max.x), 0.35 * max.y, 0.5 * (min.z + max.z));
+            let half_height = (max.y - focus.y).max(focus.y);
+            let aspect = size.x as f32 / size.y as f32;
+            let half_h_fov = ((FOV * 0.5).tan() * aspect).atan();
+            let fit = (half_width / half_h_fov.tan()).max(half_height / (FOV * 0.5).tan());
+            (fit * 0.7 + 0.5 * (max.z - min.z), focus)
+        }
     }
 }
 
@@ -455,6 +502,14 @@ fn grove(centre: Vec3) -> Vec<(TreeParams, Vec3, u32, u32)> {
         .map(|&(preset, seed, [x, z], start, frames)| {
             (TreeParams { seed, ..preset.params() }, centre + Vec3::new(x, 0.0, z) * spacing, start, frames)
         })
+        .collect()
+}
+
+/// The push clip's plants, mature, at their places in metres.
+fn push_patch() -> Vec<(TreeParams, Vec3, u32, u32)> {
+    PUSH_PATCH
+        .iter()
+        .map(|&(seed, [x, z])| (TreeParams { seed, ..TreePreset::Shrub.params() }, Vec3::new(x, 0.0, z), 0, 1))
         .collect()
 }
 
@@ -534,6 +589,7 @@ fn setup(
             (1.0, grove(Vec3::ZERO).into_iter().map(|(p, at, _, frames)| (p, at, 0, frames)).collect())
         }
         Scene::Fell => (1.0, fell_grove()),
+        Scene::Push => (1.0, push_patch()),
     };
     capture.trees = trees.iter().map(|&(_, at, ..)| at).collect();
     for (params, at, start, frames) in trees {
@@ -566,6 +622,16 @@ fn setup(
         // Upwind of the grove's middle, on the edge of its crowns.
         capture.fire_start = (capture.focus.xz() - capture.wind * FIRE_UPWIND).extend(0.0).xzy();
     }
+    // The push clip's walker: a red stand-in for a character, 1.8 m tall, pushing the foliage aside.
+    if matches!(capture.scene, Scene::Push) {
+        commands.spawn((
+            Mesh3d(meshes.add(Capsule3d::new(0.36, 1.08))),
+            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.15, 0.12), ..default() })),
+            Transform::from_translation(capture.focus.with_y(0.9) + Vec3::new(WALK_X.0, 0.0, WALK_Z)),
+            FoliagePusher::default(),
+            Walker,
+        ));
+    }
     let mut camera = commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(capture.target.clone().into()),
@@ -593,6 +659,13 @@ fn orbit(capture: &Capture, t: f32) -> Transform {
 fn camera_at(capture: &Capture, frame: u32) -> Transform {
     match capture.scene {
         Scene::Shake | Scene::Fire => orbit(capture, 0.5),
+        // From +z, a little higher than the others, so the parting shows: the walker crosses the
+        // view from left to right.
+        Scene::Push => {
+            let pitch = 22f32.to_radians();
+            let dir = Vec3::new(0.0, pitch.sin(), pitch.cos());
+            Transform::from_translation(capture.focus + dir * capture.distance).looking_at(capture.focus, Vec3::Y)
+        }
         // From +x, square to both falls; the sun stands behind the camera's left shoulder.
         Scene::Fell => {
             let pitch = 14f32.to_radians();
@@ -619,6 +692,7 @@ fn drive(
     mut shakes: ResMut<TreeShakes>,
     fire: Option<ResMut<FloraFire>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut walkers: Query<&mut Transform, (With<Walker>, Without<OrbitCam>)>,
 ) {
     // The clock stands still, except for the one step the frame below asks for.
     *strategy = TimeUpdateStrategy::ManualDuration(Duration::ZERO);
@@ -680,6 +754,13 @@ fn drive(
         let (sin, cos) = bearing.to_radians().sin_cos();
         if let Some(entity) = capture.entities[tree] {
             commands.entity(entity).insert(FellTree { direction: Vec2::new(cos, sin), ..default() });
+        }
+    }
+    // The push clip's walker: across the patch at a steady pace, from its frame to its last.
+    if matches!(capture.scene, Scene::Push) {
+        let t = (frame.saturating_sub(WALK_FROM) as f32 / (WALK_TO - WALK_FROM) as f32).min(1.0);
+        for mut at in &mut walkers {
+            at.translation = capture.focus.with_y(0.9) + Vec3::new(WALK_X.0 + (WALK_X.1 - WALK_X.0) * t, 0.0, WALK_Z);
         }
     }
     if matches!(capture.scene, Scene::Grove) && frame >= GUST_FRAME && !capture.gusted {
