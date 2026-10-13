@@ -82,7 +82,7 @@ use crate::shape::TreeShape;
 use crate::skeleton::Skeleton;
 use crate::plugin::{ProceduralTree, crown_material, material};
 use crate::shading::{
-    FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWindBuffer, Surface, TextureLibrary, flora_material,
+    FloraMaterial, FloraMaterialSupport, FloraUniform, FloraWindBuffer, SharedFlora, Surface, TextureLibrary,
 };
 use crate::units::FloraUnits;
 
@@ -802,6 +802,7 @@ fn make_pool_materials(
     recolors: &PoolRecolors,
     wind: Option<&FloraWindBuffer>,
     flora: &mut Assets<FloraMaterial>,
+    shared: &mut SharedFlora,
     standard: &mut Assets<StandardMaterial>,
     textures: &mut TextureLibrary,
 ) {
@@ -816,10 +817,12 @@ fn make_pool_materials(
             .map(|look| {
                 let colors = recolors.colors(id, look, &pool);
                 if let Some(wind) = wind {
+                    // Through the shared cache: pools whose surfaces are equal (the ages of one
+                    // species, looks of one wood colour) draw with the same materials.
                     let (wood, leaves) = colors.surfaces(&pool.params, textures);
                     PoolMaterials::Flora {
-                        wood: flora.add(flora_material(&wood, wind)),
-                        leaves: flora.add(flora_material(&leaves, wind)),
+                        wood: shared.resolve(flora, &wood, wind),
+                        leaves: shared.resolve(flora, &leaves, wind),
                     }
                 } else {
                     let unlit = |base: StandardMaterial| StandardMaterial { unlit: colors.unlit, ..base };
@@ -846,6 +849,7 @@ pub(crate) fn spawn_pooled_trees(
     flora_support: Option<Res<FloraMaterialSupport>>,
     wind: Option<Res<FloraWindBuffer>>,
     mut flora: ResMut<Assets<FloraMaterial>>,
+    mut shared: ResMut<PoolFlora>,
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut textures: TextureLibrary,
     recolors: Res<PoolRecolors>,
@@ -855,7 +859,7 @@ pub(crate) fn spawn_pooled_trees(
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
     let units = units.units_per_metre;
-    make_pool_materials(&mut pools, &recolors, wind, &mut flora, &mut standard, &mut textures);
+    make_pool_materials(&mut pools, &recolors, wind, &mut flora, &mut shared.0, &mut standard, &mut textures);
     // A tree whose pool is not ready yet is skipped, not counted: it must not
     // keep trees of a ready pool from getting their children.
     let mut spawned = 0;
@@ -1029,25 +1033,9 @@ pub(crate) fn sync_shadow_casting(
 #[derive(Component)]
 pub(crate) struct CastingImpostor;
 
-/// Write `surface` into the pool's flora material `handle`, marking the asset modified only if
-/// the colour, whether it is lit or the uniform differs: a modified material is re-prepared by
-/// the renderer.
-fn write_flora(assets: &mut Assets<FloraMaterial>, handle: &Handle<FloraMaterial>, surface: &Surface) {
-    let Some(material) = assets.get(handle) else { return };
-    if material.base.base_color == surface.color
-        && material.base.unlit == surface.unlit
-        && material.extension.flora == surface.uniform
-    {
-        return;
-    }
-    if let Some(mut material) = assets.get_mut(handle) {
-        material.base.base_color = surface.color;
-        material.base.unlit = surface.unlit;
-        material.extension.flora = surface.uniform;
-    }
-}
-
-/// [`write_flora`] for a plain material.
+/// Write a look's colour into the pool's plain material `handle` (made where flora materials are
+/// not, and the pool's own), marking the asset modified only if the colour or whether it is lit
+/// differs: a modified material is re-prepared by the renderer.
 fn write_standard(assets: &mut Assets<StandardMaterial>, handle: &Handle<StandardMaterial>, color: Color, unlit: bool) {
     let Some(material) = assets.get(handle) else { return };
     if material.base_color == color && material.unlit == unlit {
@@ -1059,7 +1047,8 @@ fn write_standard(assets: &mut Assets<StandardMaterial>, handle: &Handle<Standar
     }
 }
 
-/// [`write_flora`] for an impostor's material: its tint, flora uniform and unlit flag.
+/// [`write_standard`] for an impostor's material (a pool's own, one per variant and look): its
+/// tint, flora uniform and unlit flag.
 pub(crate) fn write_impostor(
     assets: &mut Assets<ImpostorMaterial>,
     handle: &Handle<ImpostorMaterial>,
@@ -1082,21 +1071,67 @@ pub(crate) fn write_impostor(
     }
 }
 
-/// Apply every [`RecolorPool`]: rebuild the look's surfaces from the pool's parameters in the new
-/// colours and write them into the materials the trees already draw with, and into the look's
-/// impostor material of every variant. Never takes the pool mutably: that would mark the asset
-/// changed.
-#[allow(clippy::too_many_arguments)]
+/// The flora materials pools draw with, by surface: pools whose surfaces are equal (the ages of a
+/// species, looks of one wood colour) share them. Kept apart from [`SharedFlora`], the procedural
+/// trees', so the looks that draw with one of these are the pools' alone, and a recolour can tell
+/// when it may write one in place.
+#[derive(Resource, Default)]
+pub(crate) struct PoolFlora(SharedFlora);
+
+/// Write `surface` into the flora material `handle` in place, marking the asset modified only if
+/// the colour, whether it is lit or the uniform differs: a modified material is re-prepared by the
+/// renderer.
+fn write_flora(assets: &mut Assets<FloraMaterial>, handle: &Handle<FloraMaterial>, surface: &Surface) {
+    let Some(material) = assets.get(handle) else { return };
+    if material.base.base_color == surface.color
+        && material.base.unlit == surface.unlit
+        && material.extension.flora == surface.uniform
+    {
+        return;
+    }
+    if let Some(mut material) = assets.get_mut(handle) {
+        material.base.base_color = surface.color;
+        material.base.unlit = surface.unlit;
+        material.extension.flora = surface.uniform;
+    }
+}
+
+/// One look of a pool asked to be recoloured this frame: the flora materials it draws with, wood
+/// and leaves, and the surfaces it asks for.
+struct Asked {
+    pool: AssetId<TreePool>,
+    look: u32,
+    from: [Handle<FloraMaterial>; 2],
+    surfaces: [Surface; 2],
+}
+
+/// Apply every [`RecolorPool`]: the look's surfaces are rebuilt from the pool's parameters in the
+/// new colours. A flora material is shared by the looks of every pool whose surfaces are equal
+/// ([`PoolFlora`]). When every look that draws with one asks for the same new colours this frame
+/// (a look of its own, or every pool of a species recoloured alike, as a palette gliding through
+/// the day does) it is written in place: a few material writes. Otherwise the looks that asked
+/// take the materials of their new surfaces (made, or found among those already drawn) and their
+/// trees are pointed at them, and the others keep theirs. Plain materials, and the look's impostor
+/// material of every variant, are the pool's own and are written. The pool is changed untracked:
+/// a modified pool would have every tree re-indexed.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn recolor_pools(
     mut messages: MessageReader<RecolorPool>,
-    pools: Res<Assets<TreePool>>,
+    mut pools: ResMut<Assets<TreePool>>,
     mut recolors: ResMut<PoolRecolors>,
     mut flora: ResMut<Assets<FloraMaterial>>,
+    mut shared: ResMut<PoolFlora>,
+    wind: Option<Res<FloraWindBuffer>>,
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut impostors: Option<ResMut<Assets<ImpostorMaterial>>>,
     mut textures: TextureLibrary,
+    trees: Query<(&PooledTree, Option<&PooledLook>, &Children), With<PooledTreeSpawned>>,
+    mut drawn: Query<&mut MeshMaterial3d<FloraMaterial>>,
     mut warned: Local<bool>,
 ) {
+    use bevy::platform::collections::HashMap;
+    // The frame's recolours of flora looks, the last one of each look.
+    let mut asked: Vec<Asked> = Vec::new();
     for message in messages.read() {
         let Some(pool) = pools.get(message.pool) else { continue };
         let look = message.look as usize;
@@ -1111,19 +1146,6 @@ pub(crate) fn recolor_pools(
             continue;
         }
         recolors.0.insert((message.pool, message.look), message.colors);
-        // A pool not drawn yet makes its materials in these colours when it first is.
-        let Some(materials) = pool.materials.get(look) else { continue };
-        match materials {
-            PoolMaterials::Flora { wood, leaves } => {
-                let (wood_surface, leaf_surface) = message.colors.surfaces(&pool.params, &mut textures);
-                write_flora(&mut flora, wood, &wood_surface);
-                write_flora(&mut flora, leaves, &leaf_surface);
-            }
-            PoolMaterials::Standard { wood, leaves } => {
-                write_standard(&mut standard, wood, message.colors.wood, message.colors.unlit);
-                write_standard(&mut standard, leaves, message.colors.leaves, message.colors.unlit);
-            }
-        }
         if let Some(assets) = impostors.as_deref_mut() {
             for variant in &pool.variants {
                 if let Some(handle) = variant.impostor.as_ref().and_then(|atlas| atlas.materials.get(look)) {
@@ -1131,7 +1153,104 @@ pub(crate) fn recolor_pools(
                 }
             }
         }
+        match pool.materials.get(look) {
+            // A pool not drawn yet makes its materials in these colours when it first is.
+            None => {}
+            Some(PoolMaterials::Standard { wood, leaves }) => {
+                write_standard(&mut standard, wood, message.colors.wood, message.colors.unlit);
+                write_standard(&mut standard, leaves, message.colors.leaves, message.colors.unlit);
+            }
+            Some(PoolMaterials::Flora { wood, leaves }) => {
+                let (wood_surface, leaf_surface) = message.colors.surfaces(&pool.params, &mut textures);
+                asked.retain(|earlier| (earlier.pool, earlier.look) != (message.pool, message.look));
+                asked.push(Asked {
+                    pool: message.pool,
+                    look: message.look,
+                    from: [wood.clone(), leaves.clone()],
+                    surfaces: [wood_surface, leaf_surface],
+                });
+            }
+        }
     }
+    let Some(wind) = wind.as_deref().filter(|_| !asked.is_empty()) else { return };
+    // The looks that draw with each flora material, of every pool.
+    let mut users: HashMap<AssetId<FloraMaterial>, Vec<(AssetId<TreePool>, u32)>> = HashMap::default();
+    for (id, pool) in pools.iter() {
+        for (look, materials) in pool.materials.iter().enumerate() {
+            if let PoolMaterials::Flora { wood, leaves } = materials {
+                for material in [wood, leaves] {
+                    users.entry(material.id()).or_default().push((id, look as u32));
+                }
+            }
+        }
+    }
+    // Per material and role, which asks draw with it. A material every look of which asks for the
+    // same is written in place, unless a material of those colours is drawn already (two pools
+    // recoloured alike one after the other share again); the writes come first, so the looks that
+    // take other materials can find one written to their colours.
+    let mut swaps: Vec<(usize, usize)> = Vec::new();
+    for role in 0..2 {
+        let mut by_material: HashMap<AssetId<FloraMaterial>, Vec<usize>> = HashMap::default();
+        for (k, ask) in asked.iter().enumerate() {
+            by_material.entry(ask.from[role].id()).or_default().push(k);
+        }
+        for (material, asks) in by_material {
+            let first = &asked[asks[0]].surfaces[role];
+            let everyone = users.get(&material).is_some_and(|looks| {
+                looks.iter().all(|look| asks.iter().any(|&k| (asked[k].pool, asked[k].look) == *look))
+            });
+            let alike = asks.iter().all(|&k| SharedFlora::same(&asked[k].surfaces[role], first));
+            let elsewhere = shared.0.find(&mut flora, first).is_some_and(|found| found.id() != material);
+            if everyone && alike && !elsewhere {
+                write_flora(&mut flora, &asked[asks[0]].from[role], first);
+                shared.0.rekey(material, first);
+            } else {
+                swaps.extend(asks.iter().map(|&k| (k, role)));
+            }
+        }
+    }
+    let mut moves: HashMap<(AssetId<TreePool>, u32), Repoint> = HashMap::default();
+    for (k, role) in swaps {
+        let ask = &asked[k];
+        let to = shared.0.resolve(&mut flora, &ask.surfaces[role], wind);
+        if to == ask.from[role] {
+            continue;
+        }
+        moves
+            .entry((ask.pool, ask.look))
+            .or_insert_with(|| Repoint { from: ask.from.clone().map(|h| h.id()), to: ask.from.clone() })
+            .to[role] = to;
+    }
+    for ((id, look), repoint) in &moves {
+        if let Some(pool) = pools.get_mut_untracked(*id)
+            && let Some(PoolMaterials::Flora { wood, leaves }) = pool.materials.get_mut(*look as usize)
+        {
+            [*wood, *leaves] = repoint.to.clone();
+        }
+    }
+    if moves.is_empty() {
+        return;
+    }
+    for (tree, picked, children) in &trees {
+        let Some(pool) = pools.get(&tree.pool) else { continue };
+        let look = picked.map_or(0, |look| look.0) % pool.looks.len().max(1) as u32;
+        let Some(repoint) = moves.get(&(tree.pool.id(), look)) else { continue };
+        for child in children.iter() {
+            if let Ok(mut material) = drawn.get_mut(child)
+                && let Some(role) = repoint.from.iter().position(|id| *id == material.0.id())
+                && material.0 != repoint.to[role]
+            {
+                material.0 = repoint.to[role].clone();
+            }
+        }
+    }
+}
+
+/// A recoloured look's flora materials, wood and leaves: those its trees draw with, and those they
+/// take.
+struct Repoint {
+    from: [AssetId<FloraMaterial>; 2],
+    to: [Handle<FloraMaterial>; 2],
 }
 
 /// Dress a [`PooledTree`] whose [`PooledLook`] changed (or was taken off: look 0) in its new
@@ -1805,8 +1924,12 @@ mod tests {
         assert_ne!(before.0.base.base_color, after.0.base.base_color);
         assert_ne!(before.1.extension.flora.autumn, after.1.extension.flora.autumn, "the autumn ratio follows the leaf colour");
         assert_ne!(before.1.extension.flora.blossom, after.1.extension.flora.blossom, "the blossom ratio does too");
-        // The same materials and meshes are drawn, and the pool asset itself was not modified.
-        assert_eq!(drawn_by(&app, &[tree]), drawn_before);
+        // The tree draws the same meshes with the look's new materials, and the pool asset itself
+        // was not modified.
+        let (meshes, materials) = drawn_by(&app, &[tree]);
+        assert_eq!(meshes, drawn_before.0);
+        let now = look_materials(&app, &pool)[0];
+        assert_eq!(materials, HashSet::from(now.map(|id| id.untyped())));
         let modified = events
             .read(app.world().resource::<bevy::ecs::message::Messages<AssetEvent<TreePool>>>())
             .filter(|event| matches!(event, AssetEvent::Modified { id } if *id == pool.id()))
@@ -1829,6 +1952,97 @@ mod tests {
         assert!(wood.base.unlit && leaves.base.unlit);
         let (wood, _) = dressed(&app, &pool, 0);
         assert_ne!(wood.base.base_color, FLAT_BLUE.wood, "the other looks are as they were");
+    }
+
+    /// The flora materials of every look of `pool`, as ids.
+    fn look_materials(app: &App, pool: &Handle<TreePool>) -> Vec<[AssetId<FloraMaterial>; 2]> {
+        let pools = app.world().resource::<Assets<TreePool>>();
+        pools
+            .get(pool)
+            .unwrap()
+            .materials
+            .iter()
+            .map(|look| match look {
+                PoolMaterials::Flora { wood, leaves } => [wood.id(), leaves.id()],
+                PoolMaterials::Standard { .. } => panic!("a pool of plain materials"),
+            })
+            .collect()
+    }
+
+    /// A pool of `params` at `age` with a crimson look, added and drawn by one tree.
+    fn drawn_pool(app: &mut App, params: &TreeParams, age: f32) -> (Handle<TreePool>, Entity) {
+        let mut pool = app.world_mut().resource_scope(|_, mut meshes: Mut<Assets<Mesh>>| {
+            build_pool(params, 1, age, &LodSettings::default(), &mut meshes)
+        });
+        pool.add_look(CRIMSON);
+        let pool = app.world_mut().resource_mut::<Assets<TreePool>>().add(pool);
+        let tree = app.world_mut().spawn(PooledTree { pool: pool.clone(), variant: 0 }).id();
+        (pool, tree)
+    }
+
+    #[test]
+    fn pools_with_equal_surfaces_share_their_materials() {
+        let mut app = app();
+        app.insert_resource(FloraMaterialSupport);
+        app.init_asset::<bevy::image::Image>();
+        let spruce = TreePreset::Spruce.params();
+        let (young, _) = drawn_pool(&mut app, &spruce, 6.0);
+        let (old, _) = drawn_pool(&mut app, &spruce, f32::INFINITY);
+        let (oak, _) = drawn_pool(&mut app, &TreePreset::Oak.params(), f32::INFINITY);
+        app.update();
+        app.update();
+        // The ages of a species draw with the same materials, look for look; another species does not.
+        let (young, old, oak) = (look_materials(&app, &young), look_materials(&app, &old), look_materials(&app, &oak));
+        assert_eq!(young, old);
+        let distinct: HashSet<_> = young.iter().flatten().collect();
+        assert_eq!(distinct.len(), 4, "two looks of wood and leaves");
+        assert!(oak.iter().flatten().all(|id| !distinct.contains(id)));
+    }
+
+    #[test]
+    fn recolouring_a_pool_leaves_the_pools_that_shared_its_materials_as_they_were() {
+        let mut app = app();
+        app.insert_resource(FloraMaterialSupport);
+        app.init_asset::<bevy::image::Image>();
+        let spruce = TreePreset::Spruce.params();
+        let (young, young_tree) = drawn_pool(&mut app, &spruce, 6.0);
+        let (old, old_tree) = drawn_pool(&mut app, &spruce, f32::INFINITY);
+        app.update();
+        app.update();
+        let shared = look_materials(&app, &old)[0];
+        let colours = |app: &App, ids: [AssetId<FloraMaterial>; 2]| {
+            let flora = app.world().resource::<Assets<FloraMaterial>>();
+            ids.map(|id| flora.get(id).unwrap().base.base_color)
+        };
+        let before = colours(&app, shared);
+        let drawn = |app: &App, tree: Entity| drawn_by(app, &[tree]).1;
+
+        send(&mut app, RecolorPool { pool: young.id(), look: 0, colors: FLAT_BLUE });
+        app.update();
+        let blue = look_materials(&app, &young)[0];
+        assert_ne!(blue, shared, "the recoloured pool takes materials of its own");
+        assert_eq!(drawn(&app, young_tree), HashSet::from(blue.map(|id| id.untyped())));
+        assert_eq!(look_materials(&app, &old)[0], shared, "the other pool is as it was");
+        assert_eq!(drawn(&app, old_tree), HashSet::from(shared.map(|id| id.untyped())));
+        assert_eq!(colours(&app, shared), before, "and so are the materials it draws with");
+
+        // Recoloured alike, the two share again.
+        send(&mut app, RecolorPool { pool: old.id(), look: 0, colors: FLAT_BLUE });
+        app.update();
+        assert_eq!(look_materials(&app, &old)[0], blue);
+        assert_eq!(drawn(&app, old_tree), drawn(&app, young_tree));
+
+        // Both recoloured alike in one frame to colours no material has yet, as a palette gliding
+        // through the day does: the shared material is written in place, and every tree keeps
+        // drawing with it.
+        let dusk = PoolColors { wood: Color::srgb(0.20, 0.10, 0.30), leaves: Color::srgb(0.40, 0.20, 0.50), unlit: false };
+        let blue_colours = colours(&app, blue);
+        send(&mut app, RecolorPool { pool: young.id(), look: 0, colors: dusk });
+        send(&mut app, RecolorPool { pool: old.id(), look: 0, colors: dusk });
+        app.update();
+        assert_eq!((look_materials(&app, &young)[0], look_materials(&app, &old)[0]), (blue, blue));
+        assert_eq!(drawn(&app, young_tree), HashSet::from(blue.map(|id| id.untyped())));
+        assert_ne!(colours(&app, blue), blue_colours, "written in place");
     }
 
     #[test]

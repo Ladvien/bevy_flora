@@ -97,4 +97,21 @@ impl SharedFlora {
         self.materials.insert(look, strong.id());
         strong
     }
+
+    /// The live material with this `surface`, if one was made.
+    pub(crate) fn find(&self, assets: &mut Assets<FloraMaterial>, surface: &Surface) -> Option<Handle<FloraMaterial>> {
+        self.materials.get(&Look::new(surface)).and_then(|id| assets.get_strong_handle(*id))
+    }
+
+    /// Whether two surfaces make interchangeable materials.
+    pub(crate) fn same(a: &Surface, b: &Surface) -> bool {
+        Look::new(a) == Look::new(b)
+    }
+
+    /// The material `id` was written in place with `surface`: it is found by that surface now, not
+    /// its old one (unless another material already has it).
+    pub(crate) fn rekey(&mut self, id: AssetId<FloraMaterial>, surface: &Surface) {
+        self.materials.retain(|_, held| *held != id);
+        self.materials.entry(Look::new(surface)).or_insert(id);
+    }
 }

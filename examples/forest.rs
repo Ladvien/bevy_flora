@@ -13,7 +13,7 @@
 //!     [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>]
 //!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]
-//!     [--push <x,z>] [--looks [--recolor]]
+//!     [--push <x,z>] [--looks [--recolor]] [--ages <n>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -70,7 +70,9 @@
 //! colours) and stands the forest in three bands along x, one in each (`PooledLook`): the meshes
 //! are the same, the impostors take the colours as a tint. `--recolor` then, after the warmup,
 //! changes the colours of looks 1 and 2 (`RecolorPool`) and stands another warmup in them, so a
-//! `--screenshot` shows the forest after a recolour.
+//! `--screenshot` shows the forest after a recolour. `--ages <n>` (pool mode) builds every
+//! species' pool at n ages (4, 8, ... years, the last mature) and spreads the trees among them, as
+//! a game plants young and old trees: pools whose surfaces are equal share their materials.
 //!
 //! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
 //! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
@@ -278,6 +280,8 @@ struct Args {
     looks: bool,
     /// With `--looks`: after the warmup, looks 1 and 2 change colour (`RecolorPool`).
     recolor: bool,
+    /// Pool mode: every species' pool built at this many ages, the trees spread among them.
+    ages: u32,
 }
 
 impl Args {
@@ -300,7 +304,7 @@ fn usage() -> ! {
          [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>] \
          [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>] [--push <x,z>] \
-         [--looks [--recolor]]"
+         [--looks [--recolor]] [--ages <n>]"
     );
     std::process::exit(2);
 }
@@ -351,6 +355,7 @@ fn parse_args() -> Args {
         prepass: 0,
         looks: false,
         recolor: false,
+        ages: 1,
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -527,6 +532,7 @@ fn parse_args() -> Args {
             }
             "--looks" => args.looks = true,
             "--recolor" => args.recolor = true,
+            "--ages" => args.ages = value(&mut it),
             "--screenshot" => args.screenshot = Some(it.next().unwrap_or_else(|| usage()).into()),
             _ => usage(),
         }
@@ -818,31 +824,39 @@ fn setup(
             lod
         })
         .collect();
-    let pools: Vec<Handle<TreePool>> = if bench.args.mode == Mode::Pool {
+    let pools: Vec<Vec<Handle<TreePool>>> = if bench.args.mode == Mode::Pool {
         let started = Instant::now();
         let in_background = bench.args.background_pools;
-        let built: Vec<_> = bases
+        // `--ages <n>`: every species at n ages, 4, 8, ... years and the last one mature.
+        let ages: Vec<f32> = (1..=bench.args.ages.max(1))
+            .map(|k| if k == bench.args.ages.max(1) { f32::INFINITY } else { 4.0 * k as f32 })
+            .collect();
+        let built: Vec<Vec<_>> = bases
             .iter()
             .zip(&lods)
             .map(|(base, lod)| {
-                if in_background {
-                    background.build(base, VARIANTS, f32::INFINITY, lod)
-                } else {
-                    let mut pool = build_pool(base, VARIANTS, f32::INFINITY, lod, &mut meshes);
-                    if bench.args.looks {
-                        // Looks 1 and 2 after the pool's own look 0.
-                        for (colors, _) in &LOOKS {
-                            pool.add_look(*colors);
+                ages.iter()
+                    .map(|&age| {
+                        if in_background {
+                            background.build(base, VARIANTS, age, lod)
+                        } else {
+                            let mut pool = build_pool(base, VARIANTS, age, lod, &mut meshes);
+                            if bench.args.looks {
+                                // Looks 1 and 2 after the pool's own look 0.
+                                for (colors, _) in &LOOKS {
+                                    pool.add_look(*colors);
+                                }
+                            }
+                            pools.add(pool)
                         }
-                    }
-                    pools.add(pool)
-                }
+                    })
+                    .collect()
             })
             .collect();
         eprintln!(
             "forest: {} {} pool(s) of {VARIANTS} variants in {:.2} s",
             if in_background { "started" } else { "built" },
-            built.len(),
+            built.iter().map(Vec::len).sum::<usize>(),
             started.elapsed().as_secs_f32()
         );
         built
@@ -855,7 +869,7 @@ fn setup(
         let base = &bases[species];
         // `--shadow-radius`: the trees farther from the camera cast no shadow.
         let quiet = bench.args.shadow_radius.is_some_and(|r| transform.translation.xz().distance(view.translation.xz()) > r);
-        if let Some(pool) = pools.get(species) {
+        if let Some(pool) = pools.get(species).map(|ages| &ages[variant as usize % ages.len()]) {
             let look = PooledLook(look_at(transform.translation.x, bench.extent, bench.args.looks));
             let mut tree = commands.spawn((PooledTree { pool: pool.clone(), variant }, look, transform, ForestTree));
             if quiet {
