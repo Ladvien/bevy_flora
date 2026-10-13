@@ -40,6 +40,7 @@ use crate::recolor::CutWood;
 use crate::units::FloraUnits;
 use crate::shading::{FloraMaterial, FloraMaterialSupport, FloraWindBuffer, SharedFlora, TextureLibrary};
 use crate::shape::{TreeShape, WoodCapsule};
+use crate::index::LyingWood;
 
 /// How a pool's trees are cut into deadfall ([`build_pool_with_deadfall`](crate::build_pool_with_deadfall)). Lengths are in
 /// metres, at the tree's own scale.
@@ -185,9 +186,11 @@ pub enum DeadfallKind {
 }
 
 /// A stump, a fallen tree or bucked logs placed from a [`TreePool`] built with
-/// [`build_pool_with_deadfall`](crate::build_pool_with_deadfall). Static, never in the [`FloraIndex`](crate::FloraIndex), no
-/// impostor. The plugin gives it its children once its pool is ready; `variant` is taken modulo
-/// the pool's variants. Inserting [`BuckTree`] on a lying one makes it bucked, in place.
+/// [`build_pool_with_deadfall`](crate::build_pool_with_deadfall). Static, no impostor, not among
+/// the [`FloraIndex`](crate::FloraIndex)'s standing trees: its stump, logs and lying wood are its
+/// obstacles ([`FloraIndex::obstacles_within`](crate::FloraIndex::obstacles_within)). The plugin
+/// gives it its children once its pool is ready; `variant` is taken modulo the pool's variants.
+/// Inserting [`BuckTree`] on a lying one makes it bucked, in place.
 #[derive(Component, Clone, Debug)]
 #[require(Transform, Visibility)]
 pub struct PooledDeadfall {
@@ -442,7 +445,10 @@ fn lie(base: &Transform, cut: &Deadfall, direction: Vec2, ground: Option<&FloraG
 }
 
 fn spawn_stump(commands: &mut Commands, entity: Entity, pool: &TreePool, cut: &Deadfall, materials: &DeadMaterials, quiet: bool) {
-    commands.entity(entity).insert((TreeStump { tree: None }, cut_wood(pool, materials)));
+    let (centre, radius) =
+        log_end(std::slice::from_ref(&cut.outline)).unwrap_or((Vec3::new(0.0, cut.cut_y, 0.0), pool.params.trunk.radius));
+    let capsule = WoodCapsule { a: Vec3::new(centre.x, 0.0, centre.z), b: Vec3::new(centre.x, cut.cut_y, centre.z), radius };
+    commands.entity(entity).insert((TreeStump { tree: None, capsule }, cut_wood(pool, materials)));
     spawn_mesh(commands, entity, &cut.stump, DeadRole::Wood, materials, Transform::IDENTITY, quiet);
     if let Some(stump_face) = &cut.stump_face {
         spawn_mesh(commands, entity, stump_face, DeadRole::Face, materials, Transform::IDENTITY, quiet);
@@ -479,8 +485,9 @@ fn spawn_lying(
     if let Some(lying_face) = &cut.lying_face {
         spawn_mesh(commands, entity, lying_face, DeadRole::Face, materials, pivot, quiet);
     }
-    // The variant's shape, in the space of the lying tree.
-    commands.spawn((pivot, TreeShape::clone(&variant.shape), ChildOf(entity)));
+    // The variant's shape, in the space of the lying tree; the wood above the cut is an obstacle
+    // (`FloraIndex::obstacles_within`).
+    commands.spawn((pivot, TreeShape::clone(&variant.shape), LyingWood { cut_y: cut.cut_y }, ChildOf(entity)));
 }
 
 /// A [`PooledDeadfall`] given [`BuckTree`] that lies is bucked in place: its children go and it is
@@ -652,8 +659,9 @@ mod tests {
     }
 
     #[test]
-    fn a_hundred_lying_trees_draw_a_variants_meshes_with_one_material_pair_and_are_never_indexed() {
+    fn a_hundred_lying_trees_draw_a_variants_meshes_with_one_material_pair_and_are_lying_wood_not_trees() {
         let mut app = app();
+        app.add_plugins(bevy::transform::TransformPlugin);
         let pool = pool(&mut app, TreePreset::Oak);
         let mut roots = Vec::new();
         for i in 0..100 {
@@ -682,7 +690,16 @@ mod tests {
         // Three levels of wood, up to three of leaves, the cut face; wood and leaves, and the face.
         assert!(meshes.len() <= 7, "{} meshes", meshes.len());
         assert_eq!(materials.len(), 3, "wood, leaves and the end grain");
-        assert_eq!(app.world().resource::<FloraIndex>().len(), 0, "deadfall is never indexed");
+        let index = app.world().resource::<FloraIndex>();
+        assert_eq!(index.len(), 0, "deadfall is never a standing tree");
+        // Each lying tree is lying wood above its cut, near where it lies.
+        let lying: std::collections::HashSet<Entity> =
+            index.obstacles().filter(|o| o.kind == crate::ObstacleKind::Lying).map(|o| o.entity).collect();
+        assert_eq!(lying.len(), roots.len(), "one shape child of each lying tree");
+        for &root in &roots {
+            let at = app.world().get::<bevy::transform::components::GlobalTransform>(root).unwrap().translation().xz();
+            assert!(index.obstacles_within(at, 2.0).any(|o| o.kind == crate::ObstacleKind::Lying), "nothing lies at {at}");
+        }
         let _ = PooledTree { pool: pool.clone(), variant: 0 };
     }
 

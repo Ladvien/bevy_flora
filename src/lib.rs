@@ -438,7 +438,7 @@ pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
 pub use growth::GrowthParams;
 pub use harvest::{FallenFruit, FallingFruit, Fruit, FruitFell, TreeFruit};
-pub use index::{FloraIndex, IndexedTree, TreeHit};
+pub use index::{FloraIndex, IndexedTree, Obstacle, ObstacleKind, TreeHit};
 pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial, ImpostorTint};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
 pub use mesh::MeshData;

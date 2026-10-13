@@ -5,6 +5,43 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.41.0] - 2026-10-13
+
+Stumps, logs and fallen trunks for a game's collision (issue #72): a stump told only which tree it
+came from, and `FloraIndex` held standing trees only, so a game made its own shapes for the wood on
+the forest floor (Sanctuary: about 125 lines, a stump radius guessed from the felled tree's
+parameters and a hard-coded cut height). `TreeStump` gained a field, so struct literals of it need
+it (a minor release).
+
+On crates.io this is the release after 0.36.0 (crates.io takes only a few versions of a crate a
+day): it carries 0.37.0 to 0.40.0 too, entered below, each also released on GitHub.
+
+### Added
+
+- `TreeStump::capsule`: the stump in its own space, from its foot to the middle of its cut, with
+  the trunk's radius at the cut (felled and pooled stumps alike), as `TreeLog::capsule` is a log's.
+- `FloraIndex::obstacles_within(at, radius)` and `obstacles()`: the lying wood as
+  `Obstacle { entity, kind, capsule }` in world space: every stump, bucked log, and the trunk and
+  limbs above the cut of a tree lying on the ground (a felled tree at rest that has a `TreeShape`,
+  and a pooled deadfall's lying tree). `Obstacle::distance_to` measures across the ground. They
+  are kept in a grid of their own, so the standing trees' queries cost what they did.
+- `WoodCapsule::placed` (a capsule where a `GlobalTransform` puts it) and `WoodCapsule::above` (the
+  part of it above a height).
+
+### Changed
+
+- `TreeStump` is no longer `Eq` (it holds a capsule of floats); `PartialEq` stays.
+
+### Measured
+
+- **Look.** Nothing that draws changed: the 491 gallery scenarios on the CPU and with `--gpu`, the
+  eleven clips (but one fire frame at a mean of 0.000 of 255) and a pooled forest's screenshot are
+  0.40.0's byte for byte, no `ERROR`.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.40.0): 100 000
+  pooled oaks 7.73 ms a frame in the median of four pairs against 7.95, 1 000 individual oaks 24.52
+  and 24.92 ms against 24.77 and 25.85: the obstacles cost a frame with no lying wood nothing to
+  see.
+
 ## [0.40.0] - 2026-10-13
 
 Pools that look alike draw with the same materials (issue #71): a game that builds a species at
@@ -2520,6 +2557,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.41.0]: https://github.com/Ladvien/bevy_flora/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/Ladvien/bevy_flora/compare/v0.39.1...v0.40.0
 [0.39.1]: https://github.com/Ladvien/bevy_flora/compare/v0.39.0...v0.39.1
 [0.39.0]: https://github.com/Ladvien/bevy_flora/compare/v0.38.1...v0.39.0

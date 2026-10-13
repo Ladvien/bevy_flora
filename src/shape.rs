@@ -60,6 +60,27 @@ impl WoodCapsule {
         (capsule, Isometry3d::new((self.a + self.b) * 0.5, rotation))
     }
 
+    /// This capsule where `place` puts its space: the ends transformed, the radius scaled by the
+    /// transform's scale along x (the crate places trees with uniform scale).
+    pub fn placed(&self, place: &bevy::transform::components::GlobalTransform) -> WoodCapsule {
+        let scale = place.affine().matrix3.x_axis.length();
+        WoodCapsule { a: place.transform_point(self.a), b: place.transform_point(self.b), radius: self.radius * scale }
+    }
+
+    /// The part of this capsule at or above `y` (in its own space): `None` if it all lies below,
+    /// else with its lower end moved up to `y` along the axis. A lying tree's wood above its cut.
+    pub fn above(&self, y: f32) -> Option<WoodCapsule> {
+        let (low, high) = if self.a.y <= self.b.y { (self.a, self.b) } else { (self.b, self.a) };
+        if high.y < y {
+            return None;
+        }
+        if low.y >= y {
+            return Some(*self);
+        }
+        let cut = low + (high - low) * ((y - low.y) / (high.y - low.y));
+        Some(WoodCapsule { a: cut, b: high, radius: self.radius })
+    }
+
     fn grow(&self, min: &mut Vec3, max: &mut Vec3) {
         for p in [self.a, self.b] {
             *min = min.min(p - Vec3::splat(self.radius));

@@ -103,15 +103,25 @@ impl Felled {
             *material = if *child == trunk { wood.clone() } else { leaves.clone() };
         }
     }
+
+    /// The height of its cut, in the tree's own space: the wood below it is the stump's.
+    pub(crate) fn cut_y(&self) -> f32 {
+        self.fall.hinge.y
+    }
 }
 
 /// The stump a felled tree left: the wood below the cut and its cut face, where the tree stood.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct TreeStump {
     /// The tree that was cut from it: `None` for a pooled stump ([`PooledDeadfall`](crate::PooledDeadfall)),
     /// which no tree was cut from.
     pub tree: Option<Entity>,
+    /// The stump as a capsule in its own space, from its foot to the middle of its cut, with the
+    /// trunk's radius at the cut: a collider for it (`WoodCapsule::to_primitive`), and what
+    /// [`FloraIndex::obstacles_within`](crate::FloraIndex::obstacles_within) finds.
+    #[reflect(ignore)]
+    pub capsule: WoodCapsule,
 }
 
 /// Sent the frame a felled tree first hits the ground: the moment for the crash, the dust and
@@ -384,7 +394,9 @@ pub(crate) fn start_felling(
 
         // The stump: the wood below the cut and its face, where the tree stands.
         let cut_wood = CutWood { params: Arc::new(painted.clone()), unlit, calm: false };
-        let stump = commands.spawn((*transform, Visibility::Inherited, TreeStump { tree: Some(entity) }, cut_wood)).id();
+        let (centre, radius) = log_end(&above.outlines).unwrap_or((Vec3::new(0.0, cut_y, 0.0), tree.0.trunk.radius));
+        let capsule = WoodCapsule { a: Vec3::new(centre.x, 0.0, centre.z), b: Vec3::new(centre.x, cut_y, centre.z), radius };
+        let stump = commands.spawn((*transform, Visibility::Inherited, TreeStump { tree: Some(entity), capsule }, cut_wood)).id();
         let mut wood = commands.spawn((Mesh3d(meshes.add(below.kept.into_bevy_mesh())), ChildOf(stump)));
         paint_child(&mut wood, &paint, false);
         if !below.faces.is_empty() {
@@ -1316,6 +1328,75 @@ mod tests {
                     assert_eq!(pieces, 2, "{what}: a log is its wood and its end faces");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_bucked_trees_stump_and_logs_are_found_as_obstacles_where_they_lie() {
+        use crate::index::{FloraIndex, ObstacleKind};
+        use bevy::transform::components::GlobalTransform;
+        let params = TreePreset::Oak.params();
+        // Where things are in the world: the obstacles are kept from their global transforms.
+        let mut app = app();
+        app.add_plugins(bevy::transform::TransformPlugin);
+        let at = Vec3::new(3.0, 0.0, -2.0);
+        let bucked = fell_and_buck(&mut app, &params, at, Vec2::X);
+        app.update();
+        // The stump: from its foot to its cut, the trunk's radius there.
+        let stump = *app.world().get::<TreeStump>(bucked.stump).unwrap();
+        let cut_height = FellTree::default().cut_height;
+        assert!(stump.capsule.a.y.abs() < 1.0e-6 && (stump.capsule.b.y - cut_height).abs() < 0.15, "{stump:?}");
+        let (top, foot) = (params.trunk.radius * params.trunk.taper, params.base_radius());
+        assert!(stump.capsule.radius > top && stump.capsule.radius < foot * 1.1, "{stump:?}: between {top} and {foot}");
+        {
+            let index = app.world().resource::<FloraIndex>();
+            let near = |p: Vec2, kind: ObstacleKind| -> Vec<Entity> {
+                index.obstacles_within(p, 0.05).filter(|o| o.kind == kind).map(|o| o.entity).collect()
+            };
+            assert_eq!(near(at.xz(), ObstacleKind::Stump), vec![bucked.stump]);
+            for &log in &bucked.logs {
+                let capsule = app.world().get::<TreeLog>(log).unwrap().capsule;
+                let place = app.world().get::<GlobalTransform>(log).unwrap();
+                let middle = place.transform_point((capsule.a + capsule.b) * 0.5).xz();
+                assert!(near(middle, ObstacleKind::Log).contains(&log), "log {log:?} is not found where it lies");
+            }
+            assert_eq!(index.obstacles().count(), 1 + bucked.logs.len());
+            assert!(index.within(at.xz(), 1.0).next().is_none(), "the tree no longer stands");
+        }
+        // Gone with its entity.
+        app.world_mut().despawn(bucked.stump);
+        app.update();
+        assert!(app.world().resource::<FloraIndex>().obstacles().all(|o| o.entity != bucked.stump));
+    }
+
+    #[test]
+    fn a_felled_tree_with_a_shape_is_an_obstacle_once_it_lies_still() {
+        use crate::index::{FloraIndex, ObstacleKind};
+        use crate::shape::TreeShape;
+        let mut app = app();
+        app.add_plugins(bevy::transform::TransformPlugin);
+        let tree = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeShape::default(), Transform::default())).id();
+        app.update();
+        app.world_mut().entity_mut(tree).insert(FellTree { direction: Vec2::X, speed: 4.0, ..Default::default() });
+        let lying = |app: &bevy::app::App| -> Vec<WoodCapsule> {
+            let index = app.world().resource::<FloraIndex>();
+            index.obstacles().filter(|o| o.kind == ObstacleKind::Lying && o.entity == tree).map(|o| o.capsule).collect()
+        };
+        let mut falling = 0;
+        for _ in 0..900 {
+            app.update();
+            if app.world().get::<Felled>(tree).is_some_and(|felled| felled.at_rest) {
+                break;
+            }
+            assert!(lying(&app).is_empty(), "a falling tree is no obstacle yet");
+            falling += 1;
+        }
+        assert!(falling > 3, "it fell over {falling} frames");
+        let wood = lying(&app);
+        assert!(!wood.is_empty(), "the tree lies still and is an obstacle");
+        // All of it lies the way it fell: the wood below the cut, the stump's, is not part of it.
+        for capsule in &wood {
+            assert!(capsule.a.x > -0.3 && capsule.b.x > -0.3, "{capsule:?} reaches behind the stump");
         }
     }
 
