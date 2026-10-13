@@ -794,6 +794,19 @@ pub(crate) fn forget_changed_meshes(mut caches: ResMut<FallCaches>, mut changed:
     }
 }
 
+/// A seed from where a tree stands, for the leaves it drops: the same tree drops the same leaves
+/// whatever was spawned before it. Its `Entity` would not do: entities are numbered in the order
+/// they are spawned, which a streamed world, a restored save or one more system changes.
+fn place_seed(at: Vec3) -> i32 {
+    let mut h = at.x.to_bits().wrapping_mul(0x9E37_79B1)
+        ^ at.y.to_bits().wrapping_mul(0x85EB_CA6B)
+        ^ at.z.to_bits().wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7FEB_352D);
+    h ^= h >> 15;
+    h as i32
+}
+
 /// Make the bursts the drops ask for.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn drop_leaves(
@@ -823,7 +836,9 @@ pub(crate) fn drop_leaves(
 ) {
     let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
     let fall = Fall::now(&time, &settings, &wind, &units);
-    for (k, drop) in drops.read().enumerate() {
+    // Drops of one tree in one frame each take leaves of their own.
+    let mut repeats: HashMap<Entity, u32> = HashMap::default();
+    for drop in drops.read() {
         let budget = settings.max_leaves.saturating_sub(live).min(drop.count) as usize;
         if budget == 0 {
             continue;
@@ -838,8 +853,10 @@ pub(crate) fn drop_leaves(
         if cards.is_empty() {
             continue;
         }
-        // Which leaves: a few at random, by a partial shuffle.
-        let mut rng = SeededRng::from_parts(drop.tree.to_bits() as i32 ^ fall.now.to_bits() as i32, k as u32);
+        // Which leaves: a few at random, by a partial shuffle, drawn from where the tree stands.
+        let repeat = repeats.entry(drop.tree).or_default();
+        let mut rng = SeededRng::from_parts(place_seed(at.translation()) ^ fall.now.to_bits() as i32, *repeat);
+        *repeat += 1;
         let (chosen, last) = (budget.min(cards.len()), cards.len() - 1);
         for i in 0..chosen {
             let j = i + (rng.next_f32() * (cards.len() - i) as f32) as usize;
@@ -930,18 +947,28 @@ pub(crate) fn shed_with_season(
     }
     let mut live: u32 = bursts.iter().map(|burst| burst.leaves).sum();
     let fall = Fall::now(&time, &settings, &wind, &units);
-    let mut rng = SeededRng::from_parts(now.to_bits() as i32, 1);
     let span = to - from;
+    // The trees in reach, nearest a camera first (then by where they stand): when the budget runs
+    // out it is the farther ones that keep their leaves, in whatever order the trees were spawned.
+    let mut near: Vec<_> = trees
+        .iter()
+        .filter_map(|tree| {
+            let at = tree.0.translation();
+            let nearest = eyes.iter().map(|eye| eye.distance_squared(at)).fold(f32::INFINITY, f32::min);
+            (nearest <= reach).then_some((nearest, tree))
+        })
+        .collect();
+    near.sort_by(|(a, x), (b, y)| {
+        let (p, q) = (x.0.translation(), y.0.translation());
+        a.total_cmp(b).then(p.x.total_cmp(&q.x)).then(p.z.total_cmp(&q.z))
+    });
     let mut looks: HashMap<AssetId<FloraMaterial>, (Handle<FloraMaterial>, BurstBuilder)> = HashMap::default();
-    for (at, render, tree, pooled, look) in &trees {
+    for (_, (at, render, tree, pooled, look)) in near {
         let budget = settings.max_leaves.saturating_sub(live) as usize;
         if budget == 0 {
             break;
         }
         let position = at.translation();
-        if !eyes.iter().any(|eye| eye.distance_squared(position) <= reach) {
-            continue;
-        }
         let Some(leaves) = leaf_source(render, tree, pooled, look, pools.as_deref()).filter(|leaves| leaves.deciduous) else {
             continue;
         };
@@ -957,6 +984,7 @@ pub(crate) fn shed_with_season(
         let (_, burst) = looks
             .entry(leaves.material.id())
             .or_insert_with(|| (leaves.material.clone(), BurstBuilder::new(position)));
+        let mut rng = SeededRng::from_parts(place_seed(position) ^ now.to_bits() as i32, 1);
         // Each lets go when the leaf fall passed its moment, assuming it rose evenly meanwhile.
         live += burst.add(read.mesh(source), falling, at, height, fall, &mut rng, |card, _| {
             ((card.moment - from) / span - 1.0) * elapsed
@@ -1306,6 +1334,32 @@ mod tests {
         let dropped = bursts(&mut app);
         assert_eq!(dropped.len(), 1);
         assert_eq!((dropped[0].tree, dropped[0].leaves), (Some(tree), 15));
+    }
+
+    #[test]
+    fn a_tree_drops_the_same_leaves_whatever_was_spawned_before_it() {
+        // Two worlds alike but for 37 entities spawned first, so the oak's `Entity` differs.
+        let dropped = |before: usize| {
+            let mut app = app();
+            for _ in 0..before {
+                app.world_mut().spawn_empty();
+            }
+            let at = Transform::from_xyz(3.0, 0.0, -2.0);
+            let oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), at)).id();
+            app.update();
+            app.update();
+            app.world_mut().resource_mut::<Messages<DropLeaves>>().write(DropLeaves { tree: oak, count: 20 });
+            app.update();
+            let world = app.world_mut();
+            let mesh = world.query::<(&LeafBurst, &Mesh3d)>().single(world).unwrap().1.0.clone();
+            let mesh = world.resource::<Assets<Mesh>>().get(&mesh).unwrap();
+            let leaves: Vec<Vec<u8>> = mesh.attributes().map(|(_, values)| values.get_bytes().to_vec()).collect();
+            (oak, leaves)
+        };
+        let (first, leaves) = dropped(0);
+        let (later, same_leaves) = dropped(37);
+        assert_ne!(first, later);
+        assert!(leaves == same_leaves, "the oak dropped other leaves");
     }
 
     #[test]

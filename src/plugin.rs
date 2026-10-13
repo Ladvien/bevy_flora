@@ -288,6 +288,8 @@ impl bevy::app::Plugin for FloraPlugin {
                 )
                     .chain(),
             )
+            // After the procedural trees' systems: both make textures and images and write
+            // `TreeShape`s (of other trees), so an order keeps the schedule free of ambiguities.
             .add_systems(
                 bevy::app::Update,
                 (
@@ -305,7 +307,8 @@ impl bevy::app::Plugin for FloraPlugin {
                     crate::deadfall::restyle_deadfall,
                     sync_pooled_looks,
                 )
-                    .chain(),
+                    .chain()
+                    .after(show_flowers),
             )
             // After transform propagation: the shaders cut only in the view drawn from where the
             // fading camera is this frame, and push foliage from where the pushers are this frame.
@@ -316,7 +319,9 @@ impl bevy::app::Plugin for FloraPlugin {
                     sync_see_through,
                     arm_push,
                     sync_pushers,
-                    crate::index::index_trees,
+                    // After the frame's asset events are written: a pool added this frame is
+                    // indexed this frame, however the executor orders the two.
+                    crate::index::index_trees.after(bevy::asset::AssetEventSystems),
                     sync_shadow_casting,
                 )
                     .after(bevy::transform::TransformSystems::Propagate),
@@ -1039,6 +1044,26 @@ mod tests {
         app.init_asset::<StandardMaterial>();
         app.add_plugins(FloraPlugin);
         app
+    }
+
+    /// Two systems that touch the same data with no order between them run in whatever order the
+    /// executor picks, which a new system anywhere can change: a game's frame would differ from
+    /// release to release. Building the schedules with ambiguities as errors panics on one.
+    #[test]
+    fn the_plugins_schedules_order_every_pair_of_systems_that_share_data() {
+        use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings, ScheduleLabel};
+        let mut app = app();
+        for label in [bevy::app::PreUpdate.intern(), bevy::app::Update.intern(), bevy::app::PostUpdate.intern()] {
+            app.edit_schedule(label, |schedule| {
+                schedule.set_build_settings(ScheduleBuildSettings {
+                    ambiguity_detection: LogLevel::Error,
+                    ..Default::default()
+                });
+            });
+        }
+        app.finish();
+        app.cleanup();
+        app.update();
     }
 
     #[test]
