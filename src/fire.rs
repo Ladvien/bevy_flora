@@ -11,9 +11,9 @@
 //! neighbours, faster downwind ([`FloraWind`]), through the cells within
 //! [`FireSpread::reach`] of a tree (`ProceduralTree` or `PooledTree`); where no tree stands it
 //! goes out. A cell burns until it is charred through, then its embers cool. The game reads the
-//! grid back ([`FloraFire::char_at`], [`FloraFire::heat_at`]) to hurt what stands in the fire or to
-//! make a burnt tree useless, and can put a fire out ([`FloraFire::extinguish`]) or lay a burnt
-//! patch down with no fire ([`FloraFire::scorch`]).
+//! grid back ([`FloraFire::char_at`], [`FloraFire::heat_at`]) to hurt what stands in the fire, hears
+//! of each tree it burns through ([`TreeBurnt`]), and can put a fire out ([`FloraFire::extinguish`])
+//! or lay a burnt patch down with no fire ([`FloraFire::scorch`]).
 //!
 //! ```no_run
 //! use bevy::prelude::*;
@@ -37,6 +37,7 @@
 use bevy::asset::{Asset, AssetId, Assets};
 use bevy::ecs::prelude::*;
 use bevy::math::{Vec2, Vec3};
+use bevy::reflect::Reflect;
 use bevy::render::storage::ShaderBuffer;
 use bevy::time::Time;
 use bevy::transform::components::GlobalTransform;
@@ -505,6 +506,45 @@ pub(crate) fn burn(
     }
 }
 
+/// How charred the ground at a tree's trunk is when the fire has burnt the tree through: its wood
+/// black, its leaves gone ([`TreeBurnt`]).
+pub const BURNT: f32 = 0.95;
+
+/// A tree the fire burnt through: the char where its trunk stands passed [`BURNT`]. The plugin
+/// sends it once for each tree, the frame that happens, and marks the tree [`Burnt`]: the moment
+/// to drop its loot, count it lost or put a dead tree in its place.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct TreeBurnt {
+    /// The tree: a [`ProceduralTree`] or a [`PooledTree`].
+    pub tree: Entity,
+    /// Where its trunk stands, in world space.
+    pub at: Vec3,
+}
+
+/// A tree the fire burnt through ([`TreeBurnt`]), marked by the plugin. A tree that has it is not
+/// reported again: insert it on the burnt trees of a save, with the fire's grid
+/// ([`FloraFire::restore`]), and loading reports none of them.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
+pub struct Burnt;
+
+/// Report each tree the fire has burnt through ([`TreeBurnt`]), once: run when the fire changed
+/// (it stepped, or the game set its cells).
+pub(crate) fn report_burnt(
+    mut commands: Commands,
+    fire: Res<FloraFire>,
+    trees: Query<(Entity, &GlobalTransform), (AnyTree, Without<Burnt>)>,
+    mut burnt: MessageWriter<TreeBurnt>,
+) {
+    for (tree, at) in &trees {
+        let at = at.translation();
+        if fire.char_at(at) >= BURNT {
+            commands.entity(tree).insert(Burnt);
+            burnt.write(TreeBurnt { tree, at });
+        }
+    }
+}
+
 /// The shared buffer was resized: the flora materials must bind the new one. Set the frame it is
 /// resized; acted on the next (`rebind_fire`), when the new buffer has been prepared.
 #[derive(Resource, Default)]
@@ -615,6 +655,37 @@ mod tests {
         for _ in 0..(seconds / STEP).round() as usize {
             fire.step(wind);
         }
+    }
+
+    #[test]
+    fn each_tree_the_fire_burns_through_is_reported_once_and_marked() {
+        use bevy::asset::{AssetApp, AssetPlugin};
+        use bevy::transform::components::Transform;
+        let mut app = bevy::app::App::new();
+        app.add_plugins((bevy::MinimalPlugins, AssetPlugin::default(), bevy::transform::TransformPlugin));
+        app.init_asset::<bevy::mesh::Mesh>();
+        app.init_asset::<bevy::pbr::StandardMaterial>();
+        app.add_plugins(crate::FloraPlugin);
+        let mut oak = |x: f32| {
+            let params = crate::presets::TreePreset::Oak.params();
+            app.world_mut().spawn((ProceduralTree(params), Transform::from_xyz(x, 0.0, 0.0))).id()
+        };
+        let (burning, restored, far) = (oak(0.0), oak(2.0), oak(40.0));
+        // Burnt before a save: not reported again.
+        app.world_mut().entity_mut(restored).insert(Burnt);
+        app.insert_resource(FloraFire::with_cells(Vec2::ZERO, 32.0, 32));
+        app.update();
+        let mut cursor = app.world().resource::<Messages<TreeBurnt>>().get_cursor_current();
+        app.world_mut().resource_mut::<FloraFire>().scorch(Vec3::ZERO, 4.0, 1.0);
+        app.update();
+        let reported: Vec<Entity> = cursor.read(app.world().resource::<Messages<TreeBurnt>>()).map(|b| b.tree).collect();
+        assert_eq!(reported, vec![burning]);
+        assert!(app.world().get::<Burnt>(burning).is_some());
+        assert!(app.world().get::<Burnt>(far).is_none());
+        // Charred again: nothing new.
+        app.world_mut().resource_mut::<FloraFire>().scorch(Vec3::ZERO, 4.0, 1.0);
+        app.update();
+        assert_eq!(cursor.read(app.world().resource::<Messages<TreeBurnt>>()).count(), 0);
     }
 
     #[test]

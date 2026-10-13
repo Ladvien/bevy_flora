@@ -271,8 +271,9 @@
 //! ([`FloraFire::ignite`]): through the trees, faster downwind, stopped where nothing burns. The
 //! trees it reaches scorch and lose their leaves, and their wood chars from the ground up with
 //! glowing seams, on every way a tree is drawn; [`FloraFire::char_at`] and
-//! [`FloraFire::heat_at`] read it back for the game. While no `FloraFire` exists no shader carries
-//! the fire; see [`fire`].
+//! [`FloraFire::heat_at`] read it back for the game, and each tree it burns through is reported
+//! once ([`TreeBurnt`]) and marked [`Burnt`]. While no `FloraFire` exists no shader carries the
+//! fire; see [`fire`].
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;
@@ -389,7 +390,7 @@ pub use background::BuildInBackground;
 pub use crown::CrownShape;
 pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeNotch, TreeStump};
-pub use fire::{FireCell, FireSpread, FloraFire};
+pub use fire::{BURNT, Burnt, FireCell, FireSpread, FloraFire, TreeBurnt};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
@@ -430,7 +431,7 @@ pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
         FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
-        FallenFruit, FallingFruit, FruitFell, FruitParams, TreeFruit,
+        Burnt, FallenFruit, FallingFruit, FruitFell, FruitParams, TreeBurnt, TreeFruit,
         GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,

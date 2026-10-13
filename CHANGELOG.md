@@ -5,6 +5,47 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.34.0] - 2026-10-13
+
+The playground: a small first-person game built on the crate, to read as an example of wiring its
+gameplay APIs together, and `TreeBurnt`, which it wanted. New API only, hence a minor release.
+
+### Added
+
+- **`TreeBurnt { tree, at }`**, a message the plugin sends once for each tree (`ProceduralTree` or
+  `PooledTree`) the fire burns through: the char where its trunk stands passes **`BURNT`** (0.95).
+  It marks the tree **`Burnt`** then; a tree that has `Burnt` (restored from a save, with the
+  fire's grid) is not reported again. Checked when the fire changed (it stepped, or the game set
+  its cells). `TreeBurnt`, `Burnt` and `BURNT` in the crate root, the first two in the prelude.
+- **`examples/playground.rs`**: walk among an apple tree, an oak and a ring of mixed trees, strike
+  a trunk with an axe (`FloraIndex::cast_ray`, `TreeNotch`; the fourth blow fells it with
+  `FellTree`), buck it (`BuckTree`), shake a tree (`TreeShakes`) and gather the apples that fall
+  (`FallenFruit`), pick apples off it (`TreeFruit::nearest`, `pick`), light a fire (`FloraFire`,
+  counting `TreeBurnt`), call the rain (`FloraWetness`), move the year on (`FloraSeason::of_year`),
+  save and load (`FellTree::lying`, `TreeFruit::with_picked`, `Burnt`, `FloraFire::restore`).
+  Every action reads a `Controls` resource, so `--demo` plays a script through the same systems
+  and records eight seconds of it (`docs/playground.gif`).
+- README: "Everything at once: the playground", with `docs/playground.gif`; `TreeBurnt` in Fire.
+
+### Measured
+
+- **Look.** The 441 gallery scenarios render as in 0.33.0 on the CPU and with `--gpu` (byte for
+  byte but the CPU toon maple and oak, at a mean difference of 0.000 of 255; no `ERROR`), and so
+  do the growth, grove, seasons, fire and push clips frame for frame; the shake, fell, chop and
+  harvest clips drop other leaves of the same trees.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.33.0): 1 000
+  individual oaks 24.69, 24.62 and 24.65 ms (0.33.0: 24.10, 24.64 and 24.59), 100 000 pooled oaks
+  7.61 and 7.61 ms (7.61 and 7.58): nothing runs while no fire changes.
+- **The playground.** Its demo run twice writes the same frames; a variant of it that lights a
+  fire, saves, moves the year on and loads came back with the felled oak lying bucked into its
+  two logs, the fallen apples gone (the game's own) and the rain and the year as saved.
+- **Found and fixed before release.** The demo's first take never walked: its controls played on
+  the update before the clock's step, when no time had passed; they wait for the step now. Its
+  next takes ended on a stump with the oak fallen straight away from the camera, its length
+  hidden, and on the apple tree; the player now steps back and aside to see the oak lie and be
+  bucked. The GIF at the clips' 20 fps and 96 colours was 9.9 MB (a first-person camera changes
+  every pixel of every frame): 16 fps and 64 colours make it 6.9 MB.
+
 ## [0.33.0] - 2026-10-13
 
 Saving and loading. What a game did to its trees comes back from a save as it was left: a felled
@@ -1975,6 +2016,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.34.0]: https://github.com/Ladvien/bevy_flora/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/Ladvien/bevy_flora/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/Ladvien/bevy_flora/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/Ladvien/bevy_flora/compare/v0.30.0...v0.31.0
