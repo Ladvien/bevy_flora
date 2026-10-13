@@ -271,7 +271,7 @@ pub(crate) fn landing_time(height: f32, speed: f32) -> f32 {
 }
 
 /// `leaf_season_moment` in `common.wesl`: a leaf's moment in the season, from its phase.
-fn leaf_season_moment(phase: f32) -> f32 {
+pub(crate) fn leaf_season_moment(phase: f32) -> f32 {
     let x = phase * 7.31 + 0.137;
     x - x.floor()
 }

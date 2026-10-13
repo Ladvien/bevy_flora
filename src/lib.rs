@@ -256,6 +256,14 @@
 //! }
 //! ```
 //!
+//! # Picking fruit
+//!
+//! A fruiting tree ([`FoliageParams::fruit`], the apple) drawn as a [`ProceduralTree`] keeps a
+//! [`TreeFruit`]: [`TreeFruit::nearest`] finds the fruit nearest a hand and [`TreeFruit::pick`]
+//! takes it off the tree until the next blossom. A shake knocks some of a tree's fruit loose to
+//! fall and lie on the ground as [`FallenFruit`] entities, for the game to pick up
+//! ([`FallingFruit`], [`FruitFell`]). See [`harvest`].
+//!
 //! # Fire
 //!
 //! A [`FloraFire`] is a grid of cells over the game's world, each with how charred it is and how
@@ -348,6 +356,7 @@ pub mod foliage;
 mod gpu;
 pub mod ground;
 pub mod growth;
+pub mod harvest;
 pub mod impostor;
 pub mod index;
 pub mod lod;
@@ -377,6 +386,7 @@ pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
 pub use growth::GrowthParams;
+pub use harvest::{FallenFruit, FallingFruit, Fruit, FruitFell, TreeFruit};
 pub use index::{FloraIndex, IndexedTree, TreeHit};
 pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
@@ -412,7 +422,7 @@ pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
         FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
-        FruitParams,
+        FallenFruit, FallingFruit, FruitFell, FruitParams, TreeFruit,
         GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
