@@ -54,12 +54,14 @@ use bevy::camera::visibility::{Visibility, VisibilityRange};
 use bevy::ecs::prelude::*;
 use bevy::light::NotShadowCaster;
 use bevy::log::warn;
-use bevy::math::{Vec3, Vec3A};
+use bevy::math::{Vec3, Vec3A, Vec3Swizzles};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-use bevy::reflect::TypePath;
-use bevy::transform::components::Transform;
+use bevy::reflect::{Reflect, TypePath};
+use bevy::camera::{Camera, Camera3d, Projection};
+use bevy::transform::components::{GlobalTransform, Transform};
 
+use crate::ground::FloraGround;
 use crate::impostor::{ImpostorAtlas, ImpostorBakes, ImpostorMaterial, ImpostorSupport};
 use crate::lod::{LodDistances, LodSettings, build_lods};
 use crate::mesh::MeshData;
@@ -333,24 +335,156 @@ fn bounds_of(tree: &TreeMeshes) -> Aabb {
     Aabb::from_min_max(min, max)
 }
 
-/// The cross-fading range of distances in which a child is drawn: from `start`
-/// to `end` metres, each end fading over [`FADE`] metres around it. `end` may be
-/// infinite, and `start` zero.
-pub(crate) fn band(start: f32, end: f32) -> VisibilityRange {
-    let half = FADE / 2.0;
-    let edge = |at: f32| {
-        if at <= 0.0 {
-            0.0..0.0
-        } else if at.is_finite() {
-            (at - half)..(at + half)
-        } else {
-            at..at
+/// A level-of-detail child's band before [`LodScale`]: drawn from `start` to `end` metres, each
+/// end fading over [`FADE`] metres around it (`end` may be infinite, and `start` zero). The
+/// plugin keeps the child's `VisibilityRange` at this band times the scale ([`scale_lod_bands`]).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LodBand {
+    start: f32,
+    end: f32,
+}
+
+impl LodBand {
+    /// The band with its distances, and its fade, times `scale`.
+    fn range(self, scale: f32) -> VisibilityRange {
+        let half = FADE / 2.0 * scale;
+        let edge = |at: f32| {
+            let at = at * scale;
+            if at <= 0.0 {
+                0.0..0.0
+            } else if at.is_finite() {
+                (at - half)..(at + half)
+            } else {
+                at..at
+            }
+        };
+        VisibilityRange {
+            start_margin: edge(self.start),
+            end_margin: edge(self.end),
+            use_aabb: false,
         }
+    }
+}
+
+/// A level-of-detail child's band and the range it is drawn with at a scale of 1, to spawn or
+/// insert together; [`scale_lod_bands`] rescales the range.
+pub(crate) fn banded(start: f32, end: f32) -> (LodBand, VisibilityRange) {
+    let band = LodBand { start, end };
+    (band, band.range(1.0))
+}
+
+/// Multiplies every level-of-detail distance: where pooled trees ([`PooledTree`]) and trees
+/// drawn with [`TreeLod`](crate::TreeLod) hand over to a coarser level, and where pooled trees
+/// turn into impostors. 1 (the default) keeps the distances they were built with; 0.5 hands every
+/// tree over at half the distance (a lower quality setting), 2 at twice.
+///
+/// Under an orthographic camera a tree's size on screen follows the projection's zoom, not its
+/// distance, so while the game's main camera (the active `Camera3d` with the lowest `order`) is
+/// orthographic the plugin multiplies this by the camera's zoom as well: a tree where the
+/// camera's view meets the ground ([`FloraGround`] if there is one, else the plane y = 0) gets
+/// the level a 45° perspective camera gives it from where that camera would see as tall a view.
+/// Zoomed in, the trees in view are drawn in full; zoomed out, they turn into impostors. The
+/// bands are rewritten when the zoom moves by more than 2%, so a smooth zoom rewrites them every
+/// few frames, and as trees at different distances switch at slightly different zooms, the
+/// forest cross-fades as the zoom changes.
+///
+/// The distances are still measured from where the camera stands, as for any camera. An
+/// orthographic camera's picture does not change with its distance, so stand it well back (a few
+/// times as far as its widest view is tall, with `near` at 0): the trees at the top and the bottom
+/// of the screen are then at about the same distance from it and drawn at about the same level,
+/// and nothing in view is behind it. Close to its focus, the trees low on the screen stand much
+/// nearer the camera than those at the top and are drawn finer. The `isometric` example stands its
+/// camera 400 m back for views up to 260 m tall.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Resource)]
+pub struct LodScale(pub f32);
+
+impl Default for LodScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// The main camera's zoom as a factor on the level-of-detail distances: 1 unless it is
+/// orthographic (see [`LodScale`]).
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ZoomScale(pub(crate) f32);
+
+impl Default for ZoomScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// How far, as a share, the zoom moves before the bands are rewritten.
+const ZOOM_STEP: f32 = 0.02;
+
+/// The field of view of the perspective camera an orthographic camera's zoom is matched to:
+/// Bevy's default, 45°.
+const REFERENCE_FOV: f32 = std::f32::consts::FRAC_PI_4;
+
+/// Follow the main camera's zoom ([`ZoomScale`]) while it is orthographic; 1 otherwise.
+pub(crate) fn follow_orthographic_zoom(
+    cameras: Query<(&Camera, &Projection, &GlobalTransform), With<Camera3d>>,
+    ground: Option<Res<FloraGround>>,
+    mut zoom: ResMut<ZoomScale>,
+) {
+    let main = cameras.iter().filter(|(camera, ..)| camera.is_active).min_by_key(|(camera, ..)| camera.order);
+    let wanted = match main {
+        Some((_, Projection::Orthographic(orthographic), at)) => {
+            orthographic_zoom(orthographic.area.height(), at, ground.as_deref())
+        }
+        _ => 1.0,
     };
-    VisibilityRange {
-        start_margin: edge(start),
-        end_margin: edge(end),
-        use_aabb: false,
+    // Read before borrowing mutably: a mutable borrow marks it changed.
+    if (wanted / zoom.0 - 1.0).abs() > ZOOM_STEP || (wanted == 1.0 && zoom.0 != 1.0) {
+        zoom.0 = wanted;
+    }
+}
+
+/// The zoom of an orthographic camera at `at` whose view is `height` world units tall: its
+/// distance to where its view meets the ground, over the distance from which a perspective camera
+/// of [`REFERENCE_FOV`] sees as tall a view. 1 when it does not look down.
+fn orthographic_zoom(height: f32, at: &GlobalTransform, ground: Option<&FloraGround>) -> f32 {
+    let forward = at.forward().as_vec3();
+    let eye = at.translation();
+    if forward.y > -1.0e-3 || height.is_nan() || height <= 0.0 {
+        return 1.0;
+    }
+    let mut distance = eye.y / -forward.y;
+    if let Some(ground) = ground {
+        // Down to the ground under where the view meets the last guess, a few times over.
+        for _ in 0..4 {
+            let floor = ground.height((eye + forward * distance).xz());
+            distance = (eye.y - floor) / -forward.y;
+        }
+    }
+    let seen_from = height / (2.0 * (REFERENCE_FOV / 2.0).tan());
+    (distance.max(0.0) / seen_from).clamp(1.0e-3, 1.0e3)
+}
+
+/// Keep every level-of-detail child's `VisibilityRange` at its band times [`LodScale`] and the
+/// zoom: all of them when the factor changed, else only the children whose band is new or
+/// changed (none needs it at a factor of 1: they are spawned at it).
+#[allow(clippy::type_complexity)]
+pub(crate) fn scale_lod_bands(
+    lod: Res<LodScale>,
+    zoom: Res<ZoomScale>,
+    mut applied: Local<Option<f32>>,
+    mut bands: ParamSet<(
+        Query<(&LodBand, &mut VisibilityRange)>,
+        Query<(&LodBand, &mut VisibilityRange), Changed<LodBand>>,
+    )>,
+) {
+    let scale = lod.0 * zoom.0;
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    let was = applied.replace(scale).unwrap_or(1.0);
+    if scale != was {
+        bands.p0().par_iter_mut().for_each(|(band, mut range)| *range = band.range(scale));
+    } else if scale != 1.0 {
+        for (band, mut range) in &mut bands.p1() {
+            *range = band.range(scale);
+        }
     }
 }
 
@@ -439,9 +573,9 @@ pub(crate) fn spawn_pooled_trees(
         let has_impostor = variant.impostor.is_some();
         // Without an impostor the last level of detail is drawn at any distance.
         let bands = [
-            band(0.0, lod1),
-            band(lod1, lod2),
-            band(
+            banded(0.0, lod1),
+            banded(lod1, lod2),
+            banded(
                 lod2,
                 if has_impostor {
                     impostor
@@ -453,7 +587,7 @@ pub(crate) fn spawn_pooled_trees(
         let Some(materials) = &pool.materials else {
             continue;
         };
-        let mut spawn = |mesh: &Handle<Mesh>, leaf: bool, range: &VisibilityRange, bounds: Aabb| {
+        let mut spawn = |mesh: &Handle<Mesh>, leaf: bool, range: &(LodBand, VisibilityRange), bounds: Aabb| {
             let child = match materials {
                 PoolMaterials::Flora { wood, leaves } => {
                     let material = if leaf { leaves } else { wood };
@@ -497,7 +631,7 @@ pub(crate) fn spawn_pooled_trees(
             commands.spawn((
                 Mesh3d(atlas.quad.clone()),
                 MeshMaterial3d(atlas.material.clone()),
-                band(impostor, f32::INFINITY),
+                banded(impostor, f32::INFINITY),
                 Aabb {
                     center: Vec3A::new(0.0, atlas.center_y, 0.0),
                     half_extents: half,
@@ -809,10 +943,10 @@ mod tests {
 
     #[test]
     fn band_fades_around_its_ends() {
-        let range = band(30.0, 80.0);
+        let (_, range) = banded(30.0, 80.0);
         assert_eq!(range.start_margin, 29.0..31.0);
         assert_eq!(range.end_margin, 79.0..81.0);
-        let first = band(0.0, f32::INFINITY);
+        let (_, first) = banded(0.0, f32::INFINITY);
         assert_eq!(first.start_margin, 0.0..0.0);
         assert!(first.end_margin.start.is_infinite());
     }
@@ -856,5 +990,75 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(count(&app, grown).0, 0, "a rebuilt tree's new meshes cast");
+    }
+
+    #[test]
+    fn levels_follow_the_lod_scale_and_an_orthographic_cameras_zoom() {
+        use bevy::camera::OrthographicProjection;
+        use bevy::math::Rect;
+        let mut app = app();
+        let pool = make_pool(&mut app, 1);
+        let pooled = app.world_mut().spawn(PooledTree { pool, variant: 0 }).id();
+        let oak = crate::presets::TreePreset::Oak.params();
+        let grown = app.world_mut().spawn((ProceduralTree(oak), crate::lod::TreeLod::default())).id();
+        app.update();
+        app.update();
+        // Every banded child of both trees is drawn where its band says, times `scale`: the
+        // middles of its fades at the band's ends times the scale.
+        let drawn_at = |app: &App, scale: f32| {
+            let world = app.world();
+            let mut banded = 0;
+            for tree in [pooled, grown] {
+                for child in world.get::<Children>(tree).unwrap().iter() {
+                    let (Some(band), Some(range)) = (world.get::<LodBand>(child), world.get::<VisibilityRange>(child))
+                    else {
+                        continue;
+                    };
+                    let middle = |r: &std::ops::Range<f32>| (r.start + r.end) / 2.0;
+                    for (end, fade) in [(band.start, &range.start_margin), (band.end, &range.end_margin)] {
+                        if end > 0.0 && end.is_finite() {
+                            assert!((middle(fade) - end * scale).abs() < 1.0e-3 * end, "{end} m at {scale}: {fade:?}");
+                            assert!(((fade.end - fade.start) - FADE * scale).abs() < 1.0e-4, "the fade at {scale}");
+                        }
+                    }
+                    banded += 1;
+                }
+            }
+            assert!(banded >= 12, "{banded} banded children");
+        };
+        drawn_at(&app, 1.0);
+
+        // A lower quality setting: every tree hands over at half the distance, and so does a
+        // tree rebuilt meanwhile.
+        app.world_mut().resource_mut::<LodScale>().0 = 0.5;
+        app.update();
+        drawn_at(&app, 0.5);
+        app.world_mut().get_mut::<ProceduralTree>(grown).unwrap().0.seed = 7;
+        app.update();
+        app.update();
+        drawn_at(&app, 0.5);
+        app.world_mut().resource_mut::<LodScale>().0 = 1.0;
+
+        // An orthographic camera 50 m up and 50 m back, looking 45° down at the origin: 70.7 m
+        // from where its view meets the ground. A 20 m tall view is what a 45° perspective camera
+        // sees from 24.1 m: the trees are drawn as if 2.93 times nearer.
+        let view = |height: f32| {
+            let area = Rect::new(-height, -height / 2.0, height, height / 2.0);
+            Projection::Orthographic(OrthographicProjection { area, ..OrthographicProjection::default_3d() })
+        };
+        let eye = Transform::from_xyz(0.0, 50.0, 50.0).looking_at(Vec3::ZERO, Vec3::Y);
+        let camera = app.world_mut().spawn((Camera3d::default(), view(20.0), GlobalTransform::from(eye))).id();
+        app.update();
+        let near = 50.0 * 2f32.sqrt() / (20.0 / (2.0 * (std::f32::consts::FRAC_PI_8).tan()));
+        assert!((app.world().resource::<ZoomScale>().0 - near).abs() < 1.0e-3);
+        drawn_at(&app, near);
+        // Zoomed out to a 200 m view: ten times as far.
+        app.world_mut().entity_mut(camera).insert(view(200.0));
+        app.update();
+        drawn_at(&app, near / 10.0);
+        // A perspective camera draws them at their own distances again.
+        app.world_mut().entity_mut(camera).insert(Projection::default());
+        app.update();
+        drawn_at(&app, 1.0);
     }
 }

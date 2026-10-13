@@ -35,7 +35,7 @@ use bevy::time::Time;
 use bevy::transform::components::GlobalTransform;
 
 use crate::gpu::GrowthMaterial;
-use crate::see_through::SEE_THROUGH_SLOT;
+use crate::see_through::{SEE_THROUGH_SLOT, SEE_THROUGH_VECTORS};
 use crate::shading::{FloraMaterial, FloraWindBuffer};
 
 /// A body that pushes foliage aside as it moves through it: put it on an entity with a transform
@@ -69,7 +69,7 @@ const TRAIL_WEIGHTS: [f32; TRAIL] = [1.0, 0.6, 0.3, 0.1];
 
 /// Where the pushers sit in the shared buffer ([`FloraWindBuffer`]): after the see-through fade.
 /// `common.wesl`'s `PUSH` is this number.
-pub(crate) const PUSH_SLOT: usize = SEE_THROUGH_SLOT + 2;
+pub(crate) const PUSH_SLOT: usize = SEE_THROUGH_SLOT + SEE_THROUGH_VECTORS;
 
 /// `Vec4`s of the pushers' part of the shared buffer: a header (how many samples follow, and the
 /// x, z centre and radius of the circle across the ground everything they push lies in), then two

@@ -8,6 +8,7 @@ use bevy::math::{Vec3, Vec4};
 use bevy::reflect::Reflect;
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::Shader;
+use bevy::camera::Projection;
 use bevy::transform::components::GlobalTransform;
 
 use crate::gpu::GrowthMaterial;
@@ -15,9 +16,13 @@ use crate::impostor::ImpostorMaterial;
 use crate::shading::{FloraMaterial, FloraWindBuffer, TreeShakes};
 
 /// Put on the game's camera to keep what it follows in view: the parts of trees between the
-/// camera and [`target`](Self::target) dither out, in a cone around the line of sight that is
-/// [`radius`](Self::radius) wide at the target and a third of that at the camera. Third-person
-/// and top-down games use it to keep the player visible in a forest.
+/// camera and [`target`](Self::target) dither out around the line of sight. Under a perspective
+/// camera the clear view is a cone [`radius`](Self::radius) wide at the target and a third of
+/// that at the camera; under an orthographic one (`Projection::Orthographic`, read from the
+/// camera every frame), whose rays are parallel, it is a cylinder `radius` wide along the
+/// camera's view. Third-person, top-down and isometric games use it to keep the player visible in
+/// a forest; [`keep`](Self::keep), [`inner`](Self::inner), [`in_front`](Self::in_front) and
+/// [`floor`](Self::floor) shape the cut to match a fade the game draws on its own meshes.
 ///
 /// Only that camera sees through: shadow maps keep the whole tree (its shadow still falls on the
 /// player), and so do other cameras. Every way a tree is drawn takes part (`ProceduralTree`,
@@ -30,38 +35,87 @@ use crate::shading::{FloraMaterial, FloraWindBuffer, TreeShakes};
 /// material when one appears (the materials are re-prepared once) and off when it goes. With
 /// plain `StandardMaterial`s (no flora shading, see [`FloraPlugin`](crate::FloraPlugin)) there is
 /// no fade.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_flora::SeeThroughTrees;
+/// // An isometric game's fade: a third of a tree kept at the centre, only what stands more than
+/// // 1.2 m before the player's chest, and nothing below knee height.
+/// let feet = 0.0;
+/// let fade = SeeThroughTrees {
+///     target: Vec3::new(0.0, feet + 1.2, 0.0),
+///     radius: 6.0,
+///     keep: 0.35,
+///     inner: 0.55,
+///     in_front: Some(1.2),
+///     floor: Some(feet + 0.45),
+/// };
+/// ```
 #[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct SeeThroughTrees {
     /// What the camera must keep in view, in world space: the player's chest, a unit, the point
     /// under the cursor.
     pub target: Vec3,
-    /// How wide the clear view is at `target`, metres (a radius). The view closes over the last
-    /// tenth of the way to the target, so nothing behind it is cut.
+    /// How wide the clear view is at `target`, metres (a radius).
     pub radius: f32,
+    /// The share of a tree kept at the centre of the clear view, 0..1: 0 (the default) cuts it
+    /// all away, 0.35 leaves a third of it dithered in, so what stands in front still reads.
+    pub keep: f32,
+    /// Where the edge of the clear view starts to feather, as a share of `radius` (0.7 by
+    /// default): the cut is whole inside it and fades out to `radius`.
+    pub inner: f32,
+    /// Where the cut ends before `target`, metres along the line of sight: `None` (the default)
+    /// closes it over the last tenth of the way, `Some(1.2)` cuts only what stands more than
+    /// 1.2 m before the target, however far away the camera is. Nothing behind the target is
+    /// ever cut.
+    pub in_front: Option<f32>,
+    /// A world height below which nothing is cut, so the trunks standing on the ground beside
+    /// the target stay whole: `None` (the default) has no floor.
+    pub floor: Option<f32>,
 }
 
 impl Default for SeeThroughTrees {
     fn default() -> Self {
-        Self { target: Vec3::ZERO, radius: 1.5 }
+        Self { target: Vec3::ZERO, radius: 1.5, keep: 0.0, inner: 0.7, in_front: None, floor: None }
     }
 }
 
-/// Where the fade's two vectors sit in the shared buffer ([`FloraWindBuffer`]): after the wind,
+/// Where the fade's vectors sit in the shared buffer ([`FloraWindBuffer`]): after the wind,
 /// the season and the shakes. `common.wesl`'s `SEE_THROUGH` is this number.
 pub(crate) const SEE_THROUGH_SLOT: usize = 7 + 2 * TreeShakes::MAX;
 
-/// The fade as the shaders read it: the camera's position and the radius at the target, and the
-/// target with 1 while a camera has [`SeeThroughTrees`] (all zero otherwise).
+/// How many vectors the fade takes in the shared buffer.
+pub(crate) const SEE_THROUGH_VECTORS: usize = 4;
+
+/// What the shaders take for "no floor": lower than any world.
+const NO_FLOOR: f32 = -1.0e30;
+
+/// The fade as the shaders read it, all zero while no camera has [`SeeThroughTrees`]:
+/// the camera's position and the radius at the target; the target, and 1 under a perspective
+/// camera or 2 under an orthographic one; the camera's forward direction and the share kept;
+/// where the feather starts, where the cut ends before the target (-1: over the last tenth of
+/// the way) and the floor.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct SeeThroughCapsule(pub [Vec4; 2]);
+pub(crate) struct SeeThroughCapsule(pub [Vec4; SEE_THROUGH_VECTORS]);
 
 impl SeeThroughCapsule {
-    fn of(camera: Option<(&SeeThroughTrees, &GlobalTransform)>) -> Self {
-        match camera {
-            Some((fade, at)) => Self([at.translation().extend(fade.radius.max(0.0)), fade.target.extend(1.0)]),
-            None => Self::default(),
-        }
+    fn of(camera: Option<(&SeeThroughTrees, &GlobalTransform, Option<&Projection>)>) -> Self {
+        let Some((fade, at, projection)) = camera else {
+            return Self::default();
+        };
+        let orthographic = matches!(projection, Some(Projection::Orthographic(_)));
+        Self([
+            at.translation().extend(fade.radius.max(0.0)),
+            fade.target.extend(if orthographic { 2.0 } else { 1.0 }),
+            at.forward().as_vec3().extend(fade.keep.clamp(0.0, 1.0)),
+            Vec4::new(
+                fade.inner.clamp(0.0, 0.99),
+                fade.in_front.map_or(-1.0, |d| d.max(0.0)),
+                fade.floor.unwrap_or(NO_FLOOR),
+                0.0,
+            ),
+        ])
     }
 }
 
@@ -69,7 +123,7 @@ impl SeeThroughCapsule {
 /// after transform propagation, so the camera's position is the one this frame is drawn from:
 /// the shaders cut only in the view drawn from exactly there.
 pub(crate) fn sync_see_through(
-    cameras: Query<(&SeeThroughTrees, &GlobalTransform)>,
+    cameras: Query<(&SeeThroughTrees, &GlobalTransform, Option<&Projection>)>,
     mut capsule: ResMut<SeeThroughCapsule>,
     buffer: Option<Res<FloraWindBuffer>>,
     buffers: Option<ResMut<Assets<ShaderBuffer>>>,
@@ -83,10 +137,11 @@ pub(crate) fn sync_see_through(
     let (Some(buffer), Some(mut buffers)) = (buffer, buffers) else { return };
     let Some(mut shader_buffer) = buffers.get_mut(&buffer.0) else { return };
     if let Some(slice) = shader_buffer.cast_slice_mut::<[f32; 4]>()
-        && slice.len() >= SEE_THROUGH_SLOT + 2
+        && slice.len() >= SEE_THROUGH_SLOT + SEE_THROUGH_VECTORS
     {
-        slice[SEE_THROUGH_SLOT] = now.0[0].to_array();
-        slice[SEE_THROUGH_SLOT + 1] = now.0[1].to_array();
+        for (slot, vector) in slice[SEE_THROUGH_SLOT..].iter_mut().zip(now.0) {
+            *slot = vector.to_array();
+        }
     }
 }
 
@@ -166,10 +221,10 @@ mod tests {
         app.world().resource::<Assets<FloraMaterial>>().iter().map(|(_, m)| m.extension.see_through).collect()
     }
 
-    fn slots(app: &App) -> [[f32; 4]; 2] {
+    fn slots(app: &App) -> [[f32; 4]; SEE_THROUGH_VECTORS] {
         let buffer = app.world().resource::<FloraWindBuffer>();
         let data = app.world().resource::<Assets<ShaderBuffer>>().get(&buffer.0).unwrap().cast_slice::<[f32; 4]>().unwrap();
-        [data[SEE_THROUGH_SLOT], data[SEE_THROUGH_SLOT + 1]]
+        std::array::from_fn(|i| data[SEE_THROUGH_SLOT + i])
     }
 
     #[test]
@@ -178,18 +233,23 @@ mod tests {
         app.world_mut().spawn(ProceduralTree(TreePreset::Oak.params()));
         app.update();
         assert!(!flags(&app).is_empty() && flags(&app).iter().all(|on| !on), "off without a camera");
-        assert_eq!(slots(&app), [[0.0; 4]; 2]);
+        assert_eq!(slots(&app), [[0.0; 4]; SEE_THROUGH_VECTORS]);
 
         let camera = app
             .world_mut()
             .spawn((
-                SeeThroughTrees { target: Vec3::new(4.0, 5.0, 6.0), radius: 2.0 },
+                SeeThroughTrees { target: Vec3::new(4.0, 5.0, 6.0), radius: 2.0, ..Default::default() },
                 GlobalTransform::from_translation(Vec3::new(1.0, 2.0, 3.0)),
             ))
             .id();
         app.update();
         assert!(flags(&app).iter().all(|on| *on));
-        assert_eq!(slots(&app), [[1.0, 2.0, 3.0, 2.0], [4.0, 5.0, 6.0, 1.0]]);
+        // A perspective cut, with the defaults: no share kept, the feather from 0.7 of the radius,
+        // closing over the last tenth of the way (-1), no floor.
+        assert_eq!(
+            slots(&app),
+            [[1.0, 2.0, 3.0, 2.0], [4.0, 5.0, 6.0, 1.0], [0.0, 0.0, -1.0, 0.0], [0.7, -1.0, NO_FLOOR, 0.0]]
+        );
 
         // A tree of another look planted meanwhile gets materials of its own, turned on too; a
         // change of wind rewrites the whole buffer and keeps the fade.
@@ -200,9 +260,23 @@ mod tests {
         assert!(flags(&app).len() > 2 && flags(&app).iter().all(|on| *on));
         assert_eq!(slots(&app)[1], [4.0, 5.0, 6.0, 1.0]);
 
+        // An orthographic camera cuts a cylinder along its view; the shape's numbers go along.
+        let fade = SeeThroughTrees {
+            target: Vec3::new(4.0, 5.0, 6.0),
+            radius: 2.0,
+            keep: 0.35,
+            inner: 0.55,
+            in_front: Some(1.2),
+            floor: Some(0.45),
+        };
+        let projection = Projection::Orthographic(bevy::camera::OrthographicProjection::default_3d());
+        app.world_mut().entity_mut(camera).insert((fade, projection));
+        app.update();
+        assert_eq!(slots(&app)[1..], [[4.0, 5.0, 6.0, 2.0], [0.0, 0.0, -1.0, 0.35], [0.55, 1.2, 0.45, 0.0]]);
+
         app.world_mut().entity_mut(camera).remove::<SeeThroughTrees>();
         app.update();
         assert!(flags(&app).iter().all(|on| !on), "off again once no camera sees through");
-        assert_eq!(slots(&app), [[0.0; 4]; 2]);
+        assert_eq!(slots(&app), [[0.0; 4]; SEE_THROUGH_VECTORS]);
     }
 }

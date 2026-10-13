@@ -5,7 +5,7 @@
 //!     [--preset <name>] [--frames <n>] [--warmup-secs <s>] [--spacing <m>]
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
-//!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
+//!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] [--ortho <view height>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>]
@@ -43,6 +43,8 @@
 //! wherever they draw the same (compare the PNGs byte for byte).
 //! `--eye <x,y,z>` and `--at <x,y,z>` move the camera and what it looks at (world metres, the
 //! grid centred on the origin), and `--fov <deg>` sets its vertical field of view (45 by default).
+//! `--ortho <view height>` makes the camera orthographic, its view that many metres tall: the
+//! levels of detail and impostors follow the zoom (`LodScale`).
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame. `--background` builds those trees off the main thread
@@ -181,6 +183,8 @@ struct Args {
     at: Option<Vec3>,
     /// Vertical field of view, degrees.
     fov: f32,
+    /// An orthographic camera whose view is this many metres tall, instead of a perspective one.
+    ortho: Option<f32>,
     /// Strength of the wind, if not the library's default.
     wind: Option<f32>,
     /// Where the wind blows toward (world x and z), if not the library's default.
@@ -245,7 +249,7 @@ fn usage() -> ! {
         "usage: forest [--trees <n>] [--mode <naive|pool|gpu|gpu-live|cpu-live>] [--preset <name>] [--frames <n>] \
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
-         [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
+         [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] [--ortho <view height>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] \
@@ -272,6 +276,7 @@ fn parse_args() -> Args {
         eye: None,
         at: None,
         fov: 45.0,
+        ortho: None,
         wind: None,
         wind_dir: None,
         gust: None,
@@ -369,6 +374,7 @@ fn parse_args() -> Args {
                 }
             }
             "--fov" => args.fov = value(&mut it),
+            "--ortho" => args.ortho = Some(value(&mut it)),
             "--wind" => args.wind = Some(value(&mut it)),
             "--wind-dir" => {
                 let list = it.next().unwrap_or_else(|| usage());
@@ -667,11 +673,19 @@ fn setup(
     };
     let mut camera = commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {
-            fov: bench.args.fov.to_radians(),
-            far: extent * 2.0 + 500.0,
-            ..default()
-        }),
+        // `--ortho`: an orthographic view that many metres tall, which the levels of detail follow.
+        match bench.args.ortho {
+            Some(height) => Projection::Orthographic(OrthographicProjection {
+                scaling_mode: bevy::camera::ScalingMode::FixedVertical { viewport_height: height },
+                far: extent * 2.0 + 500.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            None => Projection::Perspective(PerspectiveProjection {
+                fov: bench.args.fov.to_radians(),
+                far: extent * 2.0 + 500.0,
+                ..default()
+            }),
+        },
         view,
     ));
     if bench.args.is_offscreen() {
@@ -693,7 +707,7 @@ fn setup(
     // `--see-through`: a stand-in for the player at the target, which the camera keeps in view.
     if let Some((target, radius)) = bench.args.see_through {
         let target = target + Vec3::Y * ground.height(target.xz());
-        camera.insert(SeeThroughTrees { target, radius });
+        camera.insert(SeeThroughTrees { target, radius, ..default() });
         commands.spawn((
             Mesh3d(meshes.add(Capsule3d::new(0.3, 1.1))),
             MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.85, 0.12, 0.08), ..default() })),
