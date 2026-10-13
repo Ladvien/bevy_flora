@@ -12,7 +12,7 @@
 //! short dithered cross-fade).
 //!
 //! Pooled trees are static: they have the age the pool was built at. Trees that
-//! grow stay [`ProceduralTree`](crate::ProceduralTree) (with
+//! grow stay [`ProceduralTree`] (with
 //! [`GpuGrowth`](crate::GpuGrowth)), which suits the few that are close.
 //!
 //! ```rust,no_run
@@ -60,14 +60,14 @@ use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::reflect::TypePath;
 use bevy::transform::components::Transform;
 
-use crate::impostor::{ImpostorAtlas, ImpostorBakes, ImpostorSupport};
+use crate::impostor::{ImpostorAtlas, ImpostorBakes, ImpostorMaterial, ImpostorSupport};
 use crate::lod::{LodDistances, LodSettings, build_lods};
 use crate::mesh::MeshData;
 use crate::params::TreeParams;
 use crate::pipeline::TreeMeshes;
 use crate::shape::TreeShape;
 use crate::skeleton::Skeleton;
-use crate::plugin::{leaf_material, material};
+use crate::plugin::{ProceduralTree, leaf_material, material};
 use crate::shading::{FloraMaterial, FloraMaterialSupport, FloraWindBuffer, TextureLibrary, flora_material};
 
 /// Trees whose children are created in one frame, at most: a hundred thousand
@@ -150,7 +150,9 @@ pub struct PoolVariant {
 /// a few frames after the pool was added.
 ///
 /// The children are drawn by distance (see [`LodDistances`]). The impostor casts
-/// no shadow; the three levels of detail do. (In the `forest` example, 100 000
+/// no shadow; the three levels of detail do, unless the tree carries [`NotShadowCaster`]:
+/// that reaches every level (taking it off gives the shadows back), so a game can let only
+/// the trees near the player cast. (In the `forest` example, 100 000
 /// trees with a shadow-casting sun cost 7.6 ms a frame on an Apple M4 Pro, leaf shading and
 /// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
 /// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
@@ -397,7 +399,7 @@ pub(crate) fn spawn_pooled_trees(
     mut flora: ResMut<Assets<FloraMaterial>>,
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut textures: TextureLibrary,
-    trees: Query<(Entity, &PooledTree), Without<PooledTreeSpawned>>,
+    trees: Query<(Entity, &PooledTree, Has<NotShadowCaster>), Without<PooledTreeSpawned>>,
     mut warned: Local<bool>,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
@@ -405,7 +407,7 @@ pub(crate) fn spawn_pooled_trees(
     // A tree whose pool is not ready yet is skipped, not counted: it must not
     // keep trees of a ready pool from getting their children.
     let mut spawned = 0;
-    for (tree, pooled) in &trees {
+    for (tree, pooled, quiet) in &trees {
         let Some(pool) = pools.get(&pooled.pool) else {
             continue;
         };
@@ -452,27 +454,34 @@ pub(crate) fn spawn_pooled_trees(
             continue;
         };
         let mut spawn = |mesh: &Handle<Mesh>, leaf: bool, range: &VisibilityRange, bounds: Aabb| {
-            match materials {
+            let child = match materials {
                 PoolMaterials::Flora { wood, leaves } => {
                     let material = if leaf { leaves } else { wood };
-                    commands.spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                        range.clone(),
-                        bounds,
-                        ChildOf(tree),
-                    ));
+                    commands
+                        .spawn((
+                            Mesh3d(mesh.clone()),
+                            MeshMaterial3d(material.clone()),
+                            range.clone(),
+                            bounds,
+                            ChildOf(tree),
+                        ))
+                        .id()
                 }
                 PoolMaterials::Standard { wood, leaves } => {
                     let material = if leaf { leaves } else { wood };
-                    commands.spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                        range.clone(),
-                        bounds,
-                        ChildOf(tree),
-                    ));
+                    commands
+                        .spawn((
+                            Mesh3d(mesh.clone()),
+                            MeshMaterial3d(material.clone()),
+                            range.clone(),
+                            bounds,
+                            ChildOf(tree),
+                        ))
+                        .id()
                 }
+            };
+            if quiet {
+                commands.entity(child).insert(NotShadowCaster);
             }
         };
         for (level, range) in bands.into_iter().enumerate() {
@@ -501,6 +510,43 @@ pub(crate) fn spawn_pooled_trees(
         spawned += 1;
         if spawned >= MAX_TREES_PER_FRAME {
             break;
+        }
+    }
+}
+
+/// [`NotShadowCaster`] on a tree (pooled or procedural) reaches every mesh the plugin draws it
+/// with: given to the children when it arrives or when they change (a rebuild, a new level of
+/// detail), taken back off them when it leaves the tree. Impostors never cast, so they keep it.
+#[allow(clippy::type_complexity)]
+pub(crate) fn sync_shadow_casting(
+    mut commands: Commands,
+    quieted: Query<
+        &Children,
+        (
+            Or<(With<PooledTree>, With<ProceduralTree>)>,
+            With<NotShadowCaster>,
+            Or<(Added<NotShadowCaster>, Changed<Children>)>,
+        ),
+    >,
+    mut removed: RemovedComponents<NotShadowCaster>,
+    casting: Query<&Children, (Or<(With<PooledTree>, With<ProceduralTree>)>, Without<NotShadowCaster>)>,
+    meshes: Query<(Has<NotShadowCaster>, Has<MeshMaterial3d<ImpostorMaterial>>), With<Mesh3d>>,
+) {
+    for children in &quieted {
+        for child in children.iter() {
+            if let Ok((false, _)) = meshes.get(child) {
+                commands.entity(child).insert(NotShadowCaster);
+            }
+        }
+    }
+    for tree in removed.read() {
+        let Ok(children) = casting.get(tree) else {
+            continue;
+        };
+        for child in children.iter() {
+            if let Ok((true, false)) = meshes.get(child) {
+                commands.entity(child).remove::<NotShadowCaster>();
+            }
         }
     }
 }
@@ -769,5 +815,46 @@ mod tests {
         let first = band(0.0, f32::INFINITY);
         assert_eq!(first.start_margin, 0.0..0.0);
         assert!(first.end_margin.start.is_infinite());
+    }
+
+    #[test]
+    fn a_tree_without_shadows_keeps_every_child_out_of_them_until_it_casts_again() {
+        let mut app = app();
+        let pool = make_pool(&mut app, 1);
+        let quiet = app.world_mut().spawn((PooledTree { pool: pool.clone(), variant: 0 }, NotShadowCaster)).id();
+        let loud = app.world_mut().spawn(PooledTree { pool, variant: 0 }).id();
+        let oak = crate::presets::TreePreset::Oak.params();
+        let lods = crate::lod::TreeLod::default();
+        let grown = app.world_mut().spawn((ProceduralTree(oak), lods, NotShadowCaster)).id();
+        app.update();
+        app.update();
+        // (casting children, quiet children) of a tree.
+        let count = |app: &App, tree: Entity| {
+            let world = app.world();
+            let children = world.get::<Children>(tree).expect("drawn");
+            let quiet = children.iter().filter(|&c| world.get::<NotShadowCaster>(c).is_some()).count();
+            (children.len() - quiet, quiet)
+        };
+        assert_eq!(count(&app, quiet), (0, 6), "every level of a quiet pooled tree");
+        assert_eq!(count(&app, loud), (6, 0), "a tree without it casts as before");
+        let (casting, quieted) = count(&app, grown);
+        assert!(casting == 0 && quieted >= 6, "every mesh of a procedural tree, its levels included: {casting} cast");
+
+        // Taken off, the shadows come back; put on, they go.
+        app.world_mut().entity_mut(quiet).remove::<NotShadowCaster>();
+        app.world_mut().entity_mut(loud).insert(NotShadowCaster);
+        app.world_mut().entity_mut(grown).remove::<NotShadowCaster>();
+        app.update();
+        assert_eq!(count(&app, quiet), (6, 0));
+        assert_eq!(count(&app, loud), (0, 6));
+        assert_eq!(count(&app, grown), (quieted, 0));
+
+        // A rebuild draws new meshes; they stay out of the shadows too.
+        app.world_mut().entity_mut(grown).insert(NotShadowCaster);
+        app.update();
+        app.world_mut().get_mut::<ProceduralTree>(grown).unwrap().0.seed = 7;
+        app.update();
+        app.update();
+        assert_eq!(count(&app, grown).0, 0, "a rebuilt tree's new meshes cast");
     }
 }

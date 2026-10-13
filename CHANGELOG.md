@@ -5,6 +5,62 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.35.0] - 2026-10-13
+
+Three requests from a game moving its forest onto the crate (issues #53, #55 and #58): trees kept
+out of the shadow maps, stands the game places, and where the fire burns for its lights and AI.
+New API only, hence a minor release.
+
+### Added
+
+- **`NotShadowCaster` on a tree reaches every mesh it is drawn with**: on a `PooledTree` its three
+  levels of detail (the impostor never cast), on a `ProceduralTree` its wood, leaves, flowers,
+  `TreeLod` levels and cut faces, rebuilt or new. Taking it off the tree gives the shadows back,
+  so a game can let only the trees near the player cast. `forest --shadow-radius <m>` does (#53).
+- **`Scatter::points_with(density, weight)`**: `weight(at, species)` multiplies a species' share
+  where a tree stands, for the stands a game places (snags in a dead patch, saplings along an
+  edge). A weight of 0 shuts a species out there; where every weight is 1 the forest is
+  `points_where`'s, tree for tree (`points_where` is now `points_with` with weights of 1). With
+  groves a tree joins the nearest grove of a weighted species, distances divided by the weights,
+  so groves still meet along bent borders inside a stand and a weight fading over a rim bends the
+  stand's edge. `forest --stand <x,z,radius>` grows the last `--scatter` species there alone;
+  README: `docs/stand.jpg` (#55).
+- **`FloraFire::burning()`**: every cell burning now (heat above 0, cooling embers included) with
+  its centre in world x, z, for the game's lights and AI, and **`FloraFire::touched_bounds()`**,
+  the world rectangle outside which every cell is untouched (no char, no heat). `burning` reads
+  only inside that rectangle, and the fire is marked changed only in a frame it stepped or the
+  game changed it, so a system run on `resource_changed::<FloraFire>` reads it ten times a second
+  while anything burns (#58). The issue asked for both to be empty once the embers cooled:
+  `burning` is, and the bounds keep covering the char, as a rectangle outside which every cell is
+  untouched must.
+- The fire clip (`docs/fire.gif`) lights the ground and the trunks around the fire with six point
+  lights over its hottest 4 m squares (`burning`).
+
+### Changed
+
+- A fire step walks only the touched rectangle instead of the whole grid (a small fire on a
+  512-cell grid looked at 262 144 cells ten times a second), and the shader header's rectangle
+  comes from it instead of a scan of every cell each time the grid is written. The cells are
+  visited in the same order, so a fire burns exactly as before.
+
+### Measured
+
+- **Look.** The 441 gallery scenarios render byte for byte as in 0.34.0 on the CPU and with
+  `--gpu` (no `ERROR`), and so do the growth, grove, seasons, shake, fell, chop and harvest clips
+  frame for frame and the playground's demo; three push frames differ by a level in a few pixels
+  (a mean of 0.000 of 255). The fire clip is 0.34.0's until its fire is lit and its lights come
+  on (frame 12).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.34.0): 1 000
+  individual oaks 24.62, 24.63 and 24.63 ms (0.34.0: 24.68, 24.63 and 24.66), 100 000 pooled oaks
+  7.60 and 7.52 ms (7.48 and 7.77).
+- **Shadows kept near.** With `--shadow-radius 150` (only the trees within 150 m of the camera
+  cast) 1 000 individual oaks take 20.26 and 20.29 ms instead of 24.61 and 24.60 (18% less),
+  100 000 pooled oaks 7.21 and 7.30 ms instead of 7.51 and 7.55 (4%: pooled levels are cheap
+  casters).
+- **The fire's readers.** A test lights a 15 m stand in the corner of a 512-cell grid and checks,
+  every few steps from the spark to cold embers, `burning` against a scan of every cell and the
+  bounds against the touched cells edge to edge, and the shaders' rectangle with them.
+
 ## [0.34.0] - 2026-10-13
 
 The playground: a small first-person game built on the crate, to read as an example of wiring its
@@ -2016,6 +2072,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.35.0]: https://github.com/Ladvien/bevy_flora/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/Ladvien/bevy_flora/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/Ladvien/bevy_flora/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/Ladvien/bevy_flora/compare/v0.31.0...v0.32.0

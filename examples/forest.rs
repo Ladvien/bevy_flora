@@ -8,8 +8,9 @@
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
-//!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
-//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod]
+//!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>]
+//!     [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]]
+//!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>]
 //!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]
 //!     [--push <x,z>]
 //! ```
@@ -17,7 +18,9 @@
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
 //! `--scatter oak:3,birch:1,...`, where `Scatter` puts them: trunks at least `--spacing` apart,
 //! the species in groves `--grove` metres wide (0 mixes them tree by tree), one pool per species,
-//! about `--trees` of them, around a clearing `--clearing` metres wide. `--undergrowth
+//! about `--trees` of them, around a clearing `--clearing` metres wide. `--stand <x>,<z>,<radius>`
+//! grows the last `--scatter` species there alone, fading out over a rim half the radius wide,
+//! and nowhere else (`Scatter::points_with`), as a game places a stand of snags. `--undergrowth
 //! shrub:2.5` adds a second `Scatter` of that species, 2.5 m apart (the default) and at least
 //! 1.5 m from every trunk, under the trees (it counts on top of `--trees`). A
 //! fixed camera 30 m above one corner looks across the grid toward its centre,
@@ -53,7 +56,9 @@
 //! it there, `radius` metres round (4 by default), once the trees are placed; it spreads through
 //! the forest from there. `--fire armed` puts the fire there and lights nothing: what a game pays
 //! for having one before anything burns. `--push <x>,<z>` stands a body with a `FoliagePusher`
-//! there (no mesh): every flora shader then carries the push.
+//! there (no mesh): every flora shader then carries the push. `--shadow-radius <m>` lets only the
+//! trees within `m` metres of the camera cast shadows (the others get `NotShadowCaster`), as a game
+//! keeps the shadow maps to the trees near the player.
 //!
 //! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
 //! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
@@ -89,7 +94,7 @@ use std::time::{Duration, Instant};
 
 use bevy::app::AppExit;
 use bevy::camera::RenderTarget;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -212,6 +217,11 @@ struct Args {
     grove: f32,
     /// Radius of a clearing at the centre, with `--scatter`.
     clearing: f32,
+    /// A stand of the last `--scatter` species: its centre (world x, z) and radius
+    /// (`Scatter::points_with`).
+    stand: Option<(Vec2, f32)>,
+    /// Only the trees within this many metres of the camera cast shadows (`NotShadowCaster`).
+    shadow_radius: Option<f32>,
     /// A second `Scatter`, of this species this far apart, clear of the trunks.
     undergrowth: Option<(TreePreset, f32)>,
     /// Rolling hills about this many metres high instead of flat ground (`FloraGround`).
@@ -238,8 +248,9 @@ fn usage() -> ! {
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
-         [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
-         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] \
+         [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] \
+         [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]] \
+         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>] \
          [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>] [--push <x,z>]"
     );
     std::process::exit(2);
@@ -279,6 +290,8 @@ fn parse_args() -> Args {
         scatter: None,
         grove: 50.0,
         clearing: 0.0,
+        stand: None,
+        shadow_radius: None,
         undergrowth: None,
         terrain: None,
         see_through: None,
@@ -384,6 +397,15 @@ fn parse_args() -> Args {
             }
             "--grove" => args.grove = value(&mut it),
             "--clearing" => args.clearing = value(&mut it),
+            "--stand" => {
+                let list = it.next().unwrap_or_else(|| usage());
+                let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
+                args.stand = match parts[..] {
+                    [x, z, radius] => Some((Vec2::new(x, z), radius)),
+                    _ => usage(),
+                };
+            }
+            "--shadow-radius" => args.shadow_radius = Some(value(&mut it)),
             "--undergrowth" => {
                 let item = it.next().unwrap_or_else(|| usage());
                 let (name, spacing) = item.split_once(':').unwrap_or((&item, "2.5"));
@@ -636,6 +658,13 @@ fn setup(
         })),
     ));
 
+    // With `--terrain` the camera and its aim are given above the ground under them.
+    let view = {
+        let lift = |p: Vec3| p + Vec3::Y * ground.height(p.xz());
+        let eye = lift(bench.args.eye.unwrap_or(Vec3::new(-half, CAMERA_HEIGHT, -half)));
+        let at = lift(bench.args.at.unwrap_or(Vec3::new(0.0, 8.0, 0.0)));
+        Transform::from_translation(eye).looking_at(at, Vec3::Y)
+    };
     let mut camera = commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
@@ -643,13 +672,7 @@ fn setup(
             far: extent * 2.0 + 500.0,
             ..default()
         }),
-        // With `--terrain` the camera and its aim are given above the ground under them.
-        {
-            let lift = |p: Vec3| p + Vec3::Y * ground.height(p.xz());
-            let eye = lift(bench.args.eye.unwrap_or(Vec3::new(-half, CAMERA_HEIGHT, -half)));
-            let at = lift(bench.args.at.unwrap_or(Vec3::new(0.0, 8.0, 0.0)));
-            Transform::from_translation(eye).looking_at(at, Vec3::Y)
-        },
+        view,
     ));
     if bench.args.is_offscreen() {
         bench.target = images.add(Image::new_target_texture(
@@ -735,8 +758,13 @@ fn setup(
     eprintln!("forest: placed {} trees over {extent:.0} m in {placing:.1} ms", trees.len());
     for (transform, species, variant) in trees {
         let base = &bases[species];
+        // `--shadow-radius`: the trees farther from the camera cast no shadow.
+        let quiet = bench.args.shadow_radius.is_some_and(|r| transform.translation.xz().distance(view.translation.xz()) > r);
         if let Some(pool) = pools.get(species) {
-            commands.spawn((PooledTree { pool: pool.clone(), variant }, transform, ForestTree));
+            let mut tree = commands.spawn((PooledTree { pool: pool.clone(), variant }, transform, ForestTree));
+            if quiet {
+                tree.insert(NotShadowCaster);
+            }
             continue;
         }
         let mut params: TreeParams = base.clone();
@@ -761,6 +789,9 @@ fn setup(
         }
         if bench.args.tree_lod {
             tree.insert(TreeLod(lods[species]));
+        }
+        if quiet {
+            tree.insert(NotShadowCaster);
         }
     }
 }
@@ -892,8 +923,18 @@ fn tree_placements(args: &Args, ground: &FloraGround) -> (Vec<(Transform, usize,
     };
     let clearing = args.clearing;
     let params: Vec<TreeParams> = species.iter().map(|&(preset, _)| preset.params()).collect();
+    // `--stand`: the last species alone inside the disc, fading out over a rim half its radius
+    // wide, and nowhere else.
+    let last = species.len() - 1;
+    let stand = |at: Vec2, kind: usize| match args.stand {
+        None => 1.0,
+        Some((centre, radius)) => {
+            let out = ((at.distance(centre) - 0.75 * radius) / (0.5 * radius)).clamp(0.0, 1.0);
+            if kind == last { 1.0 - out } else { out }
+        }
+    };
     let trees = scatter
-        .points_where(|at| if at.length() < clearing || steep(at) { 0.0 } else { 1.0 })
+        .points_with(|at| if at.length() < clearing || steep(at) { 0.0 } else { 1.0 }, stand)
         .into_iter()
         .map(|tree| (tree.transform_on(ground, &params[tree.species]), tree.species, tree.variant % VARIANTS))
         .collect();

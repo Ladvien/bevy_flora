@@ -36,7 +36,7 @@
 
 use bevy::asset::{Asset, AssetId, Assets};
 use bevy::ecs::prelude::*;
-use bevy::math::{Vec2, Vec3};
+use bevy::math::{Rect, Vec2, Vec3};
 use bevy::reflect::Reflect;
 use bevy::render::storage::ShaderBuffer;
 use bevy::time::Time;
@@ -154,6 +154,9 @@ pub struct FloraFire {
     clock: f32,
     steps: u64,
     burning: usize,
+    /// The cells holding any char or heat lie within these (lowest x, z, highest x, z, both
+    /// included); `None` while none does.
+    touched: Option<[usize; 4]>,
 }
 
 impl FloraFire {
@@ -187,6 +190,7 @@ impl FloraFire {
             clock: 0.0,
             steps: 0,
             burning: 0,
+            touched: None,
         }
     }
 
@@ -216,6 +220,32 @@ impl FloraFire {
         self.burning > 0
     }
 
+    /// The world x, z rectangle outside which every cell is untouched (no char, no heat): the
+    /// cells holding any lie inside it, edge to edge. `None` before anything burnt or was
+    /// scorched; a burnt area keeps it after its embers cooled, as its char stays.
+    pub fn touched_bounds(&self) -> Option<Rect> {
+        let [x0, z0, x1, z1] = self.touched?;
+        let min = self.corner + Vec2::new(x0 as f32, z0 as f32) * self.cell;
+        let max = self.corner + Vec2::new(x1 as f32 + 1.0, z1 as f32 + 1.0) * self.cell;
+        Some(Rect::from_corners(min, max))
+    }
+
+    /// Every cell burning now (heat above 0, cooling embers included) with its centre (world x,
+    /// z): where to put the fire's lights, or what to keep the living away from. Only the
+    /// [touched rectangle](Self::touched_bounds) is looked at, so a small fire on a large grid is
+    /// cheap to read. The resource is marked changed only in a frame the fire stepped (ten times a
+    /// second while anything burns) or the game changed it, so a system run on
+    /// `resource_changed::<FloraFire>` reads it just when there is something new.
+    pub fn burning(&self) -> impl Iterator<Item = (Vec2, FireCell)> + '_ {
+        let side = self.side as usize;
+        let [x0, z0, x1, z1] = self.touched.unwrap_or([1, 1, 0, 0]);
+        (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| (x, z))).filter_map(move |(x, z)| {
+            let cell = self.cells[z * side + x];
+            let centre = self.corner + (Vec2::new(x as f32, z as f32) + 0.5) * self.cell;
+            (cell.heat > 0.0).then_some((centre, cell))
+        })
+    }
+
     /// Light the cells within `radius` metres of `at` (world x, z; at least the cell `at` is in).
     /// They burn if a tree stands within [`FireSpread::reach`] of them (or the ground burns) and
     /// spread from there; a cell burnt through does not light again.
@@ -226,20 +256,19 @@ impl FloraFire {
             if cell.heat <= 0.0 && cell.char < 1.0 {
                 cell.heat = SPARK;
                 self.lit[i] = now;
-                self.burning += 1;
+                self.touch(i);
             }
         }
+        self.settle();
     }
 
     /// Put the fire out within `radius` metres of `at` (rain, water, a firebreak): the cells keep
     /// their char and can be lit again.
     pub fn extinguish(&mut self, at: Vec3, radius: f32) {
         for i in self.cells_within(at, radius) {
-            if self.cells[i].heat > 0.0 {
-                self.cells[i].heat = 0.0;
-                self.burning -= 1;
-            }
+            self.cells[i].heat = 0.0;
         }
+        self.settle();
     }
 
     /// Set every cell to `cells` (as [`cells`](Self::cells) gave them, row by row), as when a
@@ -256,7 +285,8 @@ impl FloraFire {
             self.cells[i] = FireCell { char, heat };
             self.lit[i] = if heat > 0.0 { now } else { f32::INFINITY };
         }
-        self.burning = self.cells.iter().filter(|cell| cell.heat > 0.0).count();
+        self.touched = Some([0, 0, self.side as usize - 1, self.side as usize - 1]);
+        self.settle();
         true
     }
 
@@ -266,6 +296,9 @@ impl FloraFire {
         let char = char.clamp(0.0, 1.0);
         for i in self.cells_within(at, radius) {
             self.cells[i].char = self.cells[i].char.max(char);
+            if char > 0.0 {
+                self.touch(i);
+            }
         }
     }
 
@@ -341,6 +374,40 @@ impl FloraFire {
         }
     }
 
+    /// Grow the touched rectangle to hold the cell `i`.
+    fn touch(&mut self, i: usize) {
+        let side = self.side as usize;
+        let (x, z) = (i % side, i / side);
+        self.touched = Some(match self.touched {
+            None => [x, z, x, z],
+            Some([x0, z0, x1, z1]) => [x0.min(x), z0.min(z), x1.max(x), z1.max(z)],
+        });
+    }
+
+    /// Count the burning cells and fit the touched rectangle to the cells holding any char or
+    /// heat, looking only inside it.
+    fn settle(&mut self) {
+        let side = self.side as usize;
+        let [x0, z0, x1, z1] = self.touched.unwrap_or([1, 1, 0, 0]);
+        let (mut burning, mut fit) = (0, None::<[usize; 4]>);
+        for z in z0..=z1 {
+            for x in x0..=x1 {
+                let cell = self.cells[z * side + x];
+                if cell.heat > 0.0 {
+                    burning += 1;
+                }
+                if cell.heat > 0.0 || cell.char > 0.0 {
+                    fit = Some(match fit {
+                        None => [x, z, x, z],
+                        Some([a, b, c, d]) => [a.min(x), b.min(z), c.max(x), d.max(z)],
+                    });
+                }
+            }
+        }
+        self.burning = burning;
+        self.touched = fit;
+    }
+
     /// One step of `STEP` seconds: burning cells kindle and char, burnt ones cool, and every
     /// burning cell lights each neighbour once the fire has had the time to get there (`wind`: the
     /// wind's direction times its strength).
@@ -349,7 +416,10 @@ impl FloraFire {
         let spread = self.spread;
         let now = self.steps as f32 * STEP;
         let mut lit: Vec<(usize, f32)> = Vec::new();
-        for i in 0..self.cells.len() {
+        // Only the touched cells can burn: the rest hold no heat.
+        let [x0, z0, x1, z1] = self.touched.unwrap_or([1, 1, 0, 0]);
+        let width = side as usize;
+        for i in (z0..=z1).flat_map(|z| (x0..=x1).map(move |x| z * width + x)) {
             let fuel = self.fuel[i];
             let cell = &mut self.cells[i];
             if cell.heat <= 0.0 {
@@ -390,15 +460,15 @@ impl FloraFire {
             }
         }
         for (j, arrives) in lit {
-            let cell = &mut self.cells[j];
-            if cell.heat <= 0.0 {
-                cell.heat = SPARK;
+            if self.cells[j].heat <= 0.0 {
+                self.cells[j].heat = SPARK;
                 self.lit[j] = arrives;
+                self.touch(j);
             } else {
                 self.lit[j] = self.lit[j].min(arrives);
             }
         }
-        self.burning = self.cells.iter().filter(|cell| cell.heat > 0.0).count();
+        self.settle();
         self.steps += 1;
     }
 
@@ -408,15 +478,9 @@ impl FloraFire {
     /// world x, z rectangle outside which every cell is empty (grown by a cell, for the blend
     /// between cell centres), so trees outside it read no cells.
     fn vectors(&self) -> impl Iterator<Item = [f32; 4]> + '_ {
-        let side = self.side as usize;
-        let touched = |cell: &FireCell| cell.char > 0.0 || cell.heat > 0.0;
-        let (mut low, mut high) = ((usize::MAX, usize::MAX), (0, 0));
-        for (i, _) in self.cells.iter().enumerate().filter(|(_, cell)| touched(cell)) {
-            let (x, z) = (i % side, i / side);
-            low = (low.0.min(x), low.1.min(z));
-            high = (high.0.max(x), high.1.max(z));
-        }
-        let any = low.0 != usize::MAX;
+        let any = self.touched.is_some();
+        let [x0, z0, x1, z1] = self.touched.unwrap_or_default();
+        let (low, high) = ((x0, z0), (x1, z1));
         let header = [self.corner.x, self.corner.y, 1.0 / self.cell, if any { self.side as f32 } else { 0.0 }];
         let bounds = if any {
             let min = self.corner + (Vec2::new(low.0 as f32, low.1 as f32) - 1.0) * self.cell;
@@ -799,5 +863,82 @@ mod tests {
         assert!(0.0 - leaf_burn_front(0.0) > LEAF_GLOW + LEAF_SCORCH);
         // ... and the last leaf (moment just under 1) has burnt at char 1.
         assert!(leaf_burn_front(1.0) >= 1.0);
+    }
+
+    #[test]
+    fn the_burning_cells_and_the_touched_bounds_follow_the_fire_from_spark_to_cold_embers() {
+        // 512 half-metre cells a side, a 15 m stand of trees in one corner.
+        let mut fire = FloraFire::with_cells(Vec2::ZERO, 256.0, 512);
+        let stand: Vec<Vec3> =
+            (0..36).map(|i| Vec3::new(-120.0 + (i % 6) as f32 * 2.5, 0.0, -120.0 + (i / 6) as f32 * 2.5)).collect();
+        fire.refuel(stand.iter().copied());
+        // What a full scan of the grid finds: the burning cells with their centres, and the
+        // lowest and highest touched cell.
+        let scan = |fire: &FloraFire| {
+            let side = fire.cells_per_side() as usize;
+            let (mut burning, mut touched) = (Vec::new(), None::<((usize, usize), (usize, usize))>);
+            for (i, cell) in fire.cells().iter().enumerate() {
+                let (x, z) = (i % side, i / side);
+                if cell.heat > 0.0 {
+                    let centre = Vec2::splat(-128.0) + (Vec2::new(x as f32, z as f32) + 0.5) * 0.5;
+                    burning.push((centre, *cell));
+                }
+                if cell.heat > 0.0 || cell.char > 0.0 {
+                    touched = Some(touched.map_or(((x, z), (x, z)), |(l, h): ((usize, usize), (usize, usize))| {
+                        ((l.0.min(x), l.1.min(z)), (h.0.max(x), h.1.max(z)))
+                    }));
+                }
+            }
+            (burning, touched)
+        };
+        let check = |fire: &FloraFire| {
+            let (burning, touched) = scan(fire);
+            assert_eq!(fire.burning().collect::<Vec<_>>(), burning);
+            let corner = |x: usize, z: usize| Vec2::splat(-128.0) + Vec2::new(x as f32, z as f32) * 0.5;
+            match (fire.touched_bounds(), touched) {
+                (None, None) => {}
+                (Some(bounds), Some((low, high))) => {
+                    // Edge to edge round the touched cells, not a cell more.
+                    assert!(bounds.min.distance(corner(low.0, low.1)) < 1.0e-3, "{bounds:?} {low:?}");
+                    assert!(bounds.max.distance(corner(high.0 + 1, high.1 + 1)) < 1.0e-3, "{bounds:?} {high:?}");
+                    // The shaders' rectangle is the same, grown by a cell.
+                    let shader = fire.vectors().nth(1).unwrap();
+                    let grown = [bounds.min.x - 0.5, bounds.min.y - 0.5, bounds.max.x + 0.5, bounds.max.y + 0.5];
+                    assert!(shader.iter().zip(grown).all(|(a, b)| (a - b).abs() < 1.0e-3), "{shader:?}");
+                }
+                other => panic!("the bounds and the cells disagree: {other:?}"),
+            }
+        };
+        assert!(fire.touched_bounds().is_none() && fire.burning().next().is_none(), "nothing before the spark");
+        check(&fire);
+
+        fire.ignite(stand[0], 1.0);
+        check(&fire);
+        let (mut steps, mut most) = (0, 0);
+        while fire.is_burning() {
+            fire.step(Vec2::ZERO);
+            steps += 1;
+            most = most.max(fire.burning().count());
+            if steps % 25 == 0 {
+                check(&fire);
+            }
+            assert!(steps < 3000, "the fire never went out");
+        }
+        check(&fire);
+        assert!(most > 50, "the fire spread through the stand: {most} cells at most");
+        // Cold: nothing burns, and the char keeps the bounds, round the stand alone.
+        assert_eq!(fire.burning().count(), 0);
+        let burnt = fire.touched_bounds().expect("the char stays");
+        assert!(burnt.min.cmpge(Vec2::splat(-128.0)).all() && burnt.max.cmple(Vec2::splat(-100.0)).all(), "{burnt:?}");
+
+        // Put out, restored, scorched: the bounds follow.
+        fire.ignite(Vec3::new(100.0, 0.0, 100.0), 0.2);
+        assert!(fire.touched_bounds().unwrap().max.x > 100.0);
+        fire.extinguish(Vec3::new(100.0, 0.0, 100.0), 1.0);
+        assert_eq!(fire.touched_bounds(), Some(burnt), "a spark put out leaves no char");
+        fire.restore(&vec![FireCell::default(); 512 * 512]);
+        assert!(fire.touched_bounds().is_none());
+        fire.scorch(Vec3::new(10.0, 0.0, -10.0), 1.0, 0.5);
+        check(&fire);
     }
 }
