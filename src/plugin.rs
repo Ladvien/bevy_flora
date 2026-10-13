@@ -297,6 +297,9 @@ impl bevy::app::Plugin for FloraPlugin {
                     finish_background_pools
                         .run_if(resource_exists::<Assets<TreePool>>)
                         .run_if(resource_exists::<Assets<Mesh>>),
+                    // Before the trees are given children: a tree turned into deadfall as it is
+                    // spawned (a save restored) never gets a standing tree's.
+                    crate::deadfall::turn_into_deadfall.run_if(resource_exists::<Assets<TreePool>>),
                     (start_impostor_bakes, drive_impostor_bakes)
                         .chain()
                         .run_if(resource_exists::<ImpostorSupport>),

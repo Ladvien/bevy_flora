@@ -135,7 +135,7 @@ impl Scatter {
                     }
                     weighted(&shares, pick)
                 });
-                Some(ScatterPoint { position, yaw, scale, species, variant })
+                Some(ScatterPoint { position, yaw, scale, species, variant, id: i as u32 })
             })
             .collect()
     }
@@ -156,6 +156,11 @@ pub struct ScatterPoint {
     /// A random draw for the pool variant: [`PooledTree`](crate::PooledTree) takes it modulo the
     /// pool's variant count.
     pub variant: u32,
+    /// The tree's own number in its scatter: the same for a given seed, area and spacing whatever
+    /// the density and weights keep or move, so a save can name a tree ("the felled ones are 17,
+    /// 204 and 911") instead of matching positions.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub id: u32,
 }
 
 impl ScatterPoint {
@@ -436,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn a_density_mask_only_removes_trees() {
+    fn a_density_mask_only_removes_trees_and_a_tree_keeps_its_id() {
         let forest = Scatter { species: vec![1.0, 1.0], grove_size: 30.0, ..Scatter::new(square(80.0), 5.0) };
         let all = forest.points();
         let cleared = forest.points_where(|p| if p.x < 0.0 { 0.0 } else { 1.0 });
@@ -446,6 +451,9 @@ mod tests {
         let share = sparse.len() as f32 / all.len() as f32;
         assert!((0.18..0.32).contains(&share), "a density of 0.25 kept {share}");
         assert!(sparse.iter().all(|t| all.contains(t)));
+        // An id names one tree: the one at that place in the whole forest, whatever was cleared.
+        assert!(all.iter().enumerate().all(|(i, t)| t.id == i as u32));
+        assert!(sparse.iter().chain(&cleared).all(|t| all[t.id as usize] == *t));
     }
 
     #[test]
@@ -525,7 +533,7 @@ mod tests {
 
     #[test]
     fn a_tree_stands_where_it_was_scattered() {
-        let tree = ScatterPoint { position: Vec2::new(3.0, -4.0), yaw: 1.0, scale: 1.2, species: 0, variant: 9 };
+        let tree = ScatterPoint { position: Vec2::new(3.0, -4.0), yaw: 1.0, scale: 1.2, species: 0, variant: 9, id: 0 };
         let t = tree.transform(2.5);
         assert_eq!(t.translation, Vec3::new(3.0, 2.5, -4.0));
         assert_eq!(t.scale, Vec3::splat(1.2));

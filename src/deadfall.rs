@@ -328,6 +328,56 @@ fn pivot_about(hinge: Vec3, axis: Vec3, angle: f32) -> Transform {
     Transform::from_translation(hinge - turn * hinge).with_rotation(turn)
 }
 
+/// Turn a [`PooledTree`](crate::PooledTree) into deadfall of its own pool where it stands, as one
+/// insert: a stump ([`DeadfallKind::Stump`]: a tree cut and hauled away), a tree lying the way it
+/// fell, or one bucked into logs, of the same variant and look ([`PooledLook`]), its transform and
+/// shadow opt-out kept. The entity stays and becomes a [`PooledDeadfall`]: what a save restores for
+/// a pooled tree that was felled, or a blast leaves where it stood. The pool must be built with
+/// deadfall ([`build_pool_with_deadfall`](crate::build_pool_with_deadfall)); a tree of any other
+/// pool is left standing, with one warning.
+///
+/// ```rust,no_run
+/// use bevy::prelude::*;
+/// use bevy_flora::{DeadfallKind, IntoDeadfall};
+///
+/// // The trees felled before the save are stumps again, wherever they stand.
+/// fn restore(mut commands: Commands, felled: Vec<Entity>) {
+///     for tree in felled {
+///         commands.entity(tree).insert(IntoDeadfall(DeadfallKind::Stump));
+///     }
+/// }
+/// ```
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct IntoDeadfall(pub DeadfallKind);
+
+/// Make every [`IntoDeadfall`] tree whose pool is ready a [`PooledDeadfall`] in place: its tree
+/// children and the markers of a pooled tree go (so do a standing tree's `TreeShape`, and its
+/// place in the index with `PooledTree`), its look and shadow opt-out stay.
+pub(crate) fn turn_into_deadfall(
+    mut commands: Commands,
+    pools: Res<Assets<TreePool>>,
+    trees: Query<(Entity, &crate::pool::PooledTree, &IntoDeadfall)>,
+    mut warned: Local<bool>,
+) {
+    for (entity, pooled, into) in &trees {
+        let Some(pool) = pools.get(&pooled.pool) else { continue };
+        let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
+        if variant.deadfall.is_none() {
+            if !*warned {
+                *warned = true;
+                bevy::log::warn!("bevy_flora: IntoDeadfall on a tree whose pool has no deadfall (build_pool_with_deadfall builds one): it is left standing");
+            }
+            commands.entity(entity).remove::<IntoDeadfall>();
+            continue;
+        }
+        commands
+            .entity(entity)
+            .despawn_related::<Children>()
+            .remove::<(crate::pool::PooledTree, crate::pool::PooledTreeSpawned, crate::pool::PooledShapeFilled, TreeShape, IntoDeadfall)>()
+            .insert(PooledDeadfall { pool: pooled.pool.clone(), variant: pooled.variant, kind: into.0 });
+    }
+}
+
 /// Give every [`PooledDeadfall`] whose pool is ready its children.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn spawn_pooled_deadfall(
@@ -756,6 +806,87 @@ mod tests {
         };
         pool.add_look(PoolColors { wood: Color::srgb(0.9, 0.1, 0.1), leaves: Color::srgb(0.1, 0.9, 0.1), unlit: false });
         app.world_mut().resource_mut::<Assets<TreePool>>().add(pool)
+    }
+
+    /// Every mesh and material among `entity`'s descendants.
+    fn drawn(app: &App, entity: Entity) -> (std::collections::BTreeSet<AssetId<Mesh>>, std::collections::BTreeSet<AssetId<StandardMaterial>>) {
+        let (mut meshes, mut materials) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+        let mut stack = descendants(app, entity);
+        while let Some(child) = stack.pop() {
+            stack.extend(descendants(app, child));
+            if let Some(m) = app.world().get::<Mesh3d>(child) {
+                meshes.insert(m.0.id());
+            }
+            if let Some(m) = app.world().get::<MeshMaterial3d<StandardMaterial>>(child) {
+                materials.insert(m.0.id());
+            }
+        }
+        (meshes, materials)
+    }
+
+    #[test]
+    fn a_standing_tree_turned_into_a_stump_is_the_stump_of_its_variant_and_look_where_it_stood() {
+        let mut app = app();
+        app.add_plugins(bevy::transform::TransformPlugin);
+        let pool = looked(&mut app);
+        let at = Transform::from_xyz(5.0, 0.0, 7.0).with_rotation(Quat::from_rotation_y(0.8));
+        let tree = app
+            .world_mut()
+            .spawn((PooledTree { pool: pool.clone(), variant: 0 }, PooledLook(1), NotShadowCaster, at))
+            .id();
+        // The same stump, spawned as one.
+        let fresh = app
+            .world_mut()
+            .spawn((PooledDeadfall { pool, variant: 0, kind: DeadfallKind::Stump }, PooledLook(1), NotShadowCaster, Transform::from_xyz(60.0, 0.0, 0.0)))
+            .id();
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<FloraIndex>().len(), 1, "the tree stands");
+        let standing = drawn(&app, tree);
+        app.world_mut().entity_mut(tree).insert(IntoDeadfall(DeadfallKind::Stump));
+        app.update();
+        app.update();
+        let world = app.world();
+        assert_eq!(world.get::<PooledDeadfall>(tree).map(|d| (d.variant, d.kind)), Some((0, DeadfallKind::Stump)));
+        assert!(world.get::<PooledTree>(tree).is_none() && world.get::<IntoDeadfall>(tree).is_none());
+        assert_eq!(world.get::<PooledLook>(tree), Some(&PooledLook(1)), "the look stays");
+        assert!(world.get::<NotShadowCaster>(tree).is_some(), "the shadow opt-out stays");
+        assert_eq!(world.get::<Transform>(tree), Some(&at), "where it stood");
+        let stump = drawn(&app, tree);
+        assert_eq!(stump, drawn(&app, fresh), "the stump draws as one spawned as a stump");
+        assert!(stump.0.is_disjoint(&standing.0), "the standing tree's meshes are gone");
+        let index = world.resource::<FloraIndex>();
+        assert_eq!(index.len(), 0, "a stump is no standing tree");
+        assert!(
+            index.obstacles_within(at.translation.xz(), 1.0).any(|o| o.entity == tree && o.kind == crate::ObstacleKind::Stump),
+            "the stump is an obstacle where the tree stood"
+        );
+    }
+
+    #[test]
+    fn a_tree_turned_as_it_is_spawned_never_stands_and_a_pool_without_deadfall_keeps_it_standing() {
+        let mut app = app();
+        let pool = pool(&mut app, TreePreset::Oak);
+        let direction = Vec2::new(0.6, -0.8);
+        let tree = app
+            .world_mut()
+            .spawn((PooledTree { pool: pool.clone(), variant: 1 }, IntoDeadfall(DeadfallKind::Bucked { direction }), Transform::IDENTITY))
+            .id();
+        let plain = {
+            let lod = LodSettings { distances: LodDistances { impostor: f32::INFINITY, ..Default::default() }, ..Default::default() };
+            let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+            let pool = crate::pool::build_pool(&TreePreset::Birch.params(), 1, f32::INFINITY, &lod, &mut meshes);
+            app.world_mut().resource_mut::<Assets<TreePool>>().add(pool)
+        };
+        let kept = app.world_mut().spawn((PooledTree { pool: plain, variant: 0 }, IntoDeadfall(DeadfallKind::Stump), Transform::from_xyz(50.0, 0.0, 0.0))).id();
+        // One frame: it is deadfall from the first, never a standing tree for a frame.
+        app.update();
+        let world = app.world();
+        assert_eq!(world.get::<PooledDeadfall>(tree).map(|d| d.kind), Some(DeadfallKind::Bucked { direction }));
+        assert!(descendants(&app, tree).into_iter().any(|c| world.get::<TreeLog>(c).is_some()), "it lies in logs");
+        assert!(world.get::<PooledTree>(kept).is_some() && world.get::<PooledDeadfall>(kept).is_none(), "no deadfall to turn into");
+        assert!(world.get::<IntoDeadfall>(kept).is_none(), "asked once");
+        assert_eq!(world.resource::<FloraIndex>().len(), 1, "the birch stands, the oak never did");
     }
 
     /// The base colours of the wood and leaf materials (plain ones, in a headless app) of `entity`'s

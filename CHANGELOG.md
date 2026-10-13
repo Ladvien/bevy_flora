@@ -5,6 +5,38 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.43.0] - 2026-10-13
+
+A pooled tree felled before a save comes back as one insert, found by a name rather than by its
+place (issue #74): a game kept the felled trees' positions, matched each to the pooled tree nearest
+it within a tolerance, and spawned a `PooledDeadfall` copying that tree's pool, variant, look,
+transform and shadow opt-out. `ScatterPoint` gained a field, so struct literals of it need it (a
+minor release). On crates.io this is the release after 0.36.0: it carries 0.37.0 to 0.42.0 too,
+entered below, each also released on GitHub.
+
+### Added
+
+- `IntoDeadfall(kind)`: inserted on a `PooledTree`, it turns the tree into deadfall of its own
+  pool, variant and look where it stands, a `Stump`, a tree `Lying` the way it fell or one
+  `Bucked` into logs: the same entity, now a `PooledDeadfall`, its transform, `PooledLook` and
+  `NotShadowCaster` kept, out of the index's trees and in its obstacles. A tree spawned with it is
+  deadfall from its first frame. A pool built without deadfall leaves the tree standing, with one
+  warning.
+- `ScatterPoint::id`: a scattered tree's number, the same for a seed, area and spacing whatever a
+  density or a stand keeps, so a save can name the trees that were felled (serde: missing in old
+  data, 0).
+
+### Measured
+
+- **Look.** `inspect --mode deadfall` (stumps, lying and bucked trees of two variants, oak and
+  spruce, flat and on a slope) spawned as `PooledTree` with `IntoDeadfall` renders byte for byte
+  as spawned as `PooledDeadfall`. Nothing else that draws changed: the 491 gallery scenarios, the
+  eleven clips (but one chop frame at a mean of 0.000 of 255) and a pooled forest's screenshot are
+  0.42.0's byte for byte, no `ERROR`.
+- **Cost** (`forest --trees 100000 --mode pool --offscreen --deterministic`, Apple M4 Pro, three
+  pairs in alternating order with 0.42.0): 7.63 to 7.71 ms a frame against 7.64 to 7.72, the CPU
+  27.40 to 27.73 against 27.47 to 27.83: the conversion's system costs nothing while no tree asks.
+
 ## [0.42.0] - 2026-10-13
 
 `FloraIndex` tells undergrowth from trees and answers in an order set by the forest (issue #73): a
@@ -2589,6 +2621,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.43.0]: https://github.com/Ladvien/bevy_flora/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/Ladvien/bevy_flora/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/Ladvien/bevy_flora/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/Ladvien/bevy_flora/compare/v0.39.1...v0.40.0
