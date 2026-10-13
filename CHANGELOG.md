@@ -22,13 +22,30 @@ entities were spawned in, and every pair of the plugin's systems that share data
 - `index_trees` ran before or after Bevy's asset events as the executor chose, so a pool added in a
   frame was indexed that frame or the next; it now runs after them. The pool systems now run after
   the procedural trees' (both make textures and write `TreeShape`s) and `drop_fallen_fruit` after
-  the felling systems (both move `Transform`s): the plugin's `PreUpdate`, `Update` and `PostUpdate`
-  build with ambiguity detection as an error, which a new test holds them to.
+  the felling systems and before the pooled trees' (they all move `Transform`s, deadfall's
+  included): the plugin's `PreUpdate`, `Update` and `PostUpdate` build with ambiguity detection as
+  an error, which a new test holds them to.
 
 ### Measured
 
-- **Look.** LOOK
-- **Cost.** COST
+- **Look.** The 491 gallery scenarios render byte for byte as in 0.39.0 on the CPU and with
+  `--gpu` (but the CPU painterly maple and oak at a mean of 0.000 of 255; no `ERROR`), and so do
+  the growth, grove, seasons, fire and push clips and the isometric demo. The shake, fell, chop and
+  harvest clips and the playground's demo drop other leaves of the same trees (a mean difference up
+  to 4.4 of 255 in chop and 6.5 in the playground, all of it falling leaves and their shadows: old,
+  new and their difference side by side at chop 183 and playground 185, every tree, stump, log and
+  apple where it was), and their GIFs are re-encoded, the last time a new system will re-shuffle
+  them. A pooled forest's screenshot differs by leaves a hair elsewhere in their sway (a mean of
+  0.300 of 255; zoomed 4x, the same trees and leaves), most likely because its trees get their
+  children a frame apart from before.
+- **Cost.** Nothing is added to a frame in which no leaves fall (the leaf systems run only then;
+  the rest is order between systems). Measured for the same change on top of 0.38.1, with the
+  Apple M4 Pro's GPU shared with a document-conversion model and a language model throughout
+  (100 000 pooled oaks took 11.9 to 29 ms a frame in either version, about 8 on a quiet machine):
+  in six alternating pairs each it took a median 3.3 ms less with 100 000 pooled oaks and 2.8 ms
+  less with 1 000 individual ones, and in four earlier pairs the CPU time per frame was 53.1
+  against 50.8 ms (pooled) and 25.2 against 25.7 ms (individual): no regression to be seen in the
+  noise.
 
 ## [0.39.0] - 2026-10-13
 
