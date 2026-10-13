@@ -15,7 +15,8 @@
 //! The pictures are baked in the running app: [`TreePool`](crate::TreePool)
 //! renders each variant's level 1 meshes into a 2048x512 image (eight 256x256
 //! tiles for the colour, eight for the surface, the camera 10° above the
-//! horizon), reads it back, adds mipmaps and stores it as an [`ImpostorAtlas`].
+//! horizon, or the pool's own [`impostor_elevation`](crate::LodSettings::impostor_elevation)),
+//! reads it back, adds mipmaps and stores it as an [`ImpostorAtlas`].
 //! This needs a renderer; without one (a headless test,
 //! [`LodDistances::impostor`](crate::LodDistances::impostor) at infinity) a pool
 //! simply has none and its coarsest level is drawn at every distance.
@@ -23,9 +24,14 @@
 //! # Limits
 //!
 //! - **Eight yaws at one elevation.** Turning around a far tree switches
-//!   between eight pictures, and the quad stays upright however high the camera
-//!   is. Impostors receive scene shadows only where shadow cascades reach, and
-//!   there is no self-shadowing beyond the baked crown occlusion.
+//!   between eight pictures, all taken from one height above the horizon
+//!   ([`LodSettings::impostor_elevation`](crate::LodSettings::impostor_elevation), 10° by
+//!   default; set it to an isometric or top-down camera's pitch), and the quad stays upright
+//!   however high the camera is. It stands in the trunk's plane but is drawn at the front of
+//!   the crown, each vertex moved toward the camera along its own view ray, so the crown's near
+//!   edge seen from above is not hidden under the ground. Impostors receive scene shadows only
+//!   where shadow cascades reach, and there is no self-shadowing beyond the baked crown
+//!   occlusion.
 //! - **No motion vectors.** An impostor is drawn outside depth, motion-vector
 //!   and shadow prepasses, and casts no shadow.
 
@@ -53,8 +59,10 @@ pub const IMPOSTOR_VIEWS: u32 = 8;
 pub(crate) const TILE_PIXELS: u32 = 256;
 /// Levels of the atlas's mip chain; the smallest has tiles of 8 pixels.
 pub(crate) const MIP_LEVELS: u32 = 6;
-/// How far above the horizon the baking camera looks, in degrees.
-const ELEVATION_DEGREES: f32 = 10.0;
+/// The highest a pool's impostor pictures may be taken from, in degrees above the horizon
+/// ([`LodSettings::impostor_elevation`](crate::LodSettings::impostor_elevation)): the quad stands
+/// upright, `1 / cos` times as tall as the picture, which grows without bound toward the vertical.
+const MAX_ELEVATION_DEGREES: f32 = 60.0;
 /// Margin around the tree in a view, as a share of its size on each side.
 const FRAME_MARGIN: f32 = 0.04;
 
@@ -97,14 +105,18 @@ pub(crate) struct ImpostorFrame {
     pub(crate) center_y: f32,
     /// Extent the orthographic camera sees, in metres, across and up the picture.
     pub(crate) view: Vec2,
+    /// How far above the horizon the camera looks from, in radians.
+    pub(crate) elevation: f32,
 }
 
 impl ImpostorFrame {
     /// The frame of a tree `height` tall whose crown reaches `radius` from the
-    /// trunk axis, seen from [`ELEVATION_DEGREES`] above the horizon: a box
-    /// around the tree's bounding cylinder as it looks from that height.
-    pub(crate) fn new(height: f32, radius: f32) -> Self {
-        let (sin, cos) = ELEVATION_DEGREES.to_radians().sin_cos();
+    /// trunk axis, seen from `elevation` degrees above the horizon (0 to
+    /// [`MAX_ELEVATION_DEGREES`]): a box around the tree's bounding cylinder as it
+    /// looks from that height.
+    pub(crate) fn new(height: f32, radius: f32, elevation: f32) -> Self {
+        let elevation = elevation.clamp(0.0, MAX_ELEVATION_DEGREES).to_radians();
+        let (sin, cos) = elevation.sin_cos();
         // Up the picture: the base is at 0; a point at height `y` and depth `s`
         // toward the camera is at `y cos - s sin`.
         let top = height * cos + radius * sin;
@@ -116,13 +128,14 @@ impl ImpostorFrame {
             size: Vec2::new(view.x, view.y / cos),
             center_y: (top + bottom) / 2.0 / cos,
             view,
+            elevation,
         }
     }
 
     /// Where the baking camera sits relative to what it looks at: unit length,
     /// toward the viewer.
-    pub(crate) fn toward_camera() -> Vec3 {
-        let (sin, cos) = ELEVATION_DEGREES.to_radians().sin_cos();
+    pub(crate) fn toward_camera(&self) -> Vec3 {
+        let (sin, cos) = self.elevation.sin_cos();
         Vec3::new(0.0, sin, cos)
     }
 
@@ -403,7 +416,7 @@ mod tests {
     /// Where `(y, s)` (height, depth toward the camera) lands up the picture,
     /// measured from the picture's centre, as a share of the view's height.
     fn up_the_picture(frame: &ImpostorFrame, y: f32, s: f32) -> f32 {
-        let (sin, cos) = ELEVATION_DEGREES.to_radians().sin_cos();
+        let (sin, cos) = frame.elevation.sin_cos();
         let center = frame.center_y * cos;
         (y * cos - s * sin - center) / frame.view.y
     }
@@ -411,31 +424,36 @@ mod tests {
     #[test]
     fn frame_holds_the_whole_crown_seen_from_above_the_horizon() {
         let (height, radius) = (14.0, 6.0);
-        let frame = ImpostorFrame::new(height, radius);
-        // The tree's extremes: the base at the near and far edge of the crown,
-        // the top of the crown at the near and far edge.
-        for (y, s) in [
-            (0.0, radius),
-            (0.0, -radius),
-            (height, radius),
-            (height, -radius),
-        ] {
-            let up = up_the_picture(&frame, y, s);
-            assert!(
-                up.abs() < 0.5,
-                "({y}, {s}) is {up} views from the centre, outside the picture"
-            );
+        for elevation in [10.0, 35.0, 60.0] {
+            let frame = ImpostorFrame::new(height, radius, elevation);
+            // The tree's extremes: the base at the near and far edge of the crown,
+            // the top of the crown at the near and far edge.
+            for (y, s) in [
+                (0.0, radius),
+                (0.0, -radius),
+                (height, radius),
+                (height, -radius),
+            ] {
+                let up = up_the_picture(&frame, y, s);
+                assert!(
+                    up.abs() < 0.5,
+                    "({y}, {s}) is {up} views from the centre at {elevation}°, outside the picture"
+                );
+            }
+            // The crown's width fits across, with a margin.
+            assert!(frame.view.x > 2.0 * radius);
+            // The quad stands upright, so it is taller than the picture by the cosine.
+            assert!(frame.size.y >= frame.view.y);
+            assert_eq!(frame.size.x, frame.view.x);
         }
-        // The crown's width fits across, with a margin.
-        assert!(frame.view.x > 2.0 * radius);
-        // The quad stands upright, so it is a little taller than the picture.
-        assert!(frame.size.y >= frame.view.y);
-        assert_eq!(frame.size.x, frame.view.x);
+        // Out of range: clamped to the horizon and to 60°.
+        assert_eq!(ImpostorFrame::new(height, radius, -5.0), ImpostorFrame::new(height, radius, 0.0));
+        assert_eq!(ImpostorFrame::new(height, radius, 80.0), ImpostorFrame::new(height, radius, 60.0));
     }
 
     #[test]
     fn quad_covers_the_frame_and_faces_the_camera() {
-        let frame = ImpostorFrame::new(10.0, 4.0);
+        let frame = ImpostorFrame::new(10.0, 4.0, 10.0);
         let quad = frame.quad();
         assert_eq!(quad.count_vertices(), 4);
         let positions = quad

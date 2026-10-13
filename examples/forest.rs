@@ -6,6 +6,7 @@
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] [--ortho <view height>]
+//!     [--impostor-elevation <deg>] [--impostor-shadows]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>]
@@ -44,7 +45,9 @@
 //! `--eye <x,y,z>` and `--at <x,y,z>` move the camera and what it looks at (world metres, the
 //! grid centred on the origin), and `--fov <deg>` sets its vertical field of view (45 by default).
 //! `--ortho <view height>` makes the camera orthographic, its view that many metres tall: the
-//! levels of detail and impostors follow the zoom (`LodScale`).
+//! levels of detail and impostors follow the zoom (`LodScale`). `--impostor-elevation <deg>` bakes
+//! the impostors from that far above the horizon (`LodSettings::impostor_elevation`, 10 by
+//! default) and `--impostor-shadows` lets them cast shadows (`LodSettings::impostor_shadows`).
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame. `--background` builds those trees off the main thread
@@ -185,6 +188,10 @@ struct Args {
     fov: f32,
     /// An orthographic camera whose view is this many metres tall, instead of a perspective one.
     ortho: Option<f32>,
+    /// How far above the horizon the pools' impostor pictures are taken, degrees.
+    impostor_elevation: f32,
+    /// Whether the pools' impostors cast shadows.
+    impostor_shadows: bool,
     /// Strength of the wind, if not the library's default.
     wind: Option<f32>,
     /// Where the wind blows toward (world x and z), if not the library's default.
@@ -250,6 +257,7 @@ fn usage() -> ! {
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] [--ortho <view height>] \
+         [--impostor-elevation <deg>] [--impostor-shadows] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] \
@@ -277,6 +285,8 @@ fn parse_args() -> Args {
         at: None,
         fov: 45.0,
         ortho: None,
+        impostor_elevation: 10.0,
+        impostor_shadows: false,
         wind: None,
         wind_dir: None,
         gust: None,
@@ -375,6 +385,8 @@ fn parse_args() -> Args {
             }
             "--fov" => args.fov = value(&mut it),
             "--ortho" => args.ortho = Some(value(&mut it)),
+            "--impostor-elevation" => args.impostor_elevation = value(&mut it),
+            "--impostor-shadows" => args.impostor_shadows = true,
             "--wind" => args.wind = Some(value(&mut it)),
             "--wind-dir" => {
                 let list = it.next().unwrap_or_else(|| usage());
@@ -742,6 +754,8 @@ fn setup(
             if !bench.args.impostors {
                 lod.distances.impostor = f32::INFINITY;
             }
+            lod.impostor_elevation = bench.args.impostor_elevation;
+            lod.impostor_shadows = bench.args.impostor_shadows;
             // A shrub is a tenth of a tree's height, so its coarser levels can take over much
             // nearer.
             if Some(i) == undergrowth {

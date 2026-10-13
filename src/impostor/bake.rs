@@ -149,7 +149,7 @@ pub(crate) fn start_impostor_bakes(
                 TextureFormat::Rgba8Unorm,
                 Some(TextureFormat::Rgba8UnormSrgb),
             ));
-            let frame = ImpostorFrame::new(variant.height, variant.radius);
+            let frame = ImpostorFrame::new(variant.height, variant.radius, pool.lod.impostor_elevation);
             let slot = bakes.started;
             bakes.started += 1;
             let wood = pool.params.trunk_color.to_linear();
@@ -257,7 +257,7 @@ fn spawn_scene(
                             ..OrthographicProjection::default_3d()
                         }),
                         Transform::from_translation(
-                            look_at + ImpostorFrame::toward_camera() * CAMERA_DISTANCE,
+                            look_at + frame.toward_camera() * CAMERA_DISTANCE,
                         )
                         .looking_at(look_at, Vec3::Y),
                         Msaa::Off,
@@ -384,18 +384,15 @@ fn finish_bake(
             width,
             TILE_PIXELS,
         ));
+        let mut material =
+            ImpostorMaterial::new(albedo.clone(), surface.clone(), IMPOSTOR_VIEWS, pool.params.style, flora, &wind);
+        // The quad is drawn at the front of the crown: see `ImpostorMaterial::params`.
+        material.params.z = pool.variants[job.variant].radius;
         pool.variants[job.variant].impostor = Some(ImpostorAtlas {
             views: IMPOSTOR_VIEWS,
             size: job.frame.size,
             center_y: job.frame.center_y,
-            material: materials.add(ImpostorMaterial::new(
-                albedo.clone(),
-                surface.clone(),
-                IMPOSTOR_VIEWS,
-                pool.params.style,
-                flora,
-                &wind,
-            )),
+            material: materials.add(material),
             quad: meshes.add(job.frame.quad()),
             albedo,
             surface,

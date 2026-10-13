@@ -70,6 +70,16 @@ pub struct LodSettings {
     pub radial_segments: [u32; 3],
     /// Where the levels switch, for a pool's trees and a tree with [`TreeLod`].
     pub distances: LodDistances,
+    /// How far above the horizon a pool's impostor pictures are taken, in degrees (10 by default,
+    /// at most 60): the height the camera that sees the far trees looks down from. A perspective
+    /// game keeps 10; an isometric or top-down game with a fixed pitch sets that pitch, so its far
+    /// trees show their crowns from above as the near ones do. [`TreeLod`] has no impostor.
+    pub impostor_elevation: f32,
+    /// Whether a pool's impostors cast shadows (off by default): each casts its tree's
+    /// silhouette, the quad turned toward the light, where the shadow cascades reach. Off, a far
+    /// forest stands without shadows beside the shadowed near trees, which shows most from above
+    /// (an isometric camera); on, every impostor within the cascades is drawn into them too.
+    pub impostor_shadows: bool,
 }
 
 impl Default for LodSettings {
@@ -81,6 +91,8 @@ impl Default for LodSettings {
             lod2_leaf_keep: 8,
             radial_segments: [8, 5, 4],
             distances: LodDistances::default(),
+            impostor_elevation: 10.0,
+            impostor_shadows: false,
         }
     }
 }

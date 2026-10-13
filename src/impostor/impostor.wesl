@@ -1,11 +1,7 @@
 // A far tree: one quad that turns about the trunk to face the camera and shows
 // the baked view nearest to where the camera looks from, lit by the scene's own lights. The Rust
-// side is `impostor/mod.rs` (the quad, the atlases) and `impostor/material.rs`.
-//
-// The quad is built in the tree's local space with the picture's frame: x across,
-// y up, z toward the viewer. `world_from_local` carries the tree's position, yaw
-// and size; only the position and the size are used to place it, the yaw to pick
-// the view and to turn the baked normals back into the world.
+// side is `impostor/mod.rs` (the quad, the atlases) and `impostor/material.rs`; where the quad
+// stands is `impostor_common.wesl`, which the shadow pass (`impostor_prepass.wesl`) shares.
 import bevy_pbr::render::{
     mesh_functions,
     forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
@@ -19,6 +15,7 @@ import package::shading::common::{
     flora, flora_wind, wind_bend, shake_at, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
     snow_on, snow_shelter, wet_on, LEAF_FROST,
 };
+import package::impostor::impostor_common::impostor_corner;
 
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
@@ -37,51 +34,31 @@ import package::shading::common::{
 // x: views in the atlas.
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> params: vec4<f32>;
 
-const TAU: f32 = 6.283185307179586;
-
 @vertex
 fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
-
     let origin = world_from_local[3].xyz;
-    let scale_x = length(world_from_local[0].xyz);
-    let scale_y = length(world_from_local[1].xyz);
-    let scale_z = length(world_from_local[2].xyz);
 
-    // Toward the camera, along the ground.
-    let to_camera = view.world_position - origin;
-    var flat_to_camera = vec3<f32>(to_camera.x, 0.0, to_camera.z);
-    if dot(flat_to_camera, flat_to_camera) < 1.0e-8 {
-        flat_to_camera = vec3<f32>(0.0, 0.0, 1.0);
-    }
-    flat_to_camera = normalize(flat_to_camera);
-
-    // The quad's right: up cross toward-the-camera, the camera's own right.
-    let right = vec3<f32>(flat_to_camera.z, 0.0, -flat_to_camera.x);
-    let world_position = origin
-        + right * (vertex.position.x * scale_x)
-        + vec3<f32>(0.0, 1.0, 0.0) * (vertex.position.y * scale_y);
-
-    // The view: the yaw of the camera in the tree's own frame, to the nearest
-    // of the baked ones (view k looks from the local +Z turned k / views of a
-    // turn about Y).
-    let local_x = dot(to_camera, world_from_local[0].xyz) / (scale_x * scale_x);
-    let local_z = dot(to_camera, world_from_local[2].xyz) / (scale_z * scale_z);
-    let views = params.x;
-    let yaw = atan2(local_x, local_z);
-    let view_index = floor(yaw / TAU * views + 0.5);
-    let tile = view_index - views * floor(view_index / views);
+    // The quad faces the camera (its view's backward axis when it is orthographic) and is drawn
+    // at the front of the crown (`params.z`, the crown's reach), so the crown's near edge seen
+    // from above stands on the ground instead of under it.
+    let orthographic = view.clip_from_view[3].w == 1.0;
+    let corner = impostor_corner(
+        vertex.position.xy, world_from_local, view.world_position, view.world_from_view[2].xyz, orthographic, params.x,
+        params.z,
+    );
 
     // The tree sways with the wind, and swings when shaken, like its meshes do.
-    let bent = wind_bend(world_position, vertex.position.y, origin, scale_y, globals.time, shake_at(origin, globals.time));
+    let scale_y = length(world_from_local[1].xyz);
+    let bent = wind_bend(corner.world, vertex.position.y, origin, scale_y, globals.time, shake_at(origin, globals.time));
     out.world_position = vec4<f32>(bent, 1.0);
     out.position = position_world_to_clip(bent);
     // The tree's own +Z in the world (its yaw): what the baked normals are relative to.
     out.world_normal = normalize(vec3<f32>(world_from_local[2].x, 0.0, world_from_local[2].z));
 @if(VERTEX_UVS_A)
-    out.uv = vec2<f32>((tile + vertex.uv.x) / views, vertex.uv.y);
+    out.uv = vec2<f32>((corner.tile + vertex.uv.x) / params.x, vertex.uv.y);
 @if(VERTEX_OUTPUT_INSTANCE_INDEX)
     out.instance_index = vertex_no_morph.instance_index;
 @if(VISIBILITY_RANGE_DITHER)

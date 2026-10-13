@@ -151,10 +151,10 @@ pub struct PoolVariant {
 /// once its pool exists and, if the pool is baking impostors, once that is done:
 /// a few frames after the pool was added.
 ///
-/// The children are drawn by distance (see [`LodDistances`]). The impostor casts
-/// no shadow; the three levels of detail do, unless the tree carries [`NotShadowCaster`]:
-/// that reaches every level (taking it off gives the shadows back), so a game can let only
-/// the trees near the player cast. (In the `forest` example, 100 000
+/// The children are drawn by distance (see [`LodDistances`]). The three levels of detail cast
+/// shadows, and the impostor does if the pool asks ([`LodSettings::impostor_shadows`]), unless
+/// the tree carries [`NotShadowCaster`]: that reaches every child (taking it off gives the
+/// shadows back), so a game can let only the trees near the player cast. (In the `forest` example, 100 000
 /// trees with a shadow-casting sun cost 7.6 ms a frame on an Apple M4 Pro, leaf shading and
 /// wind included (see the README). On an Apple M5 the shadow maps were about a third of the
 /// pooled forest's time, and narrowing the cascades to 120 m in 2 did not change it.)
@@ -626,19 +626,22 @@ pub(crate) fn spawn_pooled_trees(
             }
         }
         if let Some(atlas) = &variant.impostor {
-            // The quad turns about the trunk, so any yaw of it must be inside the box.
-            let half = Vec3A::new(atlas.size.x / 2.0, atlas.size.y / 2.0, atlas.size.x / 2.0);
-            commands.spawn((
-                Mesh3d(atlas.quad.clone()),
-                MeshMaterial3d(atlas.material.clone()),
-                banded(impostor, f32::INFINITY),
-                Aabb {
-                    center: Vec3A::new(0.0, atlas.center_y, 0.0),
-                    half_extents: half,
-                },
-                NotShadowCaster,
-                ChildOf(tree),
-            ));
+            // The quad turns about the trunk, so any yaw of it must be inside the box; it is drawn
+            // up to a crown's reach before the trunk, and up to five reaches higher toward a camera
+            // that looks down (the shader moves it along the view ray, `ImpostorMaterial::params`).
+            let reach = variant.radius;
+            let half = Vec3A::new(atlas.size.x / 2.0 + reach, atlas.size.y / 2.0 + 5.0 * reach, atlas.size.x / 2.0 + reach);
+            let aabb = Aabb {
+                center: Vec3A::new(0.0, atlas.center_y, 0.0),
+                half_extents: half,
+            };
+            let drawn = (Mesh3d(atlas.quad.clone()), MeshMaterial3d(atlas.material.clone()), banded(impostor, f32::INFINITY), aabb);
+            // An impostor casts only for a pool that asks, and not for a tree kept out of shadows.
+            match (pool.lod.impostor_shadows, quiet) {
+                (true, false) => commands.spawn((drawn, CastingImpostor, ChildOf(tree))),
+                (true, true) => commands.spawn((drawn, CastingImpostor, NotShadowCaster, ChildOf(tree))),
+                (false, _) => commands.spawn((drawn, NotShadowCaster, ChildOf(tree))),
+            };
         }
         commands.entity(tree).insert(PooledTreeSpawned);
         spawned += 1;
@@ -650,7 +653,8 @@ pub(crate) fn spawn_pooled_trees(
 
 /// [`NotShadowCaster`] on a tree (pooled or procedural) reaches every mesh the plugin draws it
 /// with: given to the children when it arrives or when they change (a rebuild, a new level of
-/// detail), taken back off them when it leaves the tree. Impostors never cast, so they keep it.
+/// detail), taken back off them when it leaves the tree. Impostors cast only for a pool that asks
+/// ([`CastingImpostor`]), so the others keep it.
 #[allow(clippy::type_complexity)]
 pub(crate) fn sync_shadow_casting(
     mut commands: Commands,
@@ -664,11 +668,11 @@ pub(crate) fn sync_shadow_casting(
     >,
     mut removed: RemovedComponents<NotShadowCaster>,
     casting: Query<&Children, (Or<(With<PooledTree>, With<ProceduralTree>)>, Without<NotShadowCaster>)>,
-    meshes: Query<(Has<NotShadowCaster>, Has<MeshMaterial3d<ImpostorMaterial>>), With<Mesh3d>>,
+    meshes: Query<(Has<NotShadowCaster>, Has<MeshMaterial3d<ImpostorMaterial>>, Has<CastingImpostor>), With<Mesh3d>>,
 ) {
     for children in &quieted {
         for child in children.iter() {
-            if let Ok((false, _)) = meshes.get(child) {
+            if let Ok((false, ..)) = meshes.get(child) {
                 commands.entity(child).insert(NotShadowCaster);
             }
         }
@@ -678,12 +682,19 @@ pub(crate) fn sync_shadow_casting(
             continue;
         };
         for child in children.iter() {
-            if let Ok((true, false)) = meshes.get(child) {
+            if let Ok((true, impostor, casts)) = meshes.get(child)
+                && (!impostor || casts)
+            {
                 commands.entity(child).remove::<NotShadowCaster>();
             }
         }
     }
 }
+
+/// Marks the impostor of a pooled tree whose pool casts impostor shadows
+/// ([`LodSettings::impostor_shadows`]): it casts unless its tree carries [`NotShadowCaster`].
+#[derive(Component)]
+pub(crate) struct CastingImpostor;
 
 /// Register the pool asset where the asset plugin is. Plugins may be added in
 /// any order, so [`finish`] tries again.
@@ -1060,5 +1071,59 @@ mod tests {
         app.world_mut().entity_mut(camera).insert(Projection::default());
         app.update();
         drawn_at(&app, 1.0);
+    }
+
+    #[test]
+    fn impostors_cast_only_for_a_pool_that_asks_and_follow_their_trees() {
+        use bevy::math::Vec2;
+        let mut app = app();
+        // No renderer bakes impostors here: give each pool's variant a picture by hand.
+        let pool = |app: &mut App, impostor_shadows: bool| {
+            let lod = LodSettings { impostor_shadows, ..LodSettings::default() };
+            let mut pool = app
+                .world_mut()
+                .resource_scope(|_, mut meshes: Mut<Assets<Mesh>>| build_pool(&crate::presets::TreePreset::Oak.params(), 1, f32::INFINITY, &lod, &mut meshes));
+            pool.variants[0].impostor = Some(ImpostorAtlas {
+                albedo: Handle::default(),
+                surface: Handle::default(),
+                views: 8,
+                size: Vec2::new(8.0, 12.0),
+                center_y: 6.0,
+                material: Handle::default(),
+                quad: Handle::default(),
+            });
+            app.world_mut().resource_mut::<Assets<TreePool>>().add(pool)
+        };
+        let (quiet_pool, casting_pool) = (pool(&mut app, false), pool(&mut app, true));
+        let plain = app.world_mut().spawn(PooledTree { pool: quiet_pool, variant: 0 }).id();
+        let casting = app.world_mut().spawn(PooledTree { pool: casting_pool.clone(), variant: 0 }).id();
+        let kept_out = app.world_mut().spawn((PooledTree { pool: casting_pool, variant: 0 }, NotShadowCaster)).id();
+        app.update();
+        app.update();
+        // Whether a tree's impostor casts.
+        let casts = |app: &App, tree: Entity| {
+            let world = app.world();
+            let mut impostors = world
+                .get::<Children>(tree)
+                .expect("drawn")
+                .iter()
+                .filter(|&child| world.get::<MeshMaterial3d<ImpostorMaterial>>(child).is_some());
+            let impostor = impostors.next().expect("an impostor");
+            assert!(impostors.next().is_none());
+            world.get::<NotShadowCaster>(impostor).is_none()
+        };
+        assert!(!casts(&app, plain), "a pool's impostors cast no shadow unless it asks");
+        assert!(casts(&app, casting));
+        assert!(!casts(&app, kept_out), "a tree kept out of the shadows keeps its impostor out too");
+
+        // A tree let back into the shadows: its impostor casts again if its pool asks, not otherwise.
+        app.world_mut().entity_mut(plain).insert(NotShadowCaster);
+        app.update();
+        for tree in [plain, kept_out] {
+            app.world_mut().entity_mut(tree).remove::<NotShadowCaster>();
+        }
+        app.update();
+        assert!(!casts(&app, plain));
+        assert!(casts(&app, kept_out));
     }
 }
