@@ -5,6 +5,34 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.38.1] - 2026-10-13
+
+Pooled forests load three times faster (issue #66). A trace of 100 000 pooled oaks loading put
+most of the time in Bevy's `calculate_bounds`: it recomputes the box of every entity whose
+`Mesh3d` is new from all of its mesh's vertices, so every pooled tree's seven children walked
+meshes of thousands of vertices, and it overwrote the boxes the pool gives them.
+
+### Fixed
+
+- A pooled tree's children keep the pool's boxes (`NoAutoAabb`): its levels of detail their
+  level's, its impostor the box that reaches a crown's reach past the quad and five reaches up
+  (0.37.0) instead of the quad's own, which a camera looking down or a light could cull too soon.
+  A `ProceduralTree`'s own meshes still get Bevy's boxes, which follow their rebuilds.
+
+### Measured
+
+- **Loading** (`forest --trees 100000 --mode pool --offscreen --deterministic`, Apple M4 Pro, three
+  pairs with 0.38.0 run in alternating order on a machine loaded by other builds): the forest is
+  ready after 2.1 to 2.3 s instead of 6.7 to 6.8 s, its longest frame while loading 158 to 170 ms
+  instead of 302 to 321 ms; once in, it draws at 7.66 to 8.24 ms a frame against 7.91 to 8.29 ms.
+- **Look.** The 441 gallery scenarios render byte for byte as in 0.38.0 on the CPU and with
+  `--gpu` (no `ERROR`), and so do the nine clips and the playground's demo but four push and chop
+  frames at a mean of 0.000 of 255. Where impostors and coarse levels are drawn the boxes change
+  what is culled: twelve frames of the isometric demo differ at their left and right borders, by a
+  few pixels of leaves that swayed out of a tight box and are no longer cut away (a mean of 0.008),
+  and a pooled forest seen from above or from the side by isolated single pixels (a mean of 0.035
+  and 0.002), where a few more entities drawn reorder overlapping crowns; the trees are the same.
+
 ## [0.38.0] - 2026-10-13
 
 Pools built in the background (issue #63): `build_pool` builds a pool on all cores, and the frame
@@ -2222,6 +2250,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.38.1]: https://github.com/Ladvien/bevy_flora/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/Ladvien/bevy_flora/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/Ladvien/bevy_flora/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/Ladvien/bevy_flora/compare/v0.35.0...v0.36.0
