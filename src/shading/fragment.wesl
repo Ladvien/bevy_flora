@@ -110,10 +110,10 @@ fn fragment(
 }
 
     // The rain (none when dry, which leaves the surface as it was): wet bark darkens and turns
-    // glossy, a wet leaf glossier still. Then the season's snow over it (none in summer): on the
-    // side of a leaf card the camera sees, if that side faces up, and a dusting on every leaf, as
-    // much as the leaf sees of the sky; on the wood, by its own normal. A leaf under snow lets no
-    // light through.
+    // glossy, a wet leaf's colour grows richer. Then the season's snow over it (none in summer): on
+    // the side of a leaf card the camera sees, if that side faces up, and a dusting on every leaf,
+    // as much as the leaf sees of the sky; on the wood, by its own normal. A leaf under snow lets
+    // no light through.
 @if(FLORA_LEAF)
     wet_on(&pbr_input, 1.0);
 @else

@@ -336,18 +336,22 @@ impl FloraSeason {
 }
 
 /// How wet the trees are, 0 (dry, the default) to 1 (soaked): the game's rain, raised while it
-/// rains and lowered as the trees dry. Wet bark darkens and turns glossy; leaves, waxy, darken a
-/// little and turn glossier still; on every way a tree is drawn (pools and impostors included),
-/// and under snow, snow wins. Changing it writes one value of the shared buffer, no material, and
-/// costs nothing a frame.
+/// rains and lowered as the trees dry. Wet bark darkens and turns glossy; a wet leaf keeps its
+/// brightness and only its green grows richer; on every way a tree is drawn (pools and impostors
+/// included), and under snow, snow wins. Changing it writes one value of the shared buffer, no
+/// material, and costs nothing a frame.
 ///
 /// ```rust,no_run
 /// use bevy::prelude::*;
 /// use bevy_flora::FloraWetness;
 ///
+/// /// The game's weather.
+/// #[derive(Resource)]
+/// struct Raining(bool);
+///
 /// // A shower: wet in a minute, dry again in ten once it stops.
-/// fn rain(raining: bool, time: Res<Time>, mut wetness: ResMut<FloraWetness>) {
-///     let rate = if raining { 1.0 / 60.0 } else { -1.0 / 600.0 };
+/// fn rain(raining: Res<Raining>, time: Res<Time>, mut wetness: ResMut<FloraWetness>) {
+///     let rate = if raining.0 { 1.0 / 60.0 } else { -1.0 / 600.0 };
 ///     wetness.0 = (wetness.0 + rate * time.delta_secs()).clamp(0.0, 1.0);
 /// }
 /// ```
