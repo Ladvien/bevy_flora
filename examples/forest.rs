@@ -6,7 +6,7 @@
 //!     [--no-impostors] [--lod <lod1,lod2,impostor>]
 //!     [--sun <x,y,z>] [--wind <strength>] [--wind-dir <x,z>] [--gust <speed>]
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] [--ortho <view height>]
-//!     [--impostor-elevation <deg>] [--impostor-shadows]
+//!     [--impostor-elevation <deg>] [--impostor-shadows] [--background-pools]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>]
@@ -48,6 +48,8 @@
 //! levels of detail and impostors follow the zoom (`LodScale`). `--impostor-elevation <deg>` bakes
 //! the impostors from that far above the horizon (`LodSettings::impostor_elevation`, 10 by
 //! default) and `--impostor-shadows` lets them cast shadows (`LodSettings::impostor_shadows`).
+//! `--background-pools` builds the pools with `BackgroundPools` instead of `build_pool` at
+//! Startup; either way the loading report gives the longest frame while the forest came in.
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
 //! CPU, rebuilding every mesh each frame. `--background` builds those trees off the main thread
@@ -107,7 +109,8 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliagePusher,
+    BackgroundPools, BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWetness, FloraWind,
+    FoliagePusher,
     GpuGrowth, Growing,
     GustFront, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees,
     TreeAge, TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
@@ -192,6 +195,8 @@ struct Args {
     impostor_elevation: f32,
     /// Whether the pools' impostors cast shadows.
     impostor_shadows: bool,
+    /// Whether the pools are built in the background (`BackgroundPools`) instead of at Startup.
+    background_pools: bool,
     /// Strength of the wind, if not the library's default.
     wind: Option<f32>,
     /// Where the wind blows toward (world x and z), if not the library's default.
@@ -257,7 +262,7 @@ fn usage() -> ! {
          [--warmup-secs <s>] [--spacing <m>] [--no-impostors] [--lod <a,b,c>] \
          [--shadows <off|distance,cascades>] [--sun <x,y,z>] [--wind <strength>] \
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] [--ortho <view height>] \
-         [--impostor-elevation <deg>] [--impostor-shadows] \
+         [--impostor-elevation <deg>] [--impostor-shadows] [--background-pools] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] \
@@ -287,6 +292,7 @@ fn parse_args() -> Args {
         ortho: None,
         impostor_elevation: 10.0,
         impostor_shadows: false,
+        background_pools: false,
         wind: None,
         wind_dir: None,
         gust: None,
@@ -387,6 +393,7 @@ fn parse_args() -> Args {
             "--ortho" => args.ortho = Some(value(&mut it)),
             "--impostor-elevation" => args.impostor_elevation = value(&mut it),
             "--impostor-shadows" => args.impostor_shadows = true,
+            "--background-pools" => args.background_pools = true,
             "--wind" => args.wind = Some(value(&mut it)),
             "--wind-dir" => {
                 let list = it.next().unwrap_or_else(|| usage());
@@ -513,6 +520,9 @@ struct Bench {
     phase: Phase,
     /// When the trees all existed.
     loaded: Instant,
+    /// Start of the frame being loaded, and the longest frame while loading, seconds.
+    loading_frame: Instant,
+    longest_loading: f32,
     /// Start of the previous frame while measuring.
     last: Option<Instant>,
     /// Process CPU seconds (all threads) when measuring began.
@@ -583,6 +593,8 @@ fn main() {
             args,
             phase: Phase::Loading,
             loaded: Instant::now(),
+            loading_frame: Instant::now(),
+            longest_loading: 0.0,
             last: None,
             frames: Vec::new(),
             cpu_start: None,
@@ -617,6 +629,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut pools: ResMut<Assets<TreePool>>,
+    mut background: BackgroundPools,
 ) {
     let placing = Instant::now();
     let ground = ground(&bench.args);
@@ -768,13 +781,21 @@ fn setup(
         .collect();
     let pools: Vec<Handle<TreePool>> = if bench.args.mode == Mode::Pool {
         let started = Instant::now();
+        let in_background = bench.args.background_pools;
         let built: Vec<_> = bases
             .iter()
             .zip(&lods)
-            .map(|(base, lod)| pools.add(build_pool(base, VARIANTS, f32::INFINITY, lod, &mut meshes)))
+            .map(|(base, lod)| {
+                if in_background {
+                    background.build(base, VARIANTS, f32::INFINITY, lod)
+                } else {
+                    pools.add(build_pool(base, VARIANTS, f32::INFINITY, lod, &mut meshes))
+                }
+            })
             .collect();
         eprintln!(
-            "forest: built {} pool(s) of {VARIANTS} variants in {:.2} s",
+            "forest: {} {} pool(s) of {VARIANTS} variants in {:.2} s",
+            if in_background { "started" } else { "built" },
             built.len(),
             started.elapsed().as_secs_f32()
         );
@@ -1024,11 +1045,16 @@ fn drive(
     }
     match bench.phase {
         Phase::Loading => {
+            // The longest frame while loading: building the pools in the frame shows up here.
+            let now = Instant::now();
+            bench.longest_loading = bench.longest_loading.max((now - bench.loading_frame).as_secs_f32());
+            bench.loading_frame = now;
             if unfinished.is_empty() {
                 eprintln!(
-                    "forest: {} trees ready after {:.1} s",
+                    "forest: {} trees ready after {:.1} s, the longest frame {:.0} ms",
                     bench.placed,
-                    bench.loaded.elapsed().as_secs_f32()
+                    bench.loaded.elapsed().as_secs_f32(),
+                    bench.longest_loading * 1000.0
                 );
                 bench.loaded = Instant::now();
                 bench.phase = Phase::Warmup;

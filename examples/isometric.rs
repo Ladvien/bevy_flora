@@ -164,7 +164,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut pools: ResMut<Assets<TreePool>>,
+    mut pools: BackgroundPools,
     mut images: ResMut<Assets<Image>>,
     demo: Option<ResMut<Demo>>,
 ) {
@@ -189,13 +189,12 @@ fn setup(
     // A pool per species, scattered in groves, and a path kept clear along the screen's x axis
     // through the forest's middle. The impostors are pictures taken from the camera's own pitch, so
     // the far trees show their crowns from above as the near ones do, and they cast shadows, so the
-    // far forest stands on its shadows as the near one does.
+    // far forest stands on its shadows as the near one does. The pools are built in the background:
+    // the first frames are drawn at once, and the forest appears when its pools are ready.
     let species = [TreePreset::Pine, TreePreset::Spruce, TreePreset::Oak, TreePreset::Maple];
     let lod = LodSettings { impostor_elevation: PITCH, impostor_shadows: true, ..default() };
-    let pools: Vec<Handle<TreePool>> = species
-        .iter()
-        .map(|preset| pools.add(build_pool(&preset.params(), 4, f32::INFINITY, &lod, &mut meshes)))
-        .collect();
+    let pools: Vec<Handle<TreePool>> =
+        species.iter().map(|preset| pools.build(&preset.params(), 4, f32::INFINITY, &lod)).collect();
     let forest = Scatter {
         seed: 3,
         species: vec![3.0, 2.0, 2.0, 1.0],

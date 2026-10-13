@@ -48,10 +48,15 @@
 //! }
 //! ```
 
-use bevy::asset::{Asset, AssetApp, AssetServer, Assets, Handle};
+use std::sync::Arc;
+
+use bevy::asset::{Asset, AssetApp, AssetHandleProvider, AssetServer, Assets, Handle};
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::{Visibility, VisibilityRange};
 use bevy::ecs::prelude::*;
+use bevy::ecs::system::SystemParam;
+use bevy::tasks::futures::check_ready;
+use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool};
 use bevy::light::NotShadowCaster;
 use bevy::log::warn;
 use bevy::math::{Vec3, Vec3A, Vec3Swizzles};
@@ -199,7 +204,8 @@ pub(crate) struct PooledTreeSpawned;
 /// `age` (`f32::INFINITY` for mature trees). The meshes are added to `meshes`; the
 /// materials are made by the plugin when the pool is first drawn.
 ///
-/// The variants are built on all cores, which takes the time of one or two trees.
+/// The variants are built on all cores, which takes the time of one or two trees, on the calling
+/// thread: to keep a game's first frames free of it, build with [`BackgroundPools`] instead.
 /// Impostors are not part of the result: the plugin bakes them once the pool is
 /// an asset, see [`PoolVariant::impostor`].
 ///
@@ -213,9 +219,25 @@ pub fn build_pool(
     lod: &LodSettings,
     meshes: &mut Assets<Mesh>,
 ) -> TreePool {
-    let built = build_variants(params, variants.max(1), age, lod);
-    let mut add = |data: MeshData| meshes.add(data.into_bevy_mesh());
-    let variants = built
+    assemble_pool(params, age, lod, build_pool_parts(params, variants, age, lod), meshes)
+}
+
+/// One variant as the build makes it, before its meshes are assets.
+struct BuiltVariant {
+    lods: [Mesh; 3],
+    leaves: [Option<Mesh>; 3],
+    bounds: [Aabb; 3],
+    height: f32,
+    radius: f32,
+    shape: TreeShape,
+    skeleton: Skeleton,
+}
+
+/// The work of a pool but for its assets: every variant's levels of detail as meshes, their
+/// bounds, shapes and skeletons. It needs no world, so [`BackgroundPools`] runs it off the main
+/// thread.
+fn build_pool_parts(params: &TreeParams, variants: u32, age: f32, lod: &LodSettings) -> Vec<BuiltVariant> {
+    build_variants(params, variants.max(1), age, lod)
         .into_iter()
         .map(|lods| {
             assert!(
@@ -225,29 +247,53 @@ pub fn build_pool(
             let (height, radius) = reach(&lods[0]);
             let bounds = lods.each_ref().map(bounds_of);
             let [fine, middle, coarse] = lods;
-            let wood = [add(fine.trunk), add(middle.trunk), add(coarse.trunk)];
             // A flowering tree's flowers go in its leaf mesh: a pooled tree's flowers are hidden
             // by the shaders out of season, not left out (a pool's trees are mostly the coarser
             // levels and impostors, and one entity fewer per level keeps a big forest cheap).
-            let mut leaves = |mut data: MeshData, flowers: MeshData| {
+            let leaves = |mut data: MeshData, flowers: MeshData| {
                 data.extend(&flowers);
-                (!data.is_empty()).then(|| add(data))
+                (!data.is_empty()).then(|| data.into_bevy_mesh())
             };
-            let leaves = [
-                leaves(fine.foliage, fine.flowers),
-                leaves(middle.foliage, middle.flowers),
-                leaves(coarse.foliage, coarse.flowers),
-            ];
             let shape = TreeShape::from_skeleton(&fine.skeleton, params, TreeShape::DEFAULT_LIMB_RADIUS);
-            PoolVariant {
-                lods: wood,
-                leaves,
+            BuiltVariant {
+                lods: [fine.trunk.into_bevy_mesh(), middle.trunk.into_bevy_mesh(), coarse.trunk.into_bevy_mesh()],
+                leaves: [
+                    leaves(fine.foliage, fine.flowers),
+                    leaves(middle.foliage, middle.flowers),
+                    leaves(coarse.foliage, coarse.flowers),
+                ],
                 bounds,
-                impostor: None,
                 height,
                 radius,
                 shape,
                 skeleton: fine.skeleton,
+            }
+        })
+        .collect()
+}
+
+/// The pool of `parts`: their meshes added to `meshes`, wood then leaves for each variant.
+fn assemble_pool(
+    params: &TreeParams,
+    age: f32,
+    lod: &LodSettings,
+    parts: Vec<BuiltVariant>,
+    meshes: &mut Assets<Mesh>,
+) -> TreePool {
+    let variants = parts
+        .into_iter()
+        .map(|part| {
+            let lods = part.lods.map(|mesh| meshes.add(mesh));
+            let leaves = part.leaves.map(|mesh| mesh.map(|mesh| meshes.add(mesh)));
+            PoolVariant {
+                lods,
+                leaves,
+                bounds: part.bounds,
+                impostor: None,
+                height: part.height,
+                radius: part.radius,
+                shape: part.shape,
+                skeleton: part.skeleton,
             }
         })
         .collect();
@@ -258,6 +304,108 @@ pub fn build_pool(
         materials: None,
         variants,
     }
+}
+
+/// Builds tree pools in the background, on Bevy's async compute pool, instead of in the frame:
+/// a game that builds its species' pools at load, or a new biome's as the player walks into it,
+/// does not stall while they are built. [`build`](Self::build) hands back the pool's handle at
+/// once; the plugin inserts the pool a few frames later. [`PooledTree`]s placed from the handle
+/// meanwhile appear once it is there (and once its impostors are baked), as they do for any pool
+/// not yet added. The pool is the one [`build_pool`] makes from the same arguments, mesh for
+/// mesh. Dropping every handle to a pool still being built cancels the build.
+///
+/// ```rust,no_run
+/// use bevy::prelude::*;
+/// use bevy_flora::prelude::*;
+///
+/// fn forest(mut commands: Commands, mut pools: BackgroundPools) {
+///     let oak = pools.build(&TreePreset::Oak.params(), 8, f32::INFINITY, &LodSettings::default());
+///     for i in 0..10_000u32 {
+///         let at = Vec3::new((i % 100) as f32 * 8.0, 0.0, (i / 100) as f32 * 8.0);
+///         commands.spawn((PooledTree { pool: oak.clone(), variant: i }, Transform::from_translation(at)));
+///     }
+/// }
+/// ```
+///
+/// It holds no `Assets<TreePool>`, so a system can take it next to a `ResMut<Assets<TreePool>>`.
+///
+/// # Panics
+///
+/// [`build`](Self::build) panics if the app has no `AssetPlugin` (pools are assets).
+#[derive(SystemParam)]
+pub struct BackgroundPools<'w> {
+    pending: ResMut<'w, PendingPools>,
+}
+
+impl BackgroundPools<'_> {
+    /// Build a pool of `variants` trees from `params` at `age` with `lod`, as [`build_pool`]
+    /// does, in the background: its handle now, the pool once it is built.
+    pub fn build(&mut self, params: &TreeParams, variants: u32, age: f32, lod: &LodSettings) -> Handle<TreePool> {
+        let provider = self.pending.provider.as_ref();
+        let handle = provider
+            .expect("BackgroundPools: tree pools are assets, and the app has no AssetPlugin")
+            .reserve_handle()
+            .typed::<TreePool>();
+        let (built_from, built_with) = (params.clone(), *lod);
+        let task = AsyncComputeTaskPool::get_or_init(TaskPool::default)
+            .spawn(async move { build_pool_parts(&built_from, variants, age, &built_with) });
+        self.pending.builds.push(PendingPool { handle: handle.clone(), params: params.clone(), age, lod: *lod, task });
+        handle
+    }
+
+    /// How many pools are still being built.
+    pub fn pending(&self) -> usize {
+        self.pending.builds.len()
+    }
+}
+
+/// The pools [`BackgroundPools`] is building, and the pool assets' handle provider (so building
+/// one does not borrow `Assets<TreePool>`, which the system calling it may well hold).
+#[derive(Resource, Default)]
+pub(crate) struct PendingPools {
+    provider: Option<AssetHandleProvider>,
+    builds: Vec<PendingPool>,
+}
+
+/// A pool being built: the handle it will be inserted under (the plugin's own strong reference,
+/// which tells it when the game has dropped every other), what it is built from, and the task.
+struct PendingPool {
+    handle: Handle<TreePool>,
+    params: TreeParams,
+    age: f32,
+    lod: LodSettings,
+    task: Task<Vec<BuiltVariant>>,
+}
+
+impl PendingPool {
+    /// Whether the plugin holds the only handle left to the pool: the game has dropped it.
+    fn forgotten(&self) -> bool {
+        matches!(&self.handle, Handle::Strong(handle) if Arc::strong_count(handle) == 1)
+    }
+}
+
+/// Insert the pools built in the background whose builds are done, their meshes added now; drop
+/// the builds of pools the game has let go of.
+pub(crate) fn finish_background_pools(
+    mut pending: ResMut<PendingPools>,
+    mut pools: ResMut<Assets<TreePool>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    if pending.builds.is_empty() {
+        return;
+    }
+    pending.builds.retain_mut(|build| {
+        if build.forgotten() {
+            return false;
+        }
+        let Some(parts) = check_ready(&mut build.task) else {
+            return true;
+        };
+        let pool = assemble_pool(&build.params, build.age, &build.lod, parts, &mut meshes);
+        // The handle was reserved for this pool and is still held: inserting it cannot fail.
+        let _ = pools.insert(build.handle.id(), pool);
+        false
+    });
 }
 
 impl TreePool {
@@ -713,6 +861,9 @@ fn add_asset_types(app: &mut bevy::app::App) {
     {
         app.init_asset::<TreePool>();
     }
+    if let Some(provider) = app.world().get_resource::<Assets<TreePool>>().map(Assets::get_handle_provider) {
+        app.world_mut().get_resource_or_init::<PendingPools>().provider = Some(provider);
+    }
 }
 
 #[cfg(test)]
@@ -907,6 +1058,79 @@ mod tests {
             .unwrap();
         app.update();
         assert!(!app.world().get::<Children>(tree).unwrap().is_empty());
+    }
+
+    /// Update `app` until `done` holds (a background build), a few seconds at most.
+    fn update_until(app: &mut App, done: impl Fn(&App) -> bool) {
+        for _ in 0..4000 {
+            app.update();
+            if done(app) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the background build never finished");
+    }
+
+    #[test]
+    fn a_pool_built_in_the_background_is_the_pool_built_in_the_frame() {
+        use bevy::ecs::system::RunSystemOnce;
+        let params = TreePreset::Apple.params();
+        let lod = LodSettings::default();
+        let mut app = app();
+        let pool = app
+            .world_mut()
+            .run_system_once(move |mut pools: BackgroundPools| pools.build(&TreePreset::Apple.params(), 2, 6.0, &lod))
+            .unwrap();
+        let tree = app.world_mut().spawn(PooledTree { pool: pool.clone(), variant: 1 }).id();
+        update_until(&mut app, |app| app.world().resource::<Assets<TreePool>>().contains(&pool));
+        assert_eq!(app.world().resource::<PendingPools>().builds.len(), 0);
+        app.update();
+        assert!(!app.world().get::<Children>(tree).unwrap().is_empty(), "the tree appears once its pool does");
+
+        let in_frame = app
+            .world_mut()
+            .resource_scope(|_, mut meshes: Mut<Assets<Mesh>>| build_pool(&params, 2, 6.0, &lod, &mut meshes));
+        let pools = app.world().resource::<Assets<TreePool>>();
+        let meshes = app.world().resource::<Assets<Mesh>>();
+        let background = pools.get(&pool).unwrap();
+        let same = |a: &Handle<Mesh>, b: &Handle<Mesh>| {
+            let (a, b) = (meshes.get(a).unwrap(), meshes.get(b).unwrap());
+            a.attributes().count() == b.attributes().count()
+                && a.attributes()
+                    .all(|(attribute, values)| b.attribute(attribute.id).map(|v| v.get_bytes()) == Some(values.get_bytes()))
+                && a.indices() == b.indices()
+        };
+        assert_eq!((background.age, background.variants.len()), (6.0, 2));
+        for (a, b) in background.variants.iter().zip(&in_frame.variants) {
+            assert!(a.lods.iter().zip(&b.lods).all(|(a, b)| same(a, b)));
+            assert!(a.leaves.iter().zip(&b.leaves).all(|(a, b)| match (a, b) {
+                (Some(a), Some(b)) => same(a, b),
+                (a, b) => a.is_none() && b.is_none(),
+            }));
+            assert_eq!((a.bounds, a.height, a.radius), (b.bounds, b.height, b.radius));
+            assert_eq!(a.shape, b.shape);
+            assert_eq!(a.skeleton.nodes.len(), b.skeleton.nodes.len());
+        }
+    }
+
+    #[test]
+    fn dropping_a_pool_built_in_the_background_cancels_its_build() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = app();
+        let pool = app
+            .world_mut()
+            .run_system_once(|mut pools: BackgroundPools| {
+                pools.build(&TreePreset::Oak.params(), 4, f32::INFINITY, &LodSettings::default())
+            })
+            .unwrap();
+        assert_eq!(app.world().resource::<PendingPools>().builds.len(), 1);
+        drop(pool);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<PendingPools>().builds.len(), 0);
+        assert_eq!(app.world().resource::<Assets<TreePool>>().len(), 0);
     }
 
     #[test]

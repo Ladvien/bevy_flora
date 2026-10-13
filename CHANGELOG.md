@@ -5,6 +5,44 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.38.0] - 2026-10-13
+
+Pools built in the background (issue #63): `build_pool` builds a pool on all cores, and the frame
+that calls it waits, which a game building its species at load, or a new biome's as the player
+walks into it, feels. `BackgroundPools` builds them off the main thread. Nothing changes for code
+that does not use it.
+
+### Added
+
+- `BackgroundPools`, a system parameter (in the prelude): `build(params, variants, age, &lod)`
+  hands back a `Handle<TreePool>` at once and builds the pool on Bevy's async compute pool; the
+  plugin adds its meshes and inserts the pool when the build is done, a few frames later.
+  `PooledTree`s placed from the handle meanwhile appear then (and once its impostors are baked), as
+  they do for any pool not yet added. The pool is the one `build_pool` makes from the same
+  arguments, mesh for mesh; `pending()` counts the pools still building, and dropping every handle
+  to a pool still building cancels it. It borrows no `Assets<TreePool>`, so a system can take it
+  next to a `ResMut<Assets<TreePool>>`.
+- `forest --background-pools` builds the pools with it; the loading report gives the longest frame
+  while the forest came in.
+
+### Changed
+
+- The `isometric` example builds its pools with `BackgroundPools` (its clip is the same frame for
+  frame).
+- `build_pool` is now the background build's two halves run in the frame (the work that needs no
+  world, then the meshes added): the same pool as before.
+
+### Measured
+
+- **What a pool costs the frame that builds it** (`build_pool`, best of three, Apple M4 Pro, 14
+  cores): an eight-variant pool 0.5 ms (the dead tree) to 14.4 ms (the apple tree), 9.0 ms for the
+  oak and 116 ms for all eighteen presets; one variant alone 0.1 to 8.7 ms (38.5 ms for all), so a
+  machine with fewer cores waits longer and wasm, which builds the variants one after the other,
+  about 0.3 s for every preset's eight variants. With `BackgroundPools` the frame pays for adding
+  the meshes only.
+- **Look.** LOOK
+- **Cost.** COST
+
 ## [0.37.0] - 2026-10-13
 
 Impostors for cameras that look down (issue #62, D-070 in `qa/visual_findings.md`): under the
@@ -2173,6 +2211,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.38.0]: https://github.com/Ladvien/bevy_flora/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/Ladvien/bevy_flora/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/Ladvien/bevy_flora/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/Ladvien/bevy_flora/compare/v0.34.0...v0.35.0

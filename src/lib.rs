@@ -74,6 +74,10 @@
 //! }
 //! ```
 //!
+//! A forest's pools build off the main thread too: [`BackgroundPools`] hands back a pool's handle
+//! at once and adds the pool a few frames later (an eight-variant pool takes 0.5 to 14 ms on all
+//! of an Apple M4 Pro's cores, longer on fewer cores and about 0.3 s for every preset on wasm).
+//!
 //! # Distant trees for less: [`TreeLod`]
 //!
 //! A [`ProceduralTree`] is drawn in full at every distance. With [`TreeLod`] it is drawn as a
@@ -407,7 +411,7 @@ pub use params::{
 };
 pub use pipeline::{TreeMeshes, build_tree};
 pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeMature, TreeRender};
-pub use pool::{LodScale, PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
+pub use pool::{BackgroundPools, LodScale, PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
 pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
@@ -429,7 +433,8 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 /// shakes, felling, the ground, the gameplay shape and the forest scatter.
 pub mod prelude {
     pub use crate::{
-        BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
+        BackgroundPools, BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled,
+        FloraFire,
         FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
         Burnt, FallenFruit, FallingFruit, FruitFell, FruitParams, TreeBurnt, TreeFruit,
         GpuGrowth, Growing, GustFront,
