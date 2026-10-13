@@ -2,7 +2,7 @@
 //! distance, from every side, at several zooms and in a row of frames.
 //!
 //! ```text
-//! cargo run --release --example inspect -- --out <dir> [--preset <name>] [--mode pool|tree]
+//! cargo run --release --example inspect -- --out <dir> [--preset <name>] [--mode pool|tree|deadfall]
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
@@ -10,6 +10,7 @@
 //!     [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
 //!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]
+//!     [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -18,6 +19,10 @@
 //! camera backs off from the first to the second in `n` steps, spaced geometrically, so the
 //! tree passes through every level of detail and into the impostor. Each frame is written to
 //! `<dir>/frame_<nnnn>.png` and the camera's distance and field of view to `<dir>/frames.tsv`.
+//!
+//! `--mode deadfall` draws pooled deadfall instead of one tree ([`PooledDeadfall`](bevy_flora::PooledDeadfall)):
+//! two variants each of a stump, a tree lying where it fell and a bucked one, in rows 12 m apart, the
+//! fallen toward +x (down a `--slope`); `--preset`, `--hull` and `--prism` choose the tree.
 //!
 //! `--mode pool` (the default) draws the tree from a [`TreePool`](bevy_flora::TreePool), as a
 //! forest would, so the level of detail follows the distance (`--lod` moves the switches,
@@ -61,6 +66,13 @@
 //! (radius 0.45 m by default), and walks it at (vx, vz) m/s once the tree is ready, photographed
 //! every quarter of a second: the leaves and thin stems it walks through give way.
 //!
+//! `--hull <tiers>,<sides>[,<lift>[,<jitter>]]` (with `--branches`: every branch drawn, not the trunk
+//! chain only, `CrownStyle::Hull::trunk_only`) draws the crown as a faceted hull of that many
+//! stacked cones ([`CrownStyle::Hull`](bevy_flora::CrownStyle), lift 0.2 and jitter 1 by default)
+//! and `--prism <sides>` the wood as flat-shaded prisms ([`TrunkStyle::Prism`](bevy_flora::TrunkStyle)):
+//! `--preset spruce --hull 5,7 --prism 5` is the stylised winter conifer, and every other option
+//! (`--fell`, `--notch`, `--burn`, `--season`, `--drop`, levels of detail) applies to it.
+//!
 //! The clock steps a fixed 1/60 s per frame, the wind is off unless `--wind` says otherwise, and
 //! nothing depends on the wall clock, so two runs write the same frames.
 
@@ -76,9 +88,10 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    BuckTree, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWetness, FloraWind,
-    FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeLod, TreeNotch,
-    TreePool, TreePreset, TreeShape, build_pool, build_tree,
+    BuckTree, CrownStyle, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason,
+    FloraWetness, FloraWind, FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge,
+    TreeLod, TreeNotch, TreePool, TreePreset, TreeShape, TrunkStyle, build_pool, build_pool_with_deadfall, build_tree,
+    DeadfallKind, DeadfallSettings, PooledDeadfall,
 };
 
 /// Frames rendered before the first photograph so the pool's impostor is baked and shadows exist.
@@ -95,6 +108,8 @@ fn ticks(seconds: f32) -> u32 {
 enum Mode {
     Pool,
     Tree,
+    /// Pooled deadfall (`PooledDeadfall`): a stump, a lying tree and a bucked one, two variants of each.
+    Deadfall,
 }
 
 struct Args {
@@ -153,6 +168,12 @@ struct Args {
     /// An axe's notch: the bearing of the side it is cut from (degrees from +x toward +z), its
     /// depth (share of the trunk's width) and the height of its floor.
     notch: Option<(f32, f32, f32)>,
+    /// A faceted hull crown: tiers, sides, lift and jitter (`CrownStyle::Hull`).
+    hull: Option<(u32, u32, f32, f32)>,
+    /// A prism trunk with this many sides (`TrunkStyle::Prism`).
+    prism: Option<u32>,
+    /// With `--hull`: draw every branch, not the trunk chain only.
+    branches: Option<()>,
 }
 
 fn usage() -> ! {
@@ -163,7 +184,8 @@ fn usage() -> ! {
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
-         [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]"
+         [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]] \
+         [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches]"
     );
     std::process::exit(2);
 }
@@ -208,6 +230,9 @@ fn parse_args() -> Args {
         burn: None,
         push: None,
         notch: None,
+        hull: None,
+        prism: None,
+        branches: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -228,6 +253,7 @@ fn parse_args() -> Args {
                 args.mode = match it.next().as_deref() {
                     Some("pool") => Mode::Pool,
                     Some("tree") => Mode::Tree,
+                    Some("deadfall") => Mode::Deadfall,
                     _ => usage(),
                 }
             }
@@ -327,6 +353,17 @@ fn parse_args() -> Args {
                     _ => usage(),
                 };
             }
+            "--hull" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.hull = match p[..] {
+                    [tiers, sides] => Some((tiers as u32, sides as u32, 0.2, 1.0)),
+                    [tiers, sides, lift] => Some((tiers as u32, sides as u32, lift, 1.0)),
+                    [tiers, sides, lift, jitter] => Some((tiers as u32, sides as u32, lift, jitter)),
+                    _ => usage(),
+                };
+            }
+            "--branches" => args.branches = Some(()),
+            "--prism" => args.prism = Some(value(&mut it)),
             "--notch" => {
                 let p = floats(&it.next().unwrap_or_else(|| usage()));
                 args.notch = match p[..] {
@@ -516,6 +553,12 @@ fn setup(
     let mut params = shoot.args.preset.params();
     params.seed = shoot.args.seed;
     params.style = shoot.args.style;
+    if let Some((tiers, sides, lift, jitter)) = shoot.args.hull {
+        params.crown = CrownStyle::Hull { tiers, sides, lift, jitter, trunk_only: shoot.args.branches.is_none() };
+    }
+    if let Some(sides) = shoot.args.prism {
+        params.trunk_style = TrunkStyle::Prism { sides };
+    }
     let mature = build_tree(&params, shoot.args.age);
     shoot.height = mature
         .trunk
@@ -578,6 +621,35 @@ fn setup(
         Mode::Pool => {
             let pool = pools.add(build_pool(&params, 1, shoot.args.age, &lod, &mut meshes));
             commands.spawn((PooledTree { pool, variant: 0 }, Transform::from_xyz(0.0, shoot.base, 0.0))).id()
+        }
+        Mode::Deadfall => {
+            let pool = pools.add(build_pool_with_deadfall(
+                &params,
+                2,
+                shoot.args.age,
+                &lod,
+                &DeadfallSettings::default(),
+                &mut meshes,
+            ));
+            // Down the slope (it falls toward +x) or toward +x on flat ground; a row of each kind.
+            let direction = Vec2::X;
+            let kinds = [
+                DeadfallKind::Stump,
+                DeadfallKind::Lying { direction },
+                DeadfallKind::Bucked { direction },
+            ];
+            let mut first = None;
+            for (row, kind) in kinds.into_iter().enumerate() {
+                for variant in 0..2u32 {
+                    let at = Vec2::new(variant as f32 * 14.0, (row as f32 - 1.0) * 12.0);
+                    let y = shoot.ground.footing(at, params.base_radius());
+                    let id = commands
+                        .spawn((PooledDeadfall { pool: pool.clone(), variant, kind }, Transform::from_xyz(at.x, y, at.y)))
+                        .id();
+                    first.get_or_insert(id);
+                }
+            }
+            first.expect("deadfall spawned")
         }
         Mode::Tree => {
             let at = Transform::from_xyz(0.0, shoot.base, 0.0);

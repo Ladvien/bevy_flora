@@ -118,6 +118,24 @@
 //! a slope all round instead of floating on its downhill side, and as a resource it is what
 //! felled trees are cut above and land on; see [`ground`].
 //!
+//! # A world that is not in metres: [`FloraUnits`]
+//!
+//! Trees are built in metres and a game scales them to its world with a `Transform`. If the world's
+//! unit is not the metre (a foot, say), insert [`FloraUnits`] with the number of world units to a
+//! metre, and everything the crate measures in the world follows it: how fast a tree falls and a
+//! leaf drifts, how wide a gust is, how far a fire reaches, the pusher's size, the see-through
+//! radius and the distances the levels of detail change at. Fields documented as metres are
+//! scaled by it; positions and sizes that address the world are in world units; see [`units`].
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::FloraUnits;
+//!
+//! fn setup(mut commands: Commands) {
+//!     commands.insert_resource(FloraUnits { units_per_metre: 3.2808 });
+//! }
+//! ```
+//!
 //! # Leaf shading and wind
 //!
 //! The plugin draws trees with [`FloraMaterial`]: a darker, glossier upper side of
@@ -157,6 +175,15 @@
 //! procedural outline and get veins grown by space colonisation ([`venation`]), drawn from one
 //! small image every such leaf shares. Both need the `textures` feature only for the scans: the
 //! veins are grown at run time.
+//!
+//! # Low-poly conifers: hull crowns and prism trunks
+//!
+//! [`TreeParams::crown`] ([`CrownStyle`]) can draw the crown as one faceted hull instead of leaf
+//! cards: `CrownStyle::Hull { tiers, sides, lift, jitter, trunk_only }` wraps a stack of cones round the leaf
+//! cloud ([`crown_hull`]), `tiers * sides * 2` flat triangles that read as a few big planes.
+//! [`TreeParams::trunk_style`] ([`TrunkStyle`]) meshes the wood as flat-shaded prisms. Both work
+//! through every way a tree is drawn (pools, levels of detail, impostors, felling, fire, snow) but
+//! `GpuGrowth`, which builds such a tree on the CPU ([`TreeParams::gpu_growable`]).
 //!
 //! # Looks: natural, painterly, toon
 //!
@@ -344,6 +371,12 @@
 //! shadow maps and other cameras keep the whole trees. Nothing carries the fade while no camera
 //! has it.
 //!
+//! # Deadfall on the forest floor
+//!
+//! A pool built with [`build_pool_with_deadfall`] also holds each variant cut as [`FellTree`] and
+//! [`BuckTree`] would cut it, and a [`PooledDeadfall`] (a stump, a tree lying where it fell or
+//! bucked logs) is placed from it for the cost of a pooled tree; see [`deadfall`].
+//!
 //! # Walking through undergrowth
 //!
 //! A [`FoliagePusher`] on the player, an NPC or a cart pushes the leaves and thin stems it walks
@@ -362,6 +395,8 @@
 
 pub mod background;
 pub mod crown;
+pub mod crown_hull;
+pub mod deadfall;
 pub mod falling;
 pub mod felling;
 pub mod fire;
@@ -380,6 +415,7 @@ pub mod plugin;
 pub mod pool;
 pub mod presets;
 pub mod push;
+pub mod recolor;
 pub mod rng;
 pub mod scatter;
 pub mod see_through;
@@ -388,10 +424,12 @@ pub mod skeleton;
 pub mod shape;
 mod textures;
 pub mod tree_asset;
+pub mod units;
 pub mod venation;
 
 pub use background::BuildInBackground;
 pub use crown::CrownShape;
+pub use deadfall::{Deadfall, DeadfallKind, DeadfallSettings, PoolLog, PooledDeadfall};
 pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeNotch, TreeStump};
 pub use fire::{BURNT, Burnt, FireCell, FireSpread, FloraFire, TreeBurnt};
@@ -401,17 +439,22 @@ pub use ground::FloraGround;
 pub use growth::GrowthParams;
 pub use harvest::{FallenFruit, FallingFruit, Fruit, FruitFell, TreeFruit};
 pub use index::{FloraIndex, IndexedTree, TreeHit};
-pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial};
+pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial, ImpostorTint};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
 pub use mesh::MeshData;
 pub use params::{
-    BarkParams, BarkScan, BranchParams, FoliageParams, FoliagePlacement, FruitParams, LeafOrientation, LeafScan,
-    LeafShading, LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams, TrunkTermination,
+    BarkParams, BarkScan, BranchParams, CrownStyle, FoliageParams, FoliagePlacement, FruitParams, LeafOrientation,
+    LeafScan, LeafShading, LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams,
+    TrunkStyle, TrunkTermination,
     WindResponse,
 };
 pub use pipeline::{TreeMeshes, build_tree};
 pub use plugin::{FloraPlugin, Growing, ProceduralTree, TreeAge, TreeGenerated, TreeMature, TreeRender};
-pub use pool::{BackgroundPools, LodScale, PoolMaterials, PoolVariant, PooledTree, TreePool, build_pool};
+pub use pool::{
+    BackgroundPools, LodScale, PoolColors, PoolMaterials, PoolVariant, PooledLook, PooledTree, RecolorPool, TreePool,
+    build_pool, build_pool_with_deadfall,
+};
+pub use recolor::RecolorTree;
 pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
@@ -426,6 +469,7 @@ pub use shape::{TreeShape, WoodCapsule};
 pub use tree_asset::ProceduralTreeAsset;
 #[cfg(feature = "ron")]
 pub use tree_asset::{TreeFileError, TreeParamsLoader};
+pub use units::FloraUnits;
 pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 
 /// What a game usually needs, in one `use bevy_flora::prelude::*;`: the plugin, the tree, pool and
@@ -435,11 +479,11 @@ pub mod prelude {
     pub use crate::{
         BackgroundPools, BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled,
         FloraFire,
-        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
+        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraUnits, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
         Burnt, FallenFruit, FallingFruit, FruitFell, FruitParams, TreeBurnt, TreeFruit,
         GpuGrowth, Growing, GustFront,
-        LeafBurst, LeafScan, LodDistances, LodScale, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset,
-        RenderStyle,
+        LeafBurst, LeafScan, LodDistances, LodScale, LodSettings, PoolColors, PooledLook, PooledTree, ProceduralTree,
+        ProceduralTreeAsset, RecolorPool, RecolorTree, RenderStyle, CrownStyle, TrunkStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
         TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
         WindResponse, WoodCapsule, build_pool,
