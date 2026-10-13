@@ -5,6 +5,73 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.20.0] - 2026-10-12
+
+Spring blossom. Flowering trees come into blossom in spring, one flower at a time, on every way a
+tree is drawn, and a new `Cherry` preset blossoms pale pink on bare branches before its leaves
+come back. Nothing else is drawn differently, and a bare tree's fallen leaves cost less.
+`FloraSeason`, `FoliageParams`, `TreeMeshes` and `FloraUniform` gain a field and `TreePreset` a
+variant, which breaks struct literals and exhaustive matches, hence the minor bump.
+
+### Added
+
+- **`FoliageParams::blossom: Option<Color>`**: a flowering tree has a five-petalled flower at
+  every leaf's stem, 0.8 of the leaf's length across, facing out and up, in this colour (with
+  the leaf's own variation and a darker centre). The flowers sway and rustle with the leaves,
+  cast shadows, grow on `GpuGrowth` and thin out on a pool's coarser levels, where their petals
+  are simpler; impostors paint them over their picture in patches. Petals are not given the leaf
+  scan, veins or gloss, and light through them takes their own colour.
+- **Flowers out of season cost nothing.** They are a mesh of their own, `TreeMeshes::flowers`,
+  drawn on a third child of a `ProceduralTree` or `GpuGrowth` tree (`TreeRender::flower_entity`)
+  with the leaf material, and the plugin hides that child while `FloraSeason::blossom` is 0.
+  Hidden in the vertex shader instead, as fallen leaves are, they made 1 000 individual cherries
+  cost 42 ms a frame all year against 23 ms without flowers. A pool keeps them in its leaf meshes
+  (the shaders hide them there): its trees are mostly coarse levels and impostors, and a fourth
+  entity per level would cost a big forest more than that. With plain `StandardMaterial`s a
+  tree's flowers are all out while the blossom is above 0 (a pool's all year).
+- **`FloraSeason::blossom`** (0 to 1): the share of the flowers out; they open one by one and
+  fall in the reverse order. `FloraSeason::BLOSSOM` is flowering trees in full blossom on bare
+  branches. It lives in the shared buffer's free slot, so it costs nothing per tree.
+- **`TreePreset::Cherry`**: a small spreading cherry, about 5 m high and wider than tall, with
+  the Sakura bark, birch-like leaves that turn orange-red, and pale pink blossom (17 presets; the
+  gallery renders 424 scenarios, the cherry's 17 among them, and its spring: in blossom, flowering
+  among half its leaves, the last flowers).
+- `inspect` and `forest` take the blossom as a fourth `--season` value.
+- README: blossom in "Seasons", with `docs/blossom.jpg`, a grove of cherries in blossom.
+
+### Changed
+
+- **`FloraSeason::of_year`'s spring**: flowering trees open their blossom from the year's turn
+  (after the snow has melted) to 0.015 and drop it from 0.03 to 0.07, and the leaves come back
+  from 0.02 to 0.07 (they came back from 0 to 0.05), so the blossom shows on bare branches.
+- **Fallen leaves cost less.** The vertex stages (main pass, prepass and both `GpuGrowth`
+  shaders) test for a fallen leaf or a closed flower first and return before the shake, the
+  flutter, the growth and the wind's bend; before, a bare tree did all of it and was clipped
+  after. Nothing is drawn differently.
+- `foliage_mesh` and `foliage_mesh_styled` give a flowering tree's flowers after its leaves, in
+  one mesh; `TreeMeshes::foliage` stays the leaves alone.
+- The grove clips (`docs/grove.gif`, `docs/seasons.gif`, `docs/shake.gif`) have a cherry in
+  place of the second birch, and the seasons clip spends a fifth of its length on the melt and
+  the blossom; its GIF adds 16 of the blossom's pinks to its palette, which had turned the
+  flowers white (the commands are in `capture_growth`'s docs and `AGENTS.md`). The fell clip's
+  trees stand a few centimetres further apart (the clips space their trees by the grove's mean
+  crown width, which the cherry widens).
+- `FloraUniform` has a `blossom` field: the blossom colour over the material's base colour, and
+  1, or zero for a tree without flowers and for wood.
+
+### Measured
+
+- **Look.** The 399 scenarios of 0.19.0 render as they did (a mean difference of 0.000 of 255),
+  the 25 cherry scenarios have no `stats.tsv` flag, and CPU against `--gpu` differs by a mean of
+  0.077 over all 424 (worst the young `AllBranches` shrub at 2.1, as before). The growth clip is
+  frame for frame 0.19.0's.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.19.0, two runs
+  each): 100 000 pooled oaks 7.43 and 7.63 ms (0.19.0: 7.52 and 7.60); 1 000 individual oaks 24.52
+  and 24.44 ms (24.25 and 24.19, +1%); 1 000 bare oaks in winter (`--season 1,1`) 18.86 and 18.86
+  ms (19.92 and 19.77, -5%: the early return). 1 000 individual cherries take 22.2 ms out of
+  season and 41.1 ms in full blossom (`blossom: None`: 22.8 ms), and 100 000 pooled cherries 7.56
+  and 7.59 ms. The cherry has 18 400 leaf and 28 500 flower vertices at level 0.
+
 ## [0.19.0] - 2026-10-12
 
 Bucking. A felled tree's trunk can be cut into logs that lie on the ground, ready to become
@@ -1326,6 +1393,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.20.0]: https://github.com/Ladvien/bevy_flora/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/Ladvien/bevy_flora/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Ladvien/bevy_flora/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Ladvien/bevy_flora/compare/v0.16.0...v0.17.0

@@ -10,7 +10,7 @@ import bevy_pbr::render::{
 import package::shading::common::{flutter_offset, shake_at, wind_bend};
 
 @if(FLORA_LEAF)
-import package::shading::common::{leaf_has_fallen, leaf_autumn_tint, FALLEN_LEAF_CLIP};
+import package::shading::common::{leaf_has_fallen, leaf_hidden, leaf_season_tint, FALLEN_LEAF_CLIP};
 
 @vertex
 fn vertex(
@@ -20,6 +20,20 @@ fn vertex(
 ) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
+    // A fallen leaf or a flower out of season draws nothing: its vertices leave the clip volume
+    // before any of the wind's work, so a hidden leaf costs little more than its fetch.
+@if(FLORA_LEAF && VERTEX_COLORS) {
+    if leaf_hidden(sway, vertex.color) {
+        out.position = FALLEN_LEAF_CLIP;
+        return out;
+    }
+}
+@if(FLORA_LEAF && !VERTEX_COLORS) {
+    if leaf_has_fallen(sway) {
+        out.position = FALLEN_LEAF_CLIP;
+        return out;
+    }
+}
     let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
 
     let origin = world_from_local[3].xyz;
@@ -40,11 +54,6 @@ fn vertex(
         1.0
     );
     out.position = position_world_to_clip(out.world_position.xyz);
-@if(FLORA_LEAF) {
-    if leaf_has_fallen(sway) {
-        out.position = FALLEN_LEAF_CLIP;
-    }
-}
 
 @if(VERTEX_UVS_A)
     out.uv = vertex.uv;
@@ -52,11 +61,13 @@ fn vertex(
 @if(VERTEX_UVS_B)
     out.uv_b = vertex.uv_b;
 
-    // A deciduous tree's leaves turn their autumn colour, each at its own moment.
+    // A deciduous tree's leaves turn their autumn colour, each at its own moment; a flowering
+    // tree's flowers wear the blossom colour. The alpha (1 a leaf, 0 a flower) tells the fragment
+    // stage which it draws; the opaque material ignores it otherwise.
 @if(VERTEX_COLORS && !FLORA_LEAF)
     out.color = vertex.color;
 @if(VERTEX_COLORS && FLORA_LEAF)
-    out.color = vec4<f32>(vertex.color.rgb * leaf_autumn_tint(sway), vertex.color.a);
+    out.color = vec4<f32>(vertex.color.rgb * leaf_season_tint(sway, vertex.color), vertex.color.a);
 
 @if(VERTEX_OUTPUT_INSTANCE_INDEX)
     out.instance_index = vertex_no_morph.instance_index;

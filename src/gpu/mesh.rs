@@ -15,7 +15,7 @@ use bevy::mesh::Mesh;
 
 use super::frame::{Class, Tag, placement, twisted};
 use super::state::GrowthState;
-use crate::foliage::{foliage_mesh_with, leaf_points_for_node};
+use crate::foliage::{FoliageMeshes, foliage_meshes, leaf_points_for_node};
 use crate::mesh::MeshData;
 use crate::mesh::branch::{WoodPiece, WoodSpan, skeleton_mesh_with, tube_rings};
 use crate::mesh::trunk::{TrunkPieces, root_bulge_unit, trunk_ring_count};
@@ -40,6 +40,10 @@ pub(crate) struct GrowthData {
     pub leaves: MeshData,
     /// One tag per leaf vertex.
     pub leaf_tags: Vec<Tag>,
+    /// A flowering tree's flowers; empty for a tree without flowers.
+    pub flowers: MeshData,
+    /// One tag per flower vertex: its leaf's.
+    pub flower_tags: Vec<Tag>,
     /// The mature state the offsets were measured against.
     pub state: GrowthState,
 }
@@ -68,13 +72,15 @@ pub(crate) fn build_growth_data(full: &Skeleton, params: &TreeParams) -> GrowthD
         tag_wood_span(span, &wood, &mature, params, &state, &mut wood_tags);
     }
 
-    let (leaves, leaf_tags) = tag_leaves(&mature, params, &state);
+    let [(leaves, leaf_tags), (flowers, flower_tags)] = tag_leaves(&mature, params, &state);
     GrowthData {
         wood,
         wood_tags,
         wood_spans,
         leaves,
         leaf_tags,
+        flowers,
+        flower_tags,
         state,
     }
 }
@@ -199,10 +205,12 @@ fn tag_trunk(span: &WoodSpan, wood: &MeshData, params: &TreeParams, state: &Grow
     assert_eq!(span.count as usize, at, "trunk mesh layout");
 }
 
-fn tag_leaves(mature: &Skeleton, params: &TreeParams, state: &GrowthState) -> (MeshData, Vec<Tag>) {
+/// The leaves and the flowers, each vertex tagged with its leaf's node and ordinal: a flower is
+/// measured against the same anchor as its leaf, so it grows and moves with it.
+fn tag_leaves(mature: &Skeleton, params: &TreeParams, state: &GrowthState) -> [(MeshData, Vec<Tag>); 2] {
     let foliage = &params.foliage;
     if !foliage.enabled {
-        return (MeshData::default(), Vec::new());
+        return Default::default();
     }
     let mut points = Vec::new();
     // (node index, first point, one past the last point)
@@ -214,32 +222,38 @@ fn tag_leaves(mature: &Skeleton, params: &TreeParams, state: &GrowthState) -> (M
             ranges.push((i, before, points.len()));
         }
     }
-    let mut firsts = Vec::new();
-    let leaves = foliage_mesh_with(&points, foliage, params.style, Some(&mut firsts));
-    let mut tags = vec![Tag::default(); leaves.positions.len()];
-    for (i, from, to) in ranges {
-        let node = &mature.nodes[i];
-        for p in from..to {
-            // A tip cluster hangs off the node's end; other leaves off the point they sit at.
-            let anchor = if foliage.placement == FoliagePlacement::TipClusters {
-                mature.end(i)
-            } else {
-                points[p].position
-            };
-            let vertices = firsts[p] as usize..firsts.get(p + 1).map_or(leaves.positions.len(), |&n| n as usize);
-            for v in vertices {
-                tags[v] = Tag {
-                    node: node.id,
-                    class: Class::Leaf,
-                    ordinal: (p - from) as u32,
-                    axis: (anchor - node.start) / node.length,
-                    ..Tag::default()
+    let FoliageMeshes { leaves, flowers, firsts } = foliage_meshes(&points, foliage, params.style);
+    let [leaf_firsts, flower_firsts] = firsts;
+    let tag = |mesh: MeshData, firsts: Vec<u32>| {
+        let mut tags = vec![Tag::default(); mesh.positions.len()];
+        if firsts.is_empty() {
+            return (mesh, tags);
+        }
+        for &(i, from, to) in &ranges {
+            let node = &mature.nodes[i];
+            for p in from..to {
+                // A tip cluster hangs off the node's end; other leaves off the point they sit at.
+                let anchor = if foliage.placement == FoliagePlacement::TipClusters {
+                    mature.end(i)
+                } else {
+                    points[p].position
                 };
-                measure(&mut tags[v], leaves.positions[v], state);
+                let vertices = firsts[p] as usize..firsts.get(p + 1).map_or(mesh.positions.len(), |&n| n as usize);
+                for v in vertices {
+                    tags[v] = Tag {
+                        node: node.id,
+                        class: Class::Leaf,
+                        ordinal: (p - from) as u32,
+                        axis: (anchor - node.start) / node.length,
+                        ..Tag::default()
+                    };
+                    measure(&mut tags[v], mesh.positions[v], state);
+                }
             }
         }
-    }
-    (leaves, tags)
+        (mesh, tags)
+    };
+    [tag(leaves, leaf_firsts), tag(flowers, flower_firsts)]
 }
 
 /// Pack `tags` into the three vertex attributes and add them to `mesh`.
@@ -254,9 +268,11 @@ fn with_tags(data: MeshData, tags: &[Tag]) -> Mesh {
 }
 
 impl GrowthData {
-    /// The wood and (when there are leaves) leaf meshes, with the growth attributes.
-    pub fn into_meshes(self) -> (Mesh, Option<Mesh>) {
+    /// The wood, (when there are leaves) leaf and (for a flowering tree) flower meshes, with the
+    /// growth attributes.
+    pub fn into_meshes(self) -> (Mesh, Option<Mesh>, Option<Mesh>) {
         let leaves = (!self.leaves.is_empty()).then(|| with_tags(self.leaves, &self.leaf_tags));
-        (with_tags(self.wood, &self.wood_tags), leaves)
+        let flowers = (!self.flowers.is_empty()).then(|| with_tags(self.flowers, &self.flower_tags));
+        (with_tags(self.wood, &self.wood_tags), leaves, flowers)
     }
 }

@@ -42,11 +42,14 @@ pub enum TreePreset {
     /// A low, dense, rounded bush: many thin stems from the ground under small leaves, for
     /// undergrowth, hedges and the edges of a wood.
     Shrub,
+    /// A small spreading cherry with smooth reddish bark: pale pink blossom on bare branches in
+    /// early spring ([`FoliageParams::blossom`]), then green leaves that turn orange-red.
+    Cherry,
 }
 
 impl TreePreset {
     /// Every preset, in display order.
-    pub const ALL: [TreePreset; 16] = [
+    pub const ALL: [TreePreset; 17] = [
         TreePreset::Oak,
         TreePreset::Pine,
         TreePreset::Willow,
@@ -63,6 +66,7 @@ impl TreePreset {
         TreePreset::DeadTree,
         TreePreset::Redwood,
         TreePreset::Shrub,
+        TreePreset::Cherry,
     ];
 
     /// snake_case name of the preset.
@@ -84,6 +88,7 @@ impl TreePreset {
             TreePreset::DeadTree => "dead_tree",
             TreePreset::Redwood => "redwood",
             TreePreset::Shrub => "shrub",
+            TreePreset::Cherry => "cherry",
         }
     }
 
@@ -106,6 +111,7 @@ impl TreePreset {
             TreePreset::DeadTree => dead_tree(),
             TreePreset::Redwood => redwood(),
             TreePreset::Shrub => shrub(),
+            TreePreset::Cherry => cherry(),
         }
     }
 }
@@ -1272,6 +1278,87 @@ fn japanese_maple() -> TreeParams {
         bark: BarkParams { scan: Some(BarkScan::Maple), smooth_below: 0.03, fissured_above: 0.15 },
         style: RenderStyle::Natural,
         wind: WindResponse { sway: 1.0, flutter: 1.2, sway_frequency: 1.1, flutter_frequency: 1.1 },
+    }
+}
+
+fn cherry() -> TreeParams {
+    TreeParams {
+        seed: 42,
+        trunk: TrunkParams {
+            height: 2.0,
+            radius: 0.22,
+            radial_segments: 8,
+            height_segments: 10,
+            taper: 0.3,
+            taper_curve: 0.5,
+            flare: 1.15,
+            randomness: 0.12,
+            root_flare_count: 4,
+            root_flare_spread: 0.4,
+            root_flare_height: 0.08,
+            termination: TrunkTermination::FlatCap,
+            leader_length: 0.1,
+            leader_taper: 0.1,
+            leader_has_branches: false,
+            twist: 10.0,
+        },
+        branches: BranchParams {
+            start: 0.5,
+            end: 1.0,
+            density: 5.0,
+            length: 1.4,
+            angle: 40.0,
+            radius_ratio: 0.35,
+            taper: 0.7,
+            phyllotaxis_angle: 137.5,
+            randomness: 0.25,
+            up_attraction: 0.25,
+            recursion: 2,
+            sub_branch_count: 5,
+            sub_branch_scale: 0.55,
+            length_variation: 0.25,
+            sub_branch_position_bias: 0.3,
+            apical_dominance: 0.3,
+            flatness: 0.3,
+            angle_curve: -0.2,
+            crown_angle_variation: 0.0,
+            twist: 8.0,
+            gravity_strength: 0.15,
+            stiffness: 0.5,
+            break_chance: 0.03,
+            crown_shape: CrownShape::Spreading,
+            crown_influence: 0.7,
+            floor_avoidance: true,
+            floor_level: 0.0,
+            min_twig_radius: 0.003,
+        },
+        split: SplitParams { enabled: true, probability: 0.5, angle: 28.0, position: 0.45, radius_threshold: 0.06 },
+        mesh: MeshParams { collar_enabled: true, collar_length: 1.4, ..Default::default() },
+        foliage: FoliageParams {
+            enabled: true,
+            style: LeafStyle::CrossedPlanes,
+            placement: FoliagePlacement::AllBranches,
+            orientation: LeafOrientation::RadialOutward,
+            density: 7.0,
+            cluster_size: 4,
+            leaf_size: 0.2,
+            leaf_size_variation: 0.15,
+            radius_threshold: 0.12,
+            height_falloff: 0.3,
+            droop: 0.15,
+            rotation_variation: 0.6,
+            use_crown_density: true,
+            color: Color::srgb(0.20, 0.40, 0.12),
+            autumn: Some(Color::srgb(0.86, 0.36, 0.10)),
+            blossom: Some(Color::srgb(0.98, 0.72, 0.82)),
+            scan: Some(LeafScan::Birch),
+            ..Default::default()
+        },
+        growth: GrowthParams::default(),
+        trunk_color: Color::srgb(0.33, 0.20, 0.16),
+        bark: BarkParams { scan: Some(BarkScan::Sakura), smooth_below: 0.02, fissured_above: 0.12 },
+        style: RenderStyle::Natural,
+        wind: WindResponse { sway: 0.9, flutter: 1.1, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 

@@ -108,6 +108,8 @@ pub struct TreeRender {
     pub(crate) trunk_mesh: Option<Handle<Mesh>>,
     pub(crate) paint: Paint,
     pub(crate) foliage: Option<(Entity, Handle<Mesh>)>,
+    /// A flowering tree's flowers ([`TreeFlowerMesh`]), drawn with the leaf material.
+    pub(crate) flowers: Option<(Entity, Handle<Mesh>)>,
     /// Full-grown skeleton generated from the current parameters; aging it
     /// is all a growing tree needs per frame.
     pub(crate) full: Skeleton,
@@ -160,6 +162,12 @@ impl TreeRender {
     pub fn foliage_entity(&self) -> Option<Entity> {
         self.foliage.as_ref().map(|(e, _)| *e)
     }
+
+    /// Child entity carrying a flowering tree's flowers ([`TreeMeshes::flowers`](crate::TreeMeshes::flowers)),
+    /// if it has any leaves; hidden while [`FloraSeason::blossom`] is 0.
+    pub fn flower_entity(&self) -> Option<Entity> {
+        self.flowers.as_ref().map(|(e, _)| *e)
+    }
 }
 
 /// Marker on the wood child entity.
@@ -169,6 +177,16 @@ pub struct TreeTrunkMesh;
 /// Marker on the leaves child entity.
 #[derive(Component)]
 pub struct TreeFoliageMesh;
+
+/// Marker on a flowering tree's flowers child entity ([`TreeMeshes::flowers`](crate::TreeMeshes::flowers)),
+/// drawn with the leaves' material. The plugin hides it while
+/// [`FloraSeason::blossom`] is 0, so flowers out of season cost nothing.
+#[derive(Component)]
+pub struct TreeFlowerMesh;
+
+/// What a flowers child is spawned with: hidden until [`show_flowers`] has looked at the season,
+/// so it never shows for a frame out of season (and has a `Visibility` without the renderer).
+pub(crate) const FLOWERS_SPAWN: (TreeFlowerMesh, Visibility) = (TreeFlowerMesh, Visibility::Hidden);
 
 /// Registers the tree components and the grow/rebuild systems.
 pub struct FloraPlugin;
@@ -200,6 +218,7 @@ impl bevy::app::Plugin for FloraPlugin {
                     start_felling,
                     drive_felling,
                     buck_trees,
+                    show_flowers,
                 )
                     .chain(),
             )
@@ -344,6 +363,7 @@ pub fn rebuild_trees(
             full,
             trunk: (!out.trunk.is_empty()).then(|| out.trunk.into_bevy_mesh()),
             foliage: (!out.foliage.is_empty()).then(|| out.foliage.into_bevy_mesh()),
+            flowers: (!out.flowers.is_empty()).then(|| out.flowers.into_bevy_mesh()),
             mature_at: out.mature_at,
             trunk_progress: out.skeleton.nodes[0].progress,
         }
@@ -374,17 +394,20 @@ pub fn rebuild_trees(
                 let trunk = trunk_child.id();
                 let mut trunk_mesh = None;
                 sync_trunk(&mut commands, &mut meshes, trunk, &mut trunk_mesh, out.trunk);
-                let foliage = out.foliage.map(|mesh| {
-                    let handle = meshes.add(mesh);
-                    let mut child = commands.spawn((Mesh3d(handle.clone()), TreeFoliageMesh, ChildOf(entity)));
-                    paint_child(&mut child, &paint, true);
-                    (child.id(), handle)
+                let mut foliage = None;
+                sync_leaf_child(&mut commands, &mut meshes, &mut foliage, out.foliage, |commands, mesh| {
+                    spawn_leaf_child(commands, mesh, TreeFoliageMesh, entity, &paint)
+                });
+                let mut flowers = None;
+                sync_leaf_child(&mut commands, &mut meshes, &mut flowers, out.flowers, |commands, mesh| {
+                    spawn_leaf_child(commands, mesh, FLOWERS_SPAWN, entity, &paint)
                 });
                 commands.entity(entity).insert(TreeRender {
                     trunk,
                     trunk_mesh,
                     paint,
                     foliage,
+                    flowers,
                     full,
                     mature_at: out.mature_at,
                 });
@@ -417,7 +440,7 @@ pub fn rebuild_trees(
                                 *trunk = wood;
                             }
                             if *foliage != leaves {
-                                if let Some((child, _)) = &render.foliage {
+                                for (child, _) in render.foliage.iter().chain(&render.flowers) {
                                     commands.entity(*child).insert(MeshMaterial3d(leaves.clone()));
                                 }
                                 *foliage = leaves;
@@ -428,23 +451,13 @@ pub fn rebuild_trees(
                     Paint::Growth(_) => unreachable!("trees grown on the GPU were skipped above"),
                 }
 
-                match (&mut render.foliage, out.foliage) {
-                    (Some((child, handle)), Some(mesh)) => {
-                        let child = *child;
-                        replace_mesh(&mut commands, &mut meshes, child, handle, mesh);
-                    }
-                    (None, Some(mesh)) => {
-                        let handle = meshes.add(mesh);
-                        let mut child = commands.spawn((Mesh3d(handle.clone()), TreeFoliageMesh, ChildOf(entity)));
-                        paint_child(&mut child, &render.paint, true);
-                        render.foliage = Some((child.id(), handle));
-                    }
-                    (Some((child, _)), None) => {
-                        commands.entity(*child).despawn();
-                        render.foliage = None;
-                    }
-                    (None, None) => {}
-                }
+                let paint = &render.paint;
+                sync_leaf_child(&mut commands, &mut meshes, &mut render.foliage, out.foliage, |commands, mesh| {
+                    spawn_leaf_child(commands, mesh, TreeFoliageMesh, entity, paint)
+                });
+                sync_leaf_child(&mut commands, &mut meshes, &mut render.flowers, out.flowers, |commands, mesh| {
+                    spawn_leaf_child(commands, mesh, FLOWERS_SPAWN, entity, paint)
+                });
             }
             // A tree painted for the GPU was skipped above.
             (Some(_), None) => {}
@@ -545,6 +558,7 @@ struct RebuiltTree {
     full: Skeleton,
     trunk: Option<Mesh>,
     foliage: Option<Mesh>,
+    flowers: Option<Mesh>,
     mature_at: f32,
     trunk_progress: f32,
 }
@@ -573,6 +587,60 @@ pub(crate) fn replace_mesh(
     }
     *handle = meshes.add(mesh);
     commands.entity(child).insert(Mesh3d(handle.clone()));
+}
+
+/// Bring a leaf child (the leaves, or a flowering tree's flowers) in sync with `mesh`: replace its
+/// mesh, spawn it with `spawn` when the tree first has one, despawn it when the tree has none.
+pub(crate) fn sync_leaf_child<'w, 's>(
+    commands: &mut Commands<'w, 's>,
+    meshes: &mut Assets<Mesh>,
+    slot: &mut Option<(Entity, Handle<Mesh>)>,
+    mesh: Option<Mesh>,
+    spawn: impl FnOnce(&mut Commands<'w, 's>, Handle<Mesh>) -> Entity,
+) {
+    match (slot.as_mut(), mesh) {
+        (Some((child, handle)), Some(mesh)) => replace_mesh(commands, meshes, *child, handle, mesh),
+        (None, Some(mesh)) => {
+            let handle = meshes.add(mesh);
+            *slot = Some((spawn(commands, handle.clone()), handle));
+        }
+        (Some((child, _)), None) => {
+            commands.entity(*child).despawn();
+            *slot = None;
+        }
+        (None, None) => {}
+    }
+}
+
+/// Spawn a CPU-built tree's leaf child (`marker` tells which, with what else it starts with) with
+/// `mesh` and the leaf paint.
+fn spawn_leaf_child(commands: &mut Commands, mesh: Handle<Mesh>, marker: impl Bundle, tree: Entity, paint: &Paint) -> Entity {
+    let mut child = commands.spawn((Mesh3d(mesh), marker, ChildOf(tree)));
+    paint_child(&mut child, paint, true);
+    child.id()
+}
+
+/// Draw a flowering tree's flowers ([`TreeFlowerMesh`]) only while [`FloraSeason::blossom`] is
+/// above 0. Out of season they are not drawn at all, so they cost nothing; in season the shaders
+/// open them one by one.
+#[allow(clippy::type_complexity)]
+pub(crate) fn show_flowers(
+    season: Res<FloraSeason>,
+    mut flowers: ParamSet<(
+        Query<&mut Visibility, With<TreeFlowerMesh>>,
+        Query<&mut Visibility, Added<TreeFlowerMesh>>,
+    )>,
+) {
+    let want = if season.blossom > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+    if season.is_changed() {
+        for mut visibility in &mut flowers.p0() {
+            visibility.set_if_neq(want);
+        }
+    } else {
+        for mut visibility in &mut flowers.p1() {
+            visibility.set_if_neq(want);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -666,6 +734,48 @@ mod tests {
         let world = app.world();
         let render = world.get::<TreeRender>(tree).unwrap();
         assert_eq!(world.get::<Visibility>(render.trunk_entity()), Some(&Visibility::Inherited));
+    }
+
+    #[test]
+    fn flowers_are_a_child_of_their_own_drawn_only_in_blossom() {
+        let mut app = app();
+        let cherry = app.world_mut().spawn((ProceduralTree(TreePreset::Cherry.params()), TreeAge(f32::INFINITY))).id();
+        let oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeAge(f32::INFINITY))).id();
+        app.update();
+        assert_eq!(app.world().get::<TreeRender>(oak).unwrap().flower_entity(), None, "an oak has no flowers");
+        let flowers = app.world().get::<TreeRender>(cherry).unwrap().flower_entity().expect("a cherry flowers");
+        assert!(app.world().get::<TreeFlowerMesh>(flowers).is_some());
+        assert_eq!(app.world().get::<Children>(cherry).unwrap().len(), 3);
+        let visibility = |app: &App| *app.world().get::<Visibility>(flowers).unwrap();
+        // Summer: not drawn at all.
+        assert_eq!(visibility(&app), Visibility::Hidden);
+
+        for (season, shown) in [
+            (FloraSeason::BLOSSOM, Visibility::Inherited),
+            (FloraSeason { blossom: 0.01, ..FloraSeason::BLOSSOM }, Visibility::Inherited),
+            (FloraSeason::SUMMER, Visibility::Hidden),
+            (FloraSeason::BLOSSOM, Visibility::Inherited),
+        ] {
+            *app.world_mut().resource_mut::<FloraSeason>() = season;
+            app.update();
+            assert_eq!(visibility(&app), shown, "{season:?}");
+        }
+
+        // A rebuild keeps the flowers child and its visibility; one that has no leaves drops it,
+        // and when the leaves come back out of season their new flowers are hidden from their
+        // first frame, though the season did not change.
+        app.world_mut().get_mut::<TreeAge>(cherry).unwrap().0 = 30.0;
+        app.update();
+        assert_eq!(app.world().get::<TreeRender>(cherry).unwrap().flower_entity(), Some(flowers));
+        assert_eq!(visibility(&app), Visibility::Inherited);
+        *app.world_mut().resource_mut::<FloraSeason>() = FloraSeason::SUMMER;
+        app.world_mut().get_mut::<TreeAge>(cherry).unwrap().0 = 0.0;
+        app.update();
+        assert_eq!(app.world().get::<TreeRender>(cherry).unwrap().flower_entity(), None);
+        app.world_mut().get_mut::<TreeAge>(cherry).unwrap().0 = f32::INFINITY;
+        app.update();
+        let back = app.world().get::<TreeRender>(cherry).unwrap().flower_entity().expect("flowers again");
+        assert_eq!(app.world().get::<Visibility>(back), Some(&Visibility::Hidden));
     }
 
     #[test]

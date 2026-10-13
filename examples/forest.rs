@@ -8,7 +8,7 @@
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
-//!     [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
+//!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>]
 //! ```
 //!
@@ -200,7 +200,7 @@ fn usage() -> ! {
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
-         [--season <autumn>,<leaf fall>[,<snow>]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
+         [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>]"
     );
     std::process::exit(2);
@@ -344,12 +344,13 @@ fn parse_args() -> Args {
             "--season" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
-                let (autumn, leaf_fall, snow) = match parts[..] {
-                    [autumn, leaf_fall] => (autumn, leaf_fall, 0.0),
-                    [autumn, leaf_fall, snow] => (autumn, leaf_fall, snow),
+                let (autumn, leaf_fall, snow, blossom) = match parts[..] {
+                    [autumn, leaf_fall] => (autumn, leaf_fall, 0.0, 0.0),
+                    [autumn, leaf_fall, snow] => (autumn, leaf_fall, snow, 0.0),
+                    [autumn, leaf_fall, snow, blossom] => (autumn, leaf_fall, snow, blossom),
                     _ => usage(),
                 };
-                args.season = FloraSeason { autumn, leaf_fall, snow };
+                args.season = FloraSeason { autumn, leaf_fall, snow, blossom };
             }
             "--lod" => {
                 let list = it.next().unwrap_or_else(|| usage());

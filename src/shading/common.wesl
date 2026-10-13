@@ -32,6 +32,9 @@ struct FloraUniform {
     // a turned leaf's colour multiplier (the autumn colour over the leaf colour), 1; zero for an
     // evergreen and for wood
     autumn: vec4<f32>,
+    // a flower's colour multiplier (the blossom colour over the leaf colour), 1; zero for a
+    // species without flowers and for wood
+    blossom: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> flora: FloraUniform;
@@ -57,7 +60,8 @@ struct FloraUniform {
 //   2: gust frequency, flutter frequency, 0, 0
 //   3: gust front origin x, origin z, direction x, direction z
 //   4: gust front speed, width, strength, start time
-//   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, snow, 0
+//   5: the season (`FloraSeason`): how far the leaves have turned, the share fallen, snow, the
+//      share of flowers out
 //   6: the shakes (`TreeShakes`): the render time the last one ends (-1: none), 0, 0, 0
 //   7 + 2i, 8 + 2i for i in 0..8: shake i's (at x, at z, radius, strength) and (direction x,
 //      direction z, start time, duration); all zero for an empty slot
@@ -86,6 +90,36 @@ fn leaf_autumn_tint(sway: vec4<f32>) -> vec3<f32> {
     let moment = leaf_season_moment(sway) * 0.8;
     let turn = smoothstep(moment, moment + 0.2, flora_wind[5].x) * flora.autumn.w;
     return mix(vec3<f32>(1.0), flora.autumn.rgb, turn);
+}
+
+// A flower card's vertex: its colour's alpha is 0, a leaf's 1 (`FoliageParams::blossom`).
+fn is_flower(color: vec4<f32>) -> bool {
+    return color.a < 0.5;
+}
+
+// A flower's own moment in the blossom, 0..1, from its leaf's phase spread differently, so the
+// flowers do not open in the order the leaves turn.
+fn flower_moment(sway: vec4<f32>) -> f32 {
+    return fract(sway.w * 3.71 + 0.53);
+}
+
+// Whether a leaf or a flower draws nothing this season (it is then put outside the clip
+// volume): a fallen leaf, or a flower that is not out; flowers open once the blossom passes
+// their moment and fall in the reverse order.
+fn leaf_hidden(sway: vec4<f32>, color: vec4<f32>) -> bool {
+    if is_flower(color) {
+        return flower_moment(sway) >= flora_wind[5].w;
+    }
+    return leaf_has_fallen(sway);
+}
+
+// What a leaf's or a flower's vertex colour is multiplied by this season: a flower's is the
+// blossom colour over the leaf colour (`flora.blossom.rgb`), a leaf's its autumn tint.
+fn leaf_season_tint(sway: vec4<f32>, color: vec4<f32>) -> vec3<f32> {
+    if is_flower(color) {
+        return flora.blossom.rgb;
+    }
+    return leaf_autumn_tint(sway);
 }
 
 // Fresh snow's colour: bright and a little blue.
@@ -362,7 +396,10 @@ fn leaf_surface(p: ptr<function, PbrInput>, uv: vec2<f32>, shade: vec2<f32>) {
     (*p).specular_occlusion = (*p).specular_occlusion * shade.y;
 }
 
-fn leaf_transmission(p: PbrInput, visibility: f32) -> vec3<f32> {
+// The light a leaf lets through, tinted by the species' leaves (`flora.tint`); a flower's petals
+// let through their own colour.
+fn leaf_transmission(p: PbrInput, visibility: f32, flower: bool) -> vec3<f32> {
+    let tint = select(flora.tint.rgb, vec3<f32>(1.0), flower);
     return transmitted_light(
         p.world_position,
         p.world_normal,
@@ -371,7 +408,7 @@ fn leaf_transmission(p: PbrInput, visibility: f32) -> vec3<f32> {
         p.frag_coord,
         p.flags,
         p.directional_shadow_factor,
-        p.material.base_color.rgb * flora.tint.rgb * flora.leaf.x,
+        p.material.base_color.rgb * tint * flora.leaf.x,
         visibility,
     );
 }

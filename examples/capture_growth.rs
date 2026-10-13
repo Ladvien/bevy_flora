@@ -14,12 +14,30 @@
 //!   docs/grove.gif
 //! ```
 //!
-//! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`, encoded like the
-//! grove): the deciduous trees turn their autumn colours and shed their leaves, snow settles on
-//! every tree and melts, and the leaves come out again, while the pine and the cypress stay green.
+//! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`): the deciduous
+//! trees turn their autumn colours and shed their leaves, snow settles on every tree and melts,
+//! the cherry blossoms on bare branches, and the leaves come out again, while the pine and the
+//! cypress stay green. The blossom is too few pixels to win a pink in the grove's palette (it
+//! comes out white), so the GIF takes 80 colours from the whole clip and 16 from the pink pixels
+//! of the cherry's crown while it blossoms:
+//!
+//! ```text
+//! cargo run --release --example capture_growth -- --seasons [--out <dir>]
+//! ffmpeg -y -framerate 24 -i <dir>/frame_%04d.png -vf \
+//!   "fps=20,scale=560:-1:flags=lanczos,palettegen=max_colors=80:stats_mode=diff" -update 1 clip.png
+//! ffmpeg -y -framerate 24 -start_number 136 -i <dir>/frame_%04d.png -vf \
+//!   "trim=end_frame=28,fps=20,scale=560:-1:flags=lanczos,crop=200:150:320:150,format=gbrp,geq=r='if(gt(r(X\,Y)-g(X\,Y)\,18)*gt(r(X\,Y)\,150)\,r(X\,Y)\,0)':g='if(gt(r(X\,Y)-g(X\,Y)\,18)*gt(r(X\,Y)\,150)\,g(X\,Y)\,0)':b='if(gt(r(X\,Y)-g(X\,Y)\,18)*gt(r(X\,Y)\,150)\,b(X\,Y)\,0)',format=rgb24,palettegen=max_colors=16:stats_mode=full" \
+//!   -update 1 pink.png
+//! ffmpeg -y -i clip.png -i pink.png -filter_complex \
+//!   "[0]crop=16:5:0:0[a];[1]crop=16:1:0:0[b];[a][b]vstack,pad=16:16:0:0:black" -update 1 palette.png
+//! ffmpeg -y -framerate 24 -i <dir>/frame_%04d.png -i palette.png -filter_complex \
+//!   "[0]fps=20,scale=560:-1:flags=lanczos[x];[x][1]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" \
+//!   docs/seasons.gif
+//! ```
+//!
 //! `--shake` records it fully grown from a still camera, knocked with `TreeShakes`
-//! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on a birch, then a blast that
-//! swings every tree. `--fell` records a few grown trees from a still camera while the oak in
+//! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on the birch, then a blast
+//! that swings every tree. `--fell` records a few grown trees from a still camera while the oak in
 //! front is felled (`FellTree`), crashes to the ground and leaves its stump (`docs/fell.gif`,
 //! encoded like the grove).
 //!
@@ -55,7 +73,7 @@ const FPS: f32 = 24.0;
 const TOTAL_FRAMES: u32 = 192;
 /// The shake clip's knocks: (frame, the grove tree hit, or `None` for a blast at the grove's
 /// middle, radius, strength, duration): an axe on the oak (stiffer than the birch, sway 0.8
-/// against 1.4, so a harder knock), one on a birch, then a blast that swings every tree.
+/// against 1.4, so a harder knock), one on the birch, then a blast that swings every tree.
 const SHAKES: [(u32, Option<usize>, f32, f32, f32); 3] =
     [(12, Some(0), 1.0, 3.0, 3.0), (64, Some(2), 1.0, 2.5, 2.5), (112, None, 30.0, 3.0, 3.5)];
 /// The fell clip's trees: species, seed and place (in the grove's spacing), the oak in front
@@ -136,7 +154,7 @@ const GROVE: [(TreePreset, i32, [f32; 2], u32, u32); 8] = [
     (TreePreset::Cypress, 2, [-2.3, 0.1], 12, 126),
     (TreePreset::Willow, 4, [-1.2, 1.4], 16, 130),
     (TreePreset::JapaneseMaple, 6, [0.7, 1.4], 20, 120),
-    (TreePreset::Birch, 8, [1.1, -1.0], 24, 120),
+    (TreePreset::Cherry, 3, [1.1, -1.0], 24, 120),
 ];
 /// Frame the gust front is launched, and its shape.
 const GUST_FRAME: u32 = 110;
@@ -144,17 +162,18 @@ const GUST_SPEED: f32 = 12.0;
 const GUST_WIDTH: f32 = 7.0;
 const GUST_STRENGTH: f32 = 1.4;
 /// The part of a year the seasons clip shows, as (share of the clip, `FloraSeason::of_year`'s
-/// year) keys joined by straight lines: late summer to the last leaves falling in the first 55%,
-/// the snowy weeks (0.88 to 0.98 of the year, a tenth of it) in the next quarter, so the snow is
-/// on screen long enough to see, and the melt, spring and summer again in the rest.
-const SEASON_KEYS: [(f32, f32); 4] = [(0.0, 0.47), (0.55, 0.88), (0.8, 0.98), (1.0, 1.13)];
+/// year) keys joined by straight lines: late summer to the last leaves falling in the first half,
+/// the snowy weeks (0.88 to 0.98 of the year, a tenth of it) in the next fifth, so the snow is on
+/// screen long enough to see, the melt and the cherry's blossom (0.98 to 0.07, the flowers out on
+/// bare branches from the year's turn) in the fifth after that, and the leaves of summer in the rest.
+const SEASON_KEYS: [(f32, f32); 5] = [(0.0, 0.47), (0.5, 0.88), (0.72, 0.98), (0.92, 1.07), (1.0, 1.13)];
 
 /// The year (for `FloraSeason::of_year`) at share `t` of the seasons clip.
 fn season_year(t: f32) -> f32 {
     SEASON_KEYS
         .windows(2)
         .find(|pair| t <= pair[1].0)
-        .map_or(SEASON_KEYS[3].1, |pair| {
+        .map_or(SEASON_KEYS[SEASON_KEYS.len() - 1].1, |pair| {
             let ((t0, y0), (t1, y1)) = (pair[0], pair[1]);
             y0 + (y1 - y0) * ((t - t0) / (t1 - t0)).clamp(0.0, 1.0)
         })
@@ -329,6 +348,7 @@ fn bounds(params: &TreeParams, at: Vec3) -> (Vec3, Vec3) {
         .positions
         .iter()
         .chain(&tree.foliage.positions)
+        .chain(&tree.flowers.positions)
         .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), &p| (lo.min(p + at), hi.max(p + at)))
 }
 

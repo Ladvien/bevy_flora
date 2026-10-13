@@ -400,7 +400,7 @@ fn scenarios() -> Vec<Scenario> {
     // The season (`FloraSeason`, global): turning, every leaf turned, half fallen, bare, and bare
     // under snow. The pine is evergreen, so its first four must match its mature render; in the
     // snow its needles turn white on top.
-    for p in [TreePreset::Maple, TreePreset::Oak, TreePreset::Birch, TreePreset::Willow, TreePreset::Pine] {
+    for p in [TreePreset::Maple, TreePreset::Oak, TreePreset::Birch, TreePreset::Willow, TreePreset::Pine, TreePreset::Cherry] {
         for (name, season) in [
             ("turning", FloraSeason { autumn: 0.5, ..FloraSeason::SUMMER }),
             ("autumn", FloraSeason::AUTUMN),
@@ -410,6 +410,16 @@ fn scenarios() -> Vec<Scenario> {
         ] {
             list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season });
         }
+    }
+    // A flowering tree's spring: in full blossom on bare branches, flowering as half its leaves
+    // are back, and the last flowers among the leaves.
+    for (name, season) in [
+        ("blossom", FloraSeason::BLOSSOM),
+        ("flowering", FloraSeason { leaf_fall: 0.5, ..FloraSeason::BLOSSOM }),
+        ("petals", FloraSeason { leaf_fall: 0.1, blossom: 0.3, ..FloraSeason::SUMMER }),
+    ] {
+        let p = TreePreset::Cherry;
+        list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season });
     }
 
     list
@@ -431,7 +441,7 @@ struct Stats {
 
 /// Bounding box of every vertex; a unit box when there is no geometry.
 fn bounds(out: &TreeMeshes) -> (Vec3, Vec3) {
-    let mut points = out.trunk.positions.iter().chain(&out.foliage.positions);
+    let mut points = out.trunk.positions.iter().chain(&out.foliage.positions).chain(&out.flowers.positions);
     let Some(&first) = points.next() else {
         return (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
     };
@@ -499,8 +509,8 @@ fn analyze(params: &TreeParams, age: f32, out: &TreeMeshes) -> Stats {
         nodes,
         trunk_verts: out.trunk.positions.len(),
         trunk_tris: out.trunk.indices.len() / 3,
-        foliage_verts: out.foliage.positions.len(),
-        foliage_tris: out.foliage.indices.len() / 3,
+        foliage_verts: out.foliage.positions.len() + out.flowers.positions.len(),
+        foliage_tris: (out.foliage.indices.len() + out.flowers.indices.len()) / 3,
         bbox: bounds(out),
         flags,
     }

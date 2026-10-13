@@ -6,7 +6,7 @@
 //!     [--age <a>] [--seed <n>] [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]]
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
-//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>]]
+//!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]]
 //!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre]
 //! ```
 //!
@@ -117,7 +117,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>[,<snow>]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--fell <deg> [--buck <m>]] [--slope <deg>] \
          [--on-centre]"
     );
     std::process::exit(2);
@@ -234,12 +234,13 @@ fn parse_args() -> Args {
             "--colliders" => args.colliders = true,
             "--season" => {
                 let v = floats(&it.next().unwrap_or_else(|| usage()));
-                let (autumn, leaf_fall, snow) = match v[..] {
-                    [autumn, leaf_fall] => (autumn, leaf_fall, 0.0),
-                    [autumn, leaf_fall, snow] => (autumn, leaf_fall, snow),
+                let (autumn, leaf_fall, snow, blossom) = match v[..] {
+                    [autumn, leaf_fall] => (autumn, leaf_fall, 0.0, 0.0),
+                    [autumn, leaf_fall, snow] => (autumn, leaf_fall, snow, 0.0),
+                    [autumn, leaf_fall, snow, blossom] => (autumn, leaf_fall, snow, blossom),
                     _ => usage(),
                 };
-                args.season = FloraSeason { autumn, leaf_fall, snow };
+                args.season = FloraSeason { autumn, leaf_fall, snow, blossom };
             }
             "--fell" => args.fell = Some(value(&mut it)),
             "--buck" => args.buck = Some(value(&mut it)),
@@ -392,6 +393,7 @@ fn setup(
         .positions
         .iter()
         .chain(&mature.foliage.positions)
+        .chain(&mature.flowers.positions)
         .fold(0.0f32, |h, p| h.max(p.y))
         .max(0.5);
     // `--slope`: the ground falls toward +x, and the tree stands at its footing, or with

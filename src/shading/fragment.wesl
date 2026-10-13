@@ -50,11 +50,22 @@ fn fragment(
 @if(FLORA_DETAIL && !FLORA_LEAF)
     bark_surface(&pbr_input, in.uv, in.uv_b.x);
 
+    // A flower (vertex alpha 0, `FoliageParams::blossom`) is a plain petal: no leaf scan, veins or
+    // leaf gloss.
+@if(FLORA_LEAF && VERTEX_COLORS)
+    let flower = in.color.a < 0.5;
+@if(FLORA_LEAF && !VERTEX_COLORS)
+    let flower = false;
+
 @if(FLORA_DETAIL && FLORA_LEAF)
-    leaf_detail(&pbr_input, in.uv);
+    if !flower {
+        leaf_detail(&pbr_input, in.uv);
+    }
 
 @if(FLORA_LEAF)
-    leaf_surface(&pbr_input, in.uv, in.uv_b);
+    if !flower {
+        leaf_surface(&pbr_input, in.uv, in.uv_b);
+    }
 
     // The season's snow (none in summer, which leaves the surface as it was): on the side of a leaf
     // card the camera sees, if that side faces up, and a dusting on every leaf, as much as the leaf
@@ -78,7 +89,7 @@ fn fragment(
     out.color = apply_pbr_lighting(pbr_input);
 @if(FLORA_LEAF)
     out.color = vec4<f32>(
-        out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y) * (1.0 - snowed),
+        out.color.rgb + view.exposure * leaf_transmission(pbr_input, in.uv_b.y, flower) * (1.0 - snowed),
         out.color.a
     );
 @if(FLORA_TOON)

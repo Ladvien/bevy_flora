@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use bevy::math::Vec3;
 
-use super::frame::{Class, position, wood_radius};
+use super::frame::{Class, Tag, position, wood_radius};
 use super::mesh::{GrowthData, build_growth_data};
 use super::state::{CONE, GrowthState, TOP_CAP};
-use crate::foliage::{foliage_mesh_with, leaf_points_for_node};
+use crate::foliage::{foliage_meshes, leaf_points_for_node};
 use crate::mesh::branch::{WoodPiece, WoodSpan, skeleton_mesh_with};
 use crate::mesh::trunk::{trunk_pieces, trunk_ring_count};
 use crate::params::{FoliagePlacement, TreeParams, TrunkTermination};
@@ -54,7 +54,12 @@ fn growth_tags_put_every_mature_vertex_back_where_it_was() {
             params.mesh.smooth_iterations = smooth;
             let full = generate_skeleton(&params);
             let data = build_growth_data(&full, &params);
-            for (what, mesh, tags) in [("wood", &data.wood, &data.wood_tags), ("leaves", &data.leaves, &data.leaf_tags)] {
+            let tagged = [
+                ("wood", &data.wood, &data.wood_tags),
+                ("leaves", &data.leaves, &data.leaf_tags),
+                ("flowers", &data.flowers, &data.flower_tags),
+            ];
+            for (what, mesh, tags) in tagged {
                 assert_eq!(mesh.positions.len(), tags.len());
                 for (i, (&p, tag)) in mesh.positions.iter().zip(tags).enumerate() {
                     // The trunk's top cap and tip cone are in the mesh for every
@@ -368,8 +373,9 @@ fn all_branches_leaves_appear_as_the_branch_lengthens() {
 }
 
 #[test]
-fn grown_leaves_match_the_cpu_meshers() {
+fn grown_leaves_and_flowers_match_the_cpu_meshers() {
     let mut compared = 0;
+    let mut flowers = 0;
     let mut mirrored = 0;
     for preset in TreePreset::ALL {
         let mut params = preset.params();
@@ -377,15 +383,21 @@ fn grown_leaves_match_the_cpu_meshers() {
         if params.foliage.placement == FoliagePlacement::AllBranches || !params.foliage.enabled {
             continue;
         }
+        // Every compared tree flowers, so each flower is held to its leaf's growth too.
+        params.foliage.blossom = Some(bevy::color::Color::WHITE);
         let full = generate_skeleton(&params);
         let data = build_growth_data(&full, &params);
-        // (node id, ordinal) -> vertex range of that leaf in the grown mesh
-        let mut leaves: HashMap<(u32, u32), (usize, usize)> = HashMap::new();
-        for (v, tag) in data.leaf_tags.iter().enumerate() {
-            assert_eq!(tag.class, Class::Leaf);
-            let entry = leaves.entry((tag.node, tag.ordinal)).or_insert((v, v));
-            entry.1 = v + 1;
-        }
+        // (node id, ordinal) -> vertex range of that leaf (or its flower) in the grown mesh
+        let ranges = |tags: &[Tag]| {
+            let mut ranges: HashMap<(u32, u32), (usize, usize)> = HashMap::new();
+            for (v, tag) in tags.iter().enumerate() {
+                assert_eq!(tag.class, Class::Leaf);
+                let entry = ranges.entry((tag.node, tag.ordinal)).or_insert((v, v));
+                entry.1 = v + 1;
+            }
+            ranges
+        };
+        let grown = [(&data.leaf_tags, ranges(&data.leaf_tags)), (&data.flower_tags, ranges(&data.flower_tags))];
         // The mature tree's leaf directions, to tell a mirrored tip cluster.
         let mature = aged_skeleton(&full, &params, f32::INFINITY);
         let mut mature_points = Vec::new();
@@ -408,45 +420,48 @@ fn grown_leaves_match_the_cpu_meshers() {
                 leaf_points_for_node(&aged, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
                 owners.extend((before..points.len()).map(|p| (aged.nodes[i].id, (p - before) as u32)));
             }
-            let mut firsts = Vec::new();
-            let cpu = foliage_mesh_with(&points, &params.foliage, params.style, Some(&mut firsts));
-            for (p, &(id, ordinal)) in owners.iter().enumerate() {
-                let end = firsts.get(p + 1).map_or(cpu.positions.len(), |&n| n as usize);
-                let &(from, to) = leaves.get(&(id, ordinal)).expect("the mature tree has every leaf");
-                assert_eq!(to - from, end - firsts[p] as usize, "{} age {age}: leaf vertex count", preset.name());
-                if points[p].direction.dot(mature_direction[&(id, ordinal)]) < 0.99 {
-                    mirrored += to - from;
-                    continue;
+            let cpu = foliage_meshes(&points, &params.foliage, params.style);
+            let built = [(&cpu.leaves, &cpu.firsts[0]), (&cpu.flowers, &cpu.firsts[1])];
+            for ((what, (tags, leaves)), (mesh, firsts)) in ["leaf", "flower"].into_iter().zip(&grown).zip(built) {
+                for (p, &(id, ordinal)) in owners.iter().enumerate() {
+                    let end = firsts.get(p + 1).map_or(mesh.positions.len(), |&n| n as usize);
+                    let &(from, to) = leaves.get(&(id, ordinal)).expect("the mature tree has every leaf");
+                    assert_eq!(to - from, end - firsts[p] as usize, "{} age {age}: {what} vertex count", preset.name());
+                    if points[p].direction.dot(mature_direction[&(id, ordinal)]) < 0.99 {
+                        mirrored += to - from;
+                        continue;
+                    }
+                    for j in 0..to - from {
+                        let q = position(&tags[from + j], &state);
+                        let built = mesh.positions[firsts[p] as usize + j];
+                        assert!(
+                            q.distance(built) < TOLERANCE,
+                            "{} age {age}: node {id} {what} {ordinal} vertex {j}: grown {q:?}, built {built:?}",
+                            preset.name()
+                        );
+                        compared += 1;
+                        flowers += usize::from(what == "flower");
+                    }
                 }
-                for j in 0..to - from {
-                    let q = position(&data.leaf_tags[from + j], &state);
-                    let built = cpu.positions[firsts[p] as usize + j];
-                    assert!(
-                        q.distance(built) < TOLERANCE,
-                        "{} age {age}: node {id} leaf {ordinal} vertex {j}: grown {q:?}, built {built:?}",
-                        preset.name()
-                    );
-                    compared += 1;
-                }
-            }
-            // Leaves the CPU did not grow yet have no size.
-            let alive: std::collections::HashSet<(u32, u32)> = owners.iter().copied().collect();
-            for (&(id, ordinal), &(from, to)) in &leaves {
-                if alive.contains(&(id, ordinal)) {
-                    continue;
-                }
-                let first = position(&data.leaf_tags[from], &state);
-                for v in from..to {
-                    assert!(
-                        position(&data.leaf_tags[v], &state).distance(first) < 1e-5,
-                        "{} age {age}: node {id} leaf {ordinal} should have no size",
-                        preset.name()
-                    );
+                // Leaves (and flowers) the CPU did not grow yet have no size.
+                let alive: std::collections::HashSet<(u32, u32)> = owners.iter().copied().collect();
+                for (&(id, ordinal), &(from, to)) in leaves {
+                    if alive.contains(&(id, ordinal)) {
+                        continue;
+                    }
+                    let first = position(&tags[from], &state);
+                    for v in from..to {
+                        assert!(
+                            position(&tags[v], &state).distance(first) < 1e-5,
+                            "{} age {age}: node {id} {what} {ordinal} should have no size",
+                            preset.name()
+                        );
+                    }
                 }
             }
         }
     }
-    assert!(compared > 10_000, "compared only {compared} leaf vertices");
+    assert!(compared > 10_000 && flowers > 5_000, "compared only {compared} vertices, {flowers} of flowers");
     // Tip clusters flip to the far side of the twig when they would sit inside
     // the mature trunk; the grown tree keeps the mature choice (a documented
     // difference), which only matters where twigs hang close to a thin young trunk.

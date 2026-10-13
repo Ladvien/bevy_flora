@@ -147,6 +147,7 @@ fn frame_tree(
         .positions
         .iter()
         .chain(&meshes.foliage.positions)
+        .chain(&meshes.flowers.positions)
         .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), &p| (lo.min(p), hi.max(p)));
     let centre = (lo + hi) / 2.0;
     let size = (hi - lo).max_element().max(1.0);
