@@ -79,7 +79,7 @@
 //! A [`ProceduralTree`] is drawn in full at every distance. With [`TreeLod`] it is drawn as a
 //! pool's trees are: in full up close, then at the two coarser levels of [`build_lods`] (from 30
 //! and 80 m by default), cross-fading. 1 000 individual oaks draw at 6.5 ms a frame with it and
-//! 24 ms without (1080p, Apple M4 Pro). They stay individual trees, which grow, change and fall;
+//! 25 ms without (1080p, Apple M4 Pro). They stay individual trees, which grow, change and fall;
 //! a growing one rebuilds its coarse levels with every new age, which costs the CPU about 40%
 //! more.
 //!
@@ -100,7 +100,7 @@
 //! trees that share a mesh are drawn in one instanced call, the distance to the
 //! camera picks the level, and beyond the last one a tree is a baked camera-facing
 //! quad ([`ImpostorAtlas`]), shaded by the scene's own lights. 100 000 oaks draw at
-//! 7.6 ms a frame (1080p, Apple M4 Pro).
+//! 7.7 ms a frame (1080p, Apple M4 Pro).
 //! Pooled trees are static; add [`FloraPlugin`] after `DefaultPlugins` to get the
 //! impostors. See [`pool`] for an example.
 //!
@@ -230,6 +230,26 @@
 //! }
 //! ```
 //!
+//! Before the saw, the axe: a [`TreeNotch`] cuts a wedge out of a standing trunk, deeper with each
+//! change of its `depth`, and a notched tree is felled at the notch's floor.
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::{FellTree, TreeNotch};
+//!
+//! // One blow of the axe on the tree's +x side; the fifth fells it that way.
+//! fn chop(mut commands: Commands, mut notches: Query<&mut TreeNotch>, tree: Entity) {
+//!     let Ok(mut notch) = notches.get_mut(tree) else {
+//!         commands.entity(tree).insert(TreeNotch { direction: Vec2::X, depth: 0.06, ..default() });
+//!         return;
+//!     };
+//!     notch.depth += 0.06;
+//!     if notch.depth >= 0.29 {
+//!         commands.entity(tree).insert(FellTree { direction: notch.direction, ..default() });
+//!     }
+//! }
+//! ```
+//!
 //! # Fire
 //!
 //! A [`FloraFire`] is a grid of cells over the game's world, each with how charred it is and how
@@ -322,7 +342,7 @@ pub mod venation;
 pub use background::BuildInBackground;
 pub use crown::CrownShape;
 pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
-pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeStump};
+pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeNotch, TreeStump};
 pub use fire::{FireCell, FireSpread, FloraFire};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
@@ -363,8 +383,8 @@ pub mod prelude {
         FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams, FoliagePusher, GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
-        TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse,
-        WoodCapsule, build_pool,
+        TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
+        WindResponse, WoodCapsule, build_pool,
     };
 }
 

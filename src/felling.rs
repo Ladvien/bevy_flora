@@ -15,6 +15,9 @@
 //! longer rebuilt when its [`ProceduralTree`] or [`TreeAge`] changes, and keeps its entity:
 //! despawn it, or insert [`BuckTree`] to cut its trunk into [`TreeLog`]s lying on the ground,
 //! once it has landed. Its [`TreeShape`](crate::TreeShape) turns with it but is not cut.
+//!
+//! Before it falls, a tree can be notched: a [`TreeNotch`] carves an axe's wedge out of its
+//! trunk, deeper with each blow, and a tree felled with one is cut at the notch's floor.
 
 use bevy::asset::{Assets, Handle};
 use bevy::camera::visibility::{Visibility, VisibilityRange};
@@ -30,8 +33,8 @@ use bevy::transform::components::Transform;
 use crate::gpu::GpuGrowth;
 use crate::ground::FloraGround;
 use crate::mesh::MeshData;
-use crate::mesh::cut::cut;
-use crate::mesh::branch::bark_tile;
+use crate::mesh::cut::{Notch, carve_notch, cut, fell_notched};
+use crate::mesh::branch::{bark_tile, skeleton_mesh};
 use crate::mesh::trunk::{trunk_mesh_with, trunk_pieces};
 use crate::pipeline::{aged_skeleton, build_aged};
 use crate::plugin::{CoarseLevel, Growing, Paint, ProceduralTree, TreeAge, TreeRender, paint_child};
@@ -163,6 +166,44 @@ impl CutFace {
     }
 }
 
+/// An axe's notch in a standing tree: a wedge cut out of its trunk on the side `direction`
+/// points to, its floor level `height` above the base and its face rising from the floor at 45°,
+/// `depth` of the way through. Insert it on a [`ProceduralTree`] or a [`PooledTree`] (which first
+/// becomes the `ProceduralTree` of its variant, as for [`FellTree`]), and deepen it blow by blow:
+/// each change of `depth` carves the trunk again. Remove it and the trunk is whole again.
+///
+/// A notched tree stops growing ([`Growing`] is removed; a change of its [`TreeAge`] or
+/// [`ProceduralTree`] rebuilds it, notch and all). With [`TreeLod`](crate::TreeLod) only its
+/// nearest level is notched. Fell it ([`FellTree`]) and the saw goes in at the notch's floor,
+/// whatever `cut_height` says: the stump keeps the floor, the falling tree the face. A real feller
+/// cuts the notch on the side the tree should fall to, a quarter to a third of the way through.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct TreeNotch {
+    /// The side it is cut from, world x and z; normalised when used. Zero is +x.
+    pub direction: Vec2,
+    /// The height of its floor, metres above the tree's base (at least 5 cm, at most half the
+    /// trunk); with a [`FloraGround`], above the ground on the uphill side of the trunk, as
+    /// [`FellTree::cut_height`].
+    pub height: f32,
+    /// How far into the trunk it reaches at its floor, a share of the trunk's width there: 0
+    /// cuts nothing, 0.25 is a felling notch, 0.9 the most.
+    pub depth: f32,
+}
+
+impl Default for TreeNotch {
+    fn default() -> Self {
+        Self { direction: Vec2::X, height: 0.5, depth: 0.25 }
+    }
+}
+
+/// The notch a tree's wood was carved with, and the child drawing its faces.
+#[derive(Component)]
+pub(crate) struct NotchCarved {
+    notch: TreeNotch,
+    faces: Option<Entity>,
+}
+
 /// How a felled tree moves, in its own (local) space.
 #[derive(Clone, Debug, Default)]
 struct Fall {
@@ -210,8 +251,8 @@ const REST_LIMIT: f32 = 150.0 * std::f32::consts::PI / 180.0;
 const LOG_GAP: f32 = 0.15;
 
 /// Start felling every tree with a [`FellTree`] that can be cut: turn a pooled tree into its
-/// `ProceduralTree`, move a tree off the GPU growth path, then cut, spawn the stump and set up
-/// the fall.
+/// `ProceduralTree`, move a tree off the GPU growth path, then cut (at its [`TreeNotch`]'s
+/// floor, if it has one), spawn the stump and set up the fall.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn start_felling(
     mut commands: Commands,
@@ -234,9 +275,11 @@ pub(crate) fn start_felling(
         Option<&PooledTree>,
         Has<GpuGrowth>,
         Has<Growing>,
+        Option<&TreeNotch>,
+        Option<&NotchCarved>,
     )>,
 ) {
-    for (entity, fell, transform, tree, age, render, pooled, gpu, growing) in &trees {
+    for (entity, fell, transform, tree, age, render, pooled, gpu, growing, notch, carved) in &trees {
         if let Some(pooled) = pooled {
             let Some(pool) = pools.as_deref().and_then(|pools| pools.get(&pooled.pool)) else { continue };
             let params = pool.tree_params(pooled.variant);
@@ -277,12 +320,10 @@ pub(crate) fn start_felling(
         }
 
         let scale = transform.scale.y.max(1.0e-4);
-        // On a slope the saw goes in above the uphill side of the trunk.
-        let uphill = ground.as_deref().map_or(0.0, |ground| {
-            let top = ground.top(transform.translation.xz(), tree.0.base_radius() * scale);
-            (top - transform.translation.y).max(0.0) / scale
-        });
-        let cut_y = (uphill + fell.cut_height / scale).clamp(0.05 / scale, tree.0.trunk.height * 0.5);
+        // A notched tree is cut at the notch's floor; on a slope the saw goes in above the uphill
+        // side of the trunk.
+        let notch = notch.and_then(|notch| notch_in(&built.trunk, notch, transform, &tree.0, ground.as_deref()));
+        let cut_y = notch.map_or_else(|| saw_height(transform, &tree.0, ground.as_deref(), fell.cut_height), |n| n.floor);
         let above = cut(&built.trunk, cut_y, true);
         let below = cut(&built.trunk, cut_y, false);
         let face = cut_face.get(&mut textures, &mut materials);
@@ -299,7 +340,6 @@ pub(crate) fn start_felling(
         let local_dir = fall_direction(transform, fell.direction);
         let (hinge, trunk_reach) = hinge_point(&above.outlines, cut_y, local_dir);
         let axis = Vec3::Y.cross(local_dir).normalize();
-        let contact_set = contact_points(&above.kept, &built.skeleton, &tree.0, cut_y, trunk_reach);
         // How far a point of the tree, in its own space, stands above the ground.
         let clearance = |p: Vec3| match ground.as_deref() {
             None => p.y,
@@ -308,15 +348,26 @@ pub(crate) fn start_felling(
                 (world.y - ground.height(world.xz())) / scale
             }
         };
+        // The tree keeps the wood above the cut and gains its faces: with a notch, less the
+        // notch's wedge, with its face and the cut behind it.
+        let (wood, faces) = match &notch {
+            Some(notch) => fell_notched(&above, notch),
+            None => (above.kept, above.faces),
+        };
+        let contact_set = contact_points(&wood, &built.skeleton, &tree.0, cut_y, trunk_reach);
         let (rest, contact) = rest_angle(&contact_set, hinge, axis, clearance);
-        let length = above.kept.positions.iter().map(|p| (*p - hinge).length()).fold(trunk_reach, f32::max) * scale;
+        let length = wood.positions.iter().map(|p| (*p - hinge).length()).fold(trunk_reach, f32::max) * scale;
         let crown = built.foliage.positions.iter().chain(&built.flowers.positions);
         let crown_radius = crown.map(|p| Vec2::new(p.x, p.z).length()).fold(0.0, f32::max) * scale;
-
-        // The tree keeps the wood above the cut and gains its face.
-        commands.entity(render.trunk).insert((Mesh3d(meshes.add(above.kept.into_bevy_mesh())), Visibility::Inherited));
-        if !above.faces.is_empty() {
-            commands.spawn((Mesh3d(meshes.add(above.faces.into_bevy_mesh())), MeshMaterial3d(face), ChildOf(entity)));
+        commands.entity(render.trunk).insert((Mesh3d(meshes.add(wood.into_bevy_mesh())), Visibility::Inherited));
+        if !faces.is_empty() {
+            commands.spawn((Mesh3d(meshes.add(faces.into_bevy_mesh())), MeshMaterial3d(face), ChildOf(entity)));
+        }
+        if let Some(carved) = carved {
+            if let Some(faces) = carved.faces {
+                commands.entity(faces).despawn();
+            }
+            commands.entity(entity).remove::<NotchCarved>();
         }
         // Materials that do not sway, for when it lies on the ground: while it falls the wind
         // still moves it as it did (a change there would show).
@@ -350,6 +401,141 @@ pub(crate) fn start_felling(
             },
         });
     }
+}
+
+/// Carve every [`TreeNotch`] into its tree's wood when it changes or the tree is rebuilt (turning
+/// a pooled tree into its `ProceduralTree` and moving a tree off the GPU growth path first, as
+/// felling does), and make the wood of a tree whose notch was removed whole again.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(crate) fn carve_notches(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut textures: TextureLibrary,
+    pools: Option<Res<Assets<TreePool>>>,
+    ground: Option<Res<FloraGround>>,
+    mut cut_face: ResMut<CutFace>,
+    trees: Query<
+        (
+            Entity,
+            &TreeNotch,
+            &Transform,
+            Option<&ProceduralTree>,
+            Option<Ref<TreeRender>>,
+            Option<&PooledTree>,
+            Has<GpuGrowth>,
+            Has<Growing>,
+            Option<&NotchCarved>,
+        ),
+        (Without<Felled>, Without<FellTree>),
+    >,
+    healed: Query<(Entity, &NotchCarved, &ProceduralTree, &TreeRender), (Without<TreeNotch>, Without<Felled>)>,
+) {
+    for (entity, notch, transform, tree, render, pooled, gpu, growing, carved) in &trees {
+        if let Some(pooled) = pooled {
+            let Some(pool) = pools.as_deref().and_then(|pools| pools.get(&pooled.pool)) else { continue };
+            let params = pool.tree_params(pooled.variant);
+            commands
+                .entity(entity)
+                .despawn_related::<Children>()
+                .remove::<(PooledTree, PooledTreeSpawned, PooledShapeFilled)>()
+                .insert((ProceduralTree(params), TreeAge(pool.age)));
+            continue;
+        }
+        let Some(tree) = tree else { continue };
+        if growing {
+            commands.entity(entity).remove::<Growing>();
+        }
+        if gpu {
+            commands.entity(entity).remove::<GpuGrowth>();
+            continue;
+        }
+        // Wait for the tree's meshes, rebuilt on the CPU; carve again when they are rebuilt.
+        let Some(render) = render else { continue };
+        if render.paint.cloned_cpu().is_none() || (carved.is_some_and(|c| c.notch == *notch) && !render.is_changed()) {
+            continue;
+        }
+        let Some(handle) = &render.trunk_mesh else { continue };
+        let wood = skeleton_mesh(&aged_skeleton(&render.full, &tree.0, render.age), &tree.0);
+        let (wood, faces) = match notch_in(&wood, notch, transform, &tree.0, ground.as_deref()) {
+            Some(cut) => carve_notch(&wood, &cut),
+            None => (wood, MeshData::default()),
+        };
+        if let Some(mut mesh) = meshes.get_mut(handle) {
+            *mesh = wood.into_bevy_mesh();
+        }
+        let mut drawn = carved.and_then(|c| c.faces);
+        match (drawn, faces.is_empty()) {
+            (Some(child), true) => {
+                commands.entity(child).despawn();
+                drawn = None;
+            }
+            (Some(child), false) => {
+                commands.entity(child).insert(Mesh3d(meshes.add(faces.into_bevy_mesh())));
+            }
+            (None, false) => {
+                let face = cut_face.get(&mut textures, &mut materials);
+                let mesh = Mesh3d(meshes.add(faces.into_bevy_mesh()));
+                drawn = Some(commands.spawn((mesh, MeshMaterial3d(face), ChildOf(entity))).id());
+            }
+            (None, true) => {}
+        }
+        commands.entity(entity).insert(NotchCarved { notch: *notch, faces: drawn });
+    }
+    for (entity, carved, tree, render) in &healed {
+        if let Some(mut mesh) = render.trunk_mesh.as_ref().and_then(|handle| meshes.get_mut(handle)) {
+            *mesh = skeleton_mesh(&aged_skeleton(&render.full, &tree.0, render.age), &tree.0).into_bevy_mesh();
+        }
+        if let Some(faces) = carved.faces {
+            commands.entity(faces).despawn();
+        }
+        commands.entity(entity).remove::<NotchCarved>();
+    }
+}
+
+/// How high the saw or the axe goes in, in a tree's own space: `height` metres above its base
+/// (at least 5 cm, at most half its trunk), or with `ground` above the ground on the uphill side
+/// of its trunk.
+fn saw_height(transform: &Transform, params: &TreeParams, ground: Option<&FloraGround>, height: f32) -> f32 {
+    let scale = transform.scale.y.max(1.0e-4);
+    let uphill = ground.map_or(0.0, |ground| {
+        let top = ground.top(transform.translation.xz(), params.base_radius() * scale);
+        (top - transform.translation.y).max(0.0) / scale
+    });
+    (uphill + height / scale).clamp(0.05 / scale, params.trunk.height * 0.5)
+}
+
+/// Where `notch` cuts into `wood`, the wood of a tree of `params` standing at `transform`, in its
+/// own space; `None` where it cuts nothing (no depth, or no trunk at its floor).
+fn notch_in(wood: &MeshData, notch: &TreeNotch, transform: &Transform, params: &TreeParams, ground: Option<&FloraGround>) -> Option<Notch> {
+    let depth = notch.depth.min(0.9);
+    if depth.is_nan() || depth <= 0.0 {
+        return None;
+    }
+    let floor = saw_height(transform, params, ground, notch.height);
+    let level = cut(wood, floor, false);
+    // The trunk's outline: the one round the tree's base, not a hanging limb's.
+    let centre_of = |o: &[Vec3]| o.iter().copied().sum::<Vec3>() / o.len() as f32;
+    let trunk = level.outlines.iter().min_by(|a, b| centre_of(a).xz().length().total_cmp(&centre_of(b).xz().length()))?;
+    let centre = centre_of(trunk);
+    let toward = fall_direction(transform, notch.direction);
+    let front = trunk.iter().map(|p| (*p - centre).dot(toward)).fold(0.0, f32::max);
+    let back = trunk.iter().map(|p| (centre - *p).dot(toward)).fold(0.0, f32::max);
+    let inner = front - depth * (front + back);
+    // The face rises at 45° and leaves the trunk `front - inner` above the floor; the carving
+    // stops well clear of that, above and beyond.
+    let rise = front - inner;
+    let margin = 0.05 / transform.scale.y.max(1.0e-4);
+    Some(Notch {
+        floor,
+        mouth: floor + 1.5 * rise + margin,
+        axis: centre.xz(),
+        toward: toward.xz(),
+        inner,
+        outer: front + 0.5 * rise + margin,
+        radius: trunk.iter().map(|p| p.distance(centre)).fold(0.0, f32::max),
+        slope: 1.0,
+    })
 }
 
 /// Tip every falling tree over, a few small steps a frame, and settle it where it lands.
@@ -677,7 +863,8 @@ pub(crate) fn build(app: &mut bevy::app::App) {
         .register_type::<Felled>()
         .register_type::<TreeStump>()
         .register_type::<BuckTree>()
-        .register_type::<TreeLog>();
+        .register_type::<TreeLog>()
+        .register_type::<TreeNotch>();
 }
 
 #[cfg(test)]
@@ -961,5 +1148,88 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The positions of a tree's wood as drawn.
+    fn drawn_wood(app: &bevy::app::App, tree: Entity) -> Vec<Vec3> {
+        let handle = app.world().get::<TreeRender>(tree).unwrap().trunk_mesh.clone().unwrap();
+        let mesh = app.world().resource::<Assets<Mesh>>().get(&handle).unwrap();
+        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
+        positions.iter().map(|p| Vec3::from_array(*p)).collect()
+    }
+
+    /// The positions and normals of the mesh `entity` draws.
+    fn drawn(app: &bevy::app::App, entity: Entity) -> (Vec<Vec3>, Vec<Vec3>) {
+        let handle = &app.world().get::<Mesh3d>(entity).unwrap().0;
+        let mesh = app.world().resource::<Assets<Mesh>>().get(handle).unwrap();
+        let read = |attribute| -> Vec<Vec3> {
+            let values = mesh.attribute(attribute).unwrap().as_float3().unwrap();
+            values.iter().map(|p| Vec3::from_array(*p)).collect()
+        };
+        (read(Mesh::ATTRIBUTE_POSITION), read(Mesh::ATTRIBUTE_NORMAL))
+    }
+
+    #[test]
+    fn a_notch_is_carved_into_a_standing_tree_deepens_with_each_blow_and_heals() {
+        let mut app = app();
+        let params = TreePreset::Oak.params();
+        let tree = app.world_mut().spawn((ProceduralTree(params.clone()), Transform::default())).id();
+        app.update();
+        let whole = drawn_wood(&app, tree);
+        let wood = build_tree(&params, f32::INFINITY).trunk;
+        // The trunk's width along -z (the side cut from) at the notch's floor, from the wood itself.
+        let level = cut(&wood, 0.6, false);
+        let ring = level.outlines.iter().max_by_key(|o| o.len()).unwrap();
+        let front = ring.iter().map(|p| -p.z).fold(f32::NEG_INFINITY, f32::max);
+        let width = front - ring.iter().map(|p| -p.z).fold(f32::INFINITY, f32::min);
+        for depth in [0.1, 0.2, 0.3] {
+            let notch = TreeNotch { direction: Vec2::new(0.0, -1.0), height: 0.6, depth };
+            app.world_mut().entity_mut(tree).insert(notch);
+            app.update();
+            let wedge = notch_in(&wood, &notch, &Transform::default(), &params, None).unwrap();
+            let face = wedge.face();
+            let inside = drawn_wood(&app, tree)
+                .into_iter()
+                .filter(|p| p.y > wedge.floor + 1e-3 && p.y < wedge.mouth - 1e-3 && face.distance(*p) < -1e-3);
+            assert_eq!(inside.count(), 0, "depth {depth}: wood left in the notch");
+            // Its faces reach `depth` of the way through the trunk, from the front.
+            let faces = app.world().get::<NotchCarved>(tree).unwrap().faces.expect("no faces drawn");
+            let (positions, _) = drawn(&app, faces);
+            let reached = front - positions.iter().map(|p| -p.z).fold(f32::INFINITY, f32::min);
+            assert!((reached / width - depth).abs() < 0.03, "depth {depth}: the notch reaches {} of the way", reached / width);
+        }
+        let faces = app.world().get::<NotchCarved>(tree).unwrap().faces.unwrap();
+        app.world_mut().entity_mut(tree).remove::<TreeNotch>();
+        app.update();
+        assert_eq!(drawn_wood(&app, tree), whole, "the trunk is not whole again");
+        assert!(app.world().get_entity(faces).is_err(), "the notch's faces are still drawn");
+    }
+
+    #[test]
+    fn a_notched_tree_is_felled_at_its_notch_and_falls_with_its_face() {
+        let mut app = app();
+        let tree = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), Transform::default())).id();
+        app.update();
+        app.world_mut().entity_mut(tree).insert(TreeNotch { direction: Vec2::X, height: 0.8, depth: 0.3 });
+        app.update();
+        let standing = app.world().get::<NotchCarved>(tree).unwrap().faces.unwrap();
+        app.world_mut().entity_mut(tree).insert(FellTree { direction: Vec2::X, cut_height: 0.3, speed: 4.0 });
+        assert_eq!(settle(&mut app, 900), 1, "it did not land exactly once");
+        let felled = app.world().get::<Felled>(tree).unwrap().clone();
+        assert!((felled.fall.hinge.y - 0.8).abs() < 1e-4, "cut at {}, not at the notch's floor", felled.fall.hinge.y);
+        assert!(app.world().get_entity(standing).is_err(), "the standing notch's faces are still drawn");
+        assert!(app.world().get::<NotchCarved>(tree).is_none());
+        // The fallen tree's faces: the notch's face (out of the trunk and down) and the cut behind
+        // it (down); the floor stays on the stump.
+        let cut_face = app.world().resource::<CutFace>().0.clone().unwrap();
+        let children: Vec<Entity> = app.world().get::<Children>(tree).unwrap().iter().collect();
+        let faces = children
+            .into_iter()
+            .find(|&c| app.world().get::<MeshMaterial3d<StandardMaterial>>(c).is_some_and(|m| m.0 == cut_face))
+            .expect("the fallen tree has no cut faces");
+        let (_, normals) = drawn(&app, faces);
+        assert!(normals.iter().any(|n| n.x > 0.5 && n.y < -0.5), "the fallen tree has no notch face");
+        assert!(normals.iter().any(|n| n.y < -0.99), "the fallen tree has no cut behind its notch");
+        assert!(!normals.iter().any(|n| n.y > 0.0), "the fallen tree carries the notch's floor");
     }
 }
