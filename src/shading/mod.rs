@@ -160,7 +160,8 @@ impl FloraWind {
 /// leaves rustle. It is the whole tree that sways, like a bend in the wind (each tree at its own
 /// pace), on every way a tree is drawn: [`ProceduralTree`](crate::ProceduralTree),
 /// [`GpuGrowth`](crate::GpuGrowth), pooled trees and their impostors. Nothing moves on the CPU:
-/// [`TreeShape`](crate::TreeShape) colliders stay where they are.
+/// [`TreeShape`](crate::TreeShape) colliders stay where they are. It also knocks leaves off the
+/// trees it reaches ([`FallingLeaves`](crate::FallingLeaves)).
 #[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct TreeShake {
     /// Where it happens, on the ground: world x and z.
@@ -445,6 +446,8 @@ pub struct FloraKey {
     pub style: RenderStyle,
     /// The see-through fade: see [`FloraExtension::see_through`].
     pub see_through: bool,
+    /// Falling leaves: see [`FloraExtension::falling`].
+    pub falling: bool,
 }
 
 /// The part of [`FloraMaterial`] that bends and shades.
@@ -485,6 +488,10 @@ pub struct FloraExtension {
     /// material. The plugin sets it on every flora material while a camera has one and clears it
     /// when none has, so that otherwise no pipeline carries the fade's discard.
     pub see_through: bool,
+    /// Falling leaves: the mesh is a burst of leaf cards that carries the fall's attributes, and
+    /// the vertex stages move them instead of bending a tree (see [`falling`](crate::falling)). The
+    /// plugin makes such a copy of a tree's leaf material for the leaves that fall from it.
+    pub falling: bool,
 }
 
 impl From<&FloraExtension> for FloraKey {
@@ -495,6 +502,7 @@ impl From<&FloraExtension> for FloraKey {
             venation: extension.venation.is_some(),
             style: extension.style,
             see_through: extension.see_through,
+            falling: extension.falling,
         }
     }
 }
@@ -569,6 +577,9 @@ pub(crate) fn specialize_flora(
     // The base material chose its attributes and their locations (0-7); growth's are 8-10.
     let sway = layout.0.get_layout(&[ATTRIBUTE_LEAF_SWAY.at_shader_location(11)])?;
     descriptor.vertex.buffers[0].attributes.extend(sway.attributes);
+    if key.falling {
+        crate::falling::specialize_falling(descriptor, layout)?;
+    }
     Ok(())
 }
 
@@ -701,6 +712,7 @@ pub(crate) fn flora_material(surface: &Surface, wind: &FloraWindBuffer) -> Flora
             venation: surface.venation.clone(),
             style: surface.style,
             see_through: false,
+            falling: false,
         },
     }
 }
@@ -871,6 +883,15 @@ fn add_shaders(app: &mut App) {
     // camera sees through the trees.
     embedded_asset!(app, "see_through_prepass.wesl");
     crate::see_through::set_prepass_fragment(load_embedded_asset!(app, "see_through_prepass.wesl"));
+    // Falling leaves (`falling.rs`): vertex stages `specialize_flora` puts in a falling material's
+    // pipelines.
+    bevy::shader::load_shader_library!(app, "falling_common.wesl");
+    embedded_asset!(app, "falling.wesl");
+    embedded_asset!(app, "falling_prepass.wesl");
+    crate::falling::set_shaders(
+        load_embedded_asset!(app, "falling.wesl"),
+        load_embedded_asset!(app, "falling_prepass.wesl"),
+    );
 }
 
 #[cfg(test)]
