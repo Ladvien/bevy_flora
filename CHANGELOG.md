@@ -5,6 +5,40 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.30.0] - 2026-10-13
+
+Rain. `FloraWetness` is how wet the trees are, for a game's weather to raise while it rains and
+lower as they dry: wet bark darkens and turns glossy and the leaves' green grows richer, on every
+way a tree is drawn, for one value in the shared buffer. New API only, hence a minor release.
+
+### Added
+
+- **`FloraWetness(f32)`**, a resource the plugin inserts: 0 dry (the default), 1 soaked
+  (`FloraWetness::SOAKED`; `amount()` clamps to 0..1, NaN reads as dry). Wet bark keeps about half
+  its albedo, its colour deepens and its roughness falls to at most 0.5; a wet leaf keeps its
+  brightness and roughness and its colour moves a quarter further from its own grey. On
+  `ProceduralTree`, `GpuGrowth`, pooled trees and their impostors (by the texel: wood or leaf),
+  under the season's snow. Like the wind and the season it lives in the shared buffer (lane z of
+  slot 2): changing it changes no material and costs nothing per tree; dry, the shaders skip it.
+  In the crate root and the prelude.
+- Examples: `inspect --wet <0..1>` and `forest --wet <0..1>`.
+- README: "Rain: `FloraWetness`" under Seasons, with `docs/wet.jpg` (an oak dry and soaked).
+
+### Measured
+
+- **Look.** Dry, the 424 gallery scenarios render as in 0.29.0 on the CPU and with `--gpu` (a
+  mean difference of 0.000 of 255; byte for byte but the painterly maple and oak, PSNR 100 and
+  83 dB; no `ERROR`), and so do the growth, grove, seasons and fire clips frame for frame (push
+  within PSNR 89 dB); the shake, fell and chop clips drop other leaves of the same trees.
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.29.0): 1 000
+  individual oaks 24.51, 24.52 and 24.55 ms median (0.29.0: 24.90, 24.45 and 24.65), 100 000
+  pooled oaks 7.61 and 7.57 ms (7.74 and 7.59).
+- **Found and fixed before release.** Wet leaves made glossy caught the sun and the sky on cards
+  facing every way, a crown of silvery cards that read as frost, not rain; darkened but matte they
+  still greyed, the same white sheen a bigger share of a darker leaf (the impostors' leaves too).
+  A wet leaf now keeps its brightness and roughness and only its colour grows richer; the dark,
+  glossy bark says rain.
+
 ## [0.29.0] - 2026-10-13
 
 Finding trees. The plugin keeps a `FloraIndex` of every standing tree, pooled ones included, by
@@ -1819,6 +1853,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.30.0]: https://github.com/Ladvien/bevy_flora/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/Ladvien/bevy_flora/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/Ladvien/bevy_flora/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/Ladvien/bevy_flora/compare/v0.26.0...v0.27.0

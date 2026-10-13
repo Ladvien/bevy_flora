@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.29 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.30 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.29"
+bevy_flora = "0.30"
 ```
 
 | feature | default | what it does |
@@ -464,6 +464,29 @@ A scattered winter forest under `FloraSeason::SNOW`: the spruces and pines keep 
 
 *`cargo run --release --example forest -- --trees 3000 --spacing 7 --scatter spruce:3,pine:2,birch:2,oak:1 --grove 50 --clearing 25 --season 1,1,1 --eye 25,9,-75 --at 0,6,-20 --fov 50 --wind 0 --deterministic --screenshot snow.png`*
 
+#### Rain: `FloraWetness`
+
+`FloraWetness` is how wet the trees are, 0 (dry, the default) to 1 (soaked), for the game's weather to raise while it rains and lower as the trees dry. Wet bark darkens to about half, its colour deepens and it turns glossy; a leaf keeps its brightness and only its green grows richer (a darker or glossier leaf lets the sky's white sheen grey the crown, which then reads as frost, not rain). It reaches every way a tree is drawn, pools and impostors included, snow lies over it, and changing it writes one value of the shared buffer, no material: dry, every tree is exactly as before.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::prelude::*;
+
+/// The game's weather.
+#[derive(Resource)]
+struct Raining(bool);
+
+// A shower: soaked in a minute, dry again ten minutes after it stops.
+fn rain(raining: Res<Raining>, time: Res<Time>, mut wetness: ResMut<FloraWetness>) {
+    let rate = if raining.0 { 1.0 / 60.0 } else { -1.0 / 600.0 };
+    wetness.0 = (wetness.0 + rate * time.delta_secs()).clamp(0.0, 1.0);
+}
+```
+
+![The foot and lower crown of an oak, twice: on the left dry, its bark a warm mid brown; on the right soaked, its bark a darker, deeper brown with a soft sheen up the trunk and its leaves a little richer green](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/wet.jpg)
+
+*`cargo run --release --example inspect -- --out target/wet --preset oak --mode tree --wet 1 --distance 6.5 --yaw 35 --eye 1.7 --look 0.3 --fov 55 --size 1200x1200` (and `--wet 0`), side by side.*
+
 ### Trees that react: `TreeShakes`
 
 A game hits trees. `TreeShakes` is a resource like `FloraWind`: `shake(TreeShake { at, radius, strength, direction, duration }, &time)` swings every tree whose trunk stands within `radius` metres of `at` (world x and z), the nearest the most, first away from `at` (or along `direction`), then back and forth, dying away over `duration` seconds, while its leaves rustle. About a metre of radius singles out the tree that was hit; tens of metres reach a whole grove. Each tree swings at its own pace, taller trees slower, and the whole tree bends as it does in the wind, on every way a tree is drawn: `ProceduralTree`, `GpuGrowth`, pooled trees and their impostors. Up to eight shakes run at once (`TreeShakes::MAX`; a new one takes the place of the one that ends soonest, so a knock always shows). They live in the wind's shared buffer, so a shake writes a few hundred bytes and touches no material, and while none is under way the shaders compare one number a vertex. A shake is drawn, not simulated: colliders (`TreeShape`) stay where they are.
@@ -810,6 +833,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Leaf scans and grown veins.** Seven presets cut their leaf cards to the real outline of a bundled CC0 leaf scan and wear its colour and normal map (`FoliageParams::scan`, `LeafScan`); every other leaf-shaped card has veins grown by space colonisation (`venation`), drawn by the leaf shader from one small shared image.
 - **Looks.** `TreeParams::style` draws a tree as `Natural`, `Painterly` (leaf normals point out of each clump's own centre: rounded masses) or `Toon` (banded light and an ink rim); impostors and pools follow.
 - **Seasons.** `FloraSeason` turns deciduous trees to their autumn colour (`FoliageParams::autumn`), sheds their leaves one by one (near a camera they fall to the ground), lays snow on every tree and brings flowering trees into blossom in spring (`FoliageParams::blossom`: five-petalled flowers that open and fall one by one), shadows, pools, impostors and `GpuGrowth` included, at no cost per tree; `FloraSeason::of_year` drives a whole year from one number.
+- **Rain.** `FloraWetness` soaks every tree, pools and impostors included, from 0 (dry) to 1: wet bark darkens and turns glossy, the leaves' green grows richer; one value in the shared buffer, nothing per tree.
 - **No hitches.** `BuildInBackground` builds a tree off the main thread: 200 oaks planted in one frame cost it 0.5 ms instead of 23 ms, and appear a few frames later.
 - **Seeing the player.** `SeeThroughTrees` on the camera dithers out the trees between it and the player, prepasses included, while shadows keep the whole trees; nothing is compiled in while no camera has it.
 - **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
@@ -819,7 +843,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Walking through undergrowth.** `FoliagePusher` on the player or an NPC: the leaves and thin stems it walks through bend out of its way and close up behind it, shadows included, while trunks stay put.
 - **Felling.** `TreeNotch` cuts an axe's notch into a standing trunk, deeper with each blow; `FellTree` cuts a tree, pooled ones included, at its notch if it has one: it falls about the hinge of the cut, lands on its limbs with a bounce (`TreeLanded`), and leaves a `TreeStump`; every cut face shows end grain. `BuckTree` then cuts its trunk into `TreeLog`s lying on the ground, each with a capsule for its collider.
 - **Trees from files.** `TreeParams` is an asset: `ProceduralTreeAsset` draws a tree from a handle, and every tree sharing it follows edits; with the `ron` feature trees load from `.tree.ron` files and rebuild when the file is saved.
-- **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.7 ms a frame, leaf shading, wind and seasons included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 25 ms a frame) and `TreeLod` draws each at the same three levels (6.5 ms), but each keeps its own meshes, so use a pool beyond that.
+- **Forest scale.** `TreePool` builds a few variants of a tree once, each at three levels of detail made from the skeleton (thin wood dropped, fewer sides and rings, fewer and larger leaves) and a baked camera-facing impostor for the far field; `PooledTree` places them. 100 000 oak trees draw at 7.6 ms a frame, leaf shading, wind and seasons included (see above). A forest of individual `ProceduralTree`s is fine for a few thousand trees, because trees with equal looks share their materials (1 000 oaks: 25 ms a frame) and `TreeLod` draws each at the same three levels (6.5 ms), but each keeps its own meshes, so use a pool beyond that.
 - **Planting forests.** `Scatter` says where the trees stand: trunks at least a spacing apart and otherwise irregular (Poisson disc), species in groves with bending borders, each tree its own yaw, size and variant, and a density per spot for roads and clearings; deterministic per seed. A second scatter of the `Shrub` preset, kept clear of the trunks, makes the undergrowth.
 - **Terrain.** `FloraGround` is your ground's height: trees stand at their footing, where the trunk meets a slope all round (`ScatterPoint::transform_on`), `slope` keeps them off cliffs, and felled trees are cut above the uphill side and land on the hills.
 

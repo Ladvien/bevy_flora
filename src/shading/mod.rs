@@ -335,6 +335,40 @@ impl FloraSeason {
     }
 }
 
+/// How wet the trees are, 0 (dry, the default) to 1 (soaked): the game's rain, raised while it
+/// rains and lowered as the trees dry. Wet bark darkens and turns glossy; a wet leaf keeps its
+/// brightness and only its green grows richer; on every way a tree is drawn (pools and impostors
+/// included), and under snow, snow wins. Changing it writes one value of the shared buffer, no
+/// material, and costs nothing a frame.
+///
+/// ```rust,no_run
+/// use bevy::prelude::*;
+/// use bevy_flora::FloraWetness;
+///
+/// /// The game's weather.
+/// #[derive(Resource)]
+/// struct Raining(bool);
+///
+/// // A shower: wet in a minute, dry again in ten once it stops.
+/// fn rain(raining: Res<Raining>, time: Res<Time>, mut wetness: ResMut<FloraWetness>) {
+///     let rate = if raining.0 { 1.0 / 60.0 } else { -1.0 / 600.0 };
+///     wetness.0 = (wetness.0 + rate * time.delta_secs()).clamp(0.0, 1.0);
+/// }
+/// ```
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Resource)]
+pub struct FloraWetness(pub f32);
+
+impl FloraWetness {
+    /// Soaked.
+    pub const SOAKED: Self = Self(1.0);
+
+    /// The wetness the shaders use: clamped to 0..1, 0 for a NaN.
+    pub fn amount(&self) -> f32 {
+        if self.0.is_nan() { 0.0 } else { self.0.clamp(0.0, 1.0) }
+    }
+}
+
 /// What `from` is multiplied by to become `to`, per linear channel (capped at
 /// [`AUTUMN_RATIO_MAX`]), and 1: a turned leaf's colour, or a flower's, from the leaf colour, so
 /// a scan's own variation stays.
@@ -386,15 +420,19 @@ impl FloraUniform {
 /// (`push::PUSH_SLOT`).
 pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + 2 + PUSH_VECTORS;
 
+/// The shared buffer's slot whose third lane holds [`FloraWetness`] (`sync_wind` writes it).
+pub(crate) const WETNESS_SLOT: usize = 2;
+
 /// The `Vec4`s of [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] the shaders read, in the order
 /// of the shared buffer: `wind` (direction x, direction z, strength, speed), `motion` (bend,
-/// flutter, gust strength, turbulence), `rate` (gust frequency, flutter frequency, 0, 0), `front`
-/// (origin x, origin z, direction x, direction z), `front_shape` (speed, width, strength, start
-/// time), `season` (autumn, leaf fall, snow, blossom), the shakes' header (the render time the last of
-/// them ends, -1 without any, 0, 0) and two per shake slot, (at x, at z, radius, strength) and
-/// (direction x, direction z, start, duration), all zero for an empty slot. `front` and
-/// `front_shape` are zero without a [`GustFront`], or with one that has no direction. Directions
-/// are normalised and every value clamped to what the shaders can use.
+/// flutter, gust strength, turbulence), `rate` (gust frequency, flutter frequency, the
+/// [`FloraWetness`] `sync_wind` puts there (0 here), 0), `front` (origin x, origin z, direction x,
+/// direction z), `front_shape` (speed, width, strength, start time), `season` (autumn, leaf fall,
+/// snow, blossom), the shakes' header (the render time the last of them ends, -1 without any, 0,
+/// 0) and two per shake slot, (at x, at z, radius, strength) and (direction x, direction z, start,
+/// duration), all zero for an empty slot. `front` and `front_shape` are zero without a
+/// [`GustFront`], or with one that has no direction. Directions are normalised and every value
+/// clamped to what the shaders can use.
 pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason, shakes: &TreeShakes) -> [Vec4; WIND_VECTORS] {
     let d = wind.direction.normalize_or_zero();
     let (front, front_shape) = match wind.gust {
@@ -769,8 +807,16 @@ pub struct FloraMaterialSupport;
 pub struct FloraWindBuffer(pub Handle<ShaderBuffer>);
 
 impl FloraWindBuffer {
-    fn new(buffers: &mut Assets<ShaderBuffer>, wind: &FloraWind, season: &FloraSeason, shakes: &TreeShakes) -> Self {
-        Self(buffers.add(ShaderBuffer::from(shared_vectors(&wind_vectors(wind, season, shakes).map(|v| v.to_array())))))
+    fn new(
+        buffers: &mut Assets<ShaderBuffer>,
+        wind: &FloraWind,
+        season: &FloraSeason,
+        shakes: &TreeShakes,
+        wetness: &FloraWetness,
+    ) -> Self {
+        let mut packed = wind_vectors(wind, season, shakes).map(|v| v.to_array());
+        packed[WETNESS_SLOT][2] = wetness.amount();
+        Self(buffers.add(ShaderBuffer::from(shared_vectors(&packed))))
     }
 }
 
@@ -804,12 +850,14 @@ pub(crate) fn detect_flora_support(
     }
 }
 
-/// Write [`FloraWind`], [`FloraSeason`] and [`TreeShakes`] into the shared buffer, in place. Runs
-/// when any of them changed. Only their slots: the fire's grid after them
+/// Write [`FloraWind`], [`FloraSeason`], [`FloraWetness`] and [`TreeShakes`] into the shared
+/// buffer, in place. Runs when any of them changed. Only their slots: the fire's grid after them
 /// ([`FloraFire`](crate::FloraFire)) is `fire::sync_fire`'s.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_wind(
     wind: Res<FloraWind>,
     season: Res<FloraSeason>,
+    wetness: Res<FloraWetness>,
     shakes: Res<TreeShakes>,
     capsule: Res<SeeThroughCapsule>,
     push: Res<PushSlots>,
@@ -817,6 +865,7 @@ pub(crate) fn sync_wind(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
     let mut packed = wind_vectors(&wind, &season, &shakes).map(|v| v.to_array());
+    packed[WETNESS_SLOT][2] = wetness.amount();
     // The see-through fade's slots are written by `sync_see_through`; keep them.
     packed[SEE_THROUGH_SLOT] = capsule.0[0].to_array();
     packed[SEE_THROUGH_SLOT + 1] = capsule.0[1].to_array();
@@ -863,12 +912,14 @@ pub(crate) fn expire_shakes(mut shakes: ResMut<TreeShakes>, time: Res<Time>) {
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<FloraWind>()
         .init_resource::<FloraSeason>()
+        .init_resource::<FloraWetness>()
         .init_resource::<TreeShakes>()
         .init_resource::<SeeThroughCapsule>()
         .init_resource::<SharedFlora>()
         .init_resource::<FloraTextures>()
         .register_type::<FloraWind>()
         .register_type::<FloraSeason>()
+        .register_type::<FloraWetness>()
         .register_type::<TreeShakes>()
         .register_type::<GustFront>();
     if app.get_sub_app(RenderApp).is_some() && app.is_plugin_added::<PbrPlugin>() {
@@ -914,8 +965,14 @@ fn add_wind_buffer(app: &mut App) {
     let wind = *app.world().resource::<FloraWind>();
     let season = *app.world().resource::<FloraSeason>();
     let shakes = app.world().resource::<TreeShakes>().clone();
-    let buffer =
-        FloraWindBuffer::new(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), &wind, &season, &shakes);
+    let wetness = *app.world().resource::<FloraWetness>();
+    let buffer = FloraWindBuffer::new(
+        &mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(),
+        &wind,
+        &season,
+        &shakes,
+        &wetness,
+    );
     app.insert_resource(buffer);
 }
 

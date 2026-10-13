@@ -17,7 +17,7 @@ import bevy_pbr::render::{
 };
 import package::shading::common::{
     flora, flora_wind, wind_bend, shake_at, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
-    snow_on, snow_shelter, LEAF_FROST,
+    snow_on, snow_shelter, wet_on, LEAF_FROST,
 };
 
 @if(VISIBILITY_RANGE_DITHER)
@@ -192,8 +192,11 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     // What the crown's own leaves keep from the sky and the sun.
     p.diffuse_occlusion = vec3<f32>(baked.b);
     p.directional_shadow_factor = baked.b;
-    // The season's snow on what faces up, by the baked (crown-bent) normal, as much as the texel
-    // sees of the sky (wood: 1), as the meshes take it.
+    // The rain, wood or leaf by the texel's baked translucency (wood 0; a leaf's own translucency,
+    // below 1, so anything above a trace is a leaf), then the season's snow on what faces up, by
+    // the baked (crown-bent) normal, as much as the texel sees of the sky (wood: 1), as the meshes
+    // take them.
+    wet_on(&p, saturate(baked.a * 20.0));
     let snowed = snow_on(&p, N, snow_shelter(baked.b), LEAF_FROST * saturate(baked.a));
 
     var out: FragmentOutput;

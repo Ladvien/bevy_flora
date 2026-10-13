@@ -8,7 +8,7 @@
 //!     [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>]
 //!     [--shadows <off|distance,cascades>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic]
 //!     [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>]
-//!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
+//!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod]
 //!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]
 //!     [--push <x,z>]
@@ -97,7 +97,8 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliagePusher, GpuGrowth, Growing,
+    BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWetness, FloraWind, FoliagePusher,
+    GpuGrowth, Growing,
     GustFront, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees,
     TreeAge, TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
 };
@@ -203,6 +204,8 @@ struct Args {
     screenshot: Option<PathBuf>,
     /// How far deciduous trees have turned and shed their leaves.
     season: FloraSeason,
+    /// How wet the trees are (`FloraWetness`).
+    wet: f32,
     /// Species and their shares, to spread with `Scatter` instead of the grid.
     scatter: Option<Vec<(TreePreset, f32)>>,
     /// How wide a grove of one species grows (`Scatter::grove_size`), with `--scatter`.
@@ -235,7 +238,7 @@ fn usage() -> ! {
          [--eye <x,y,z>] [--at <x,y,z>] [--fov <deg>] \
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--leaf-fall-animate <s>] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
-         [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
+         [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] \
          [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>] [--push <x,z>]"
     );
@@ -272,6 +275,7 @@ fn parse_args() -> Args {
         offscreen: false,
         screenshot: None,
         season: FloraSeason::SUMMER,
+        wet: 0.0,
         scatter: None,
         grove: 50.0,
         clearing: 0.0,
@@ -434,6 +438,7 @@ fn parse_args() -> Args {
                 };
                 args.season = FloraSeason { autumn, leaf_fall, snow, blossom };
             }
+            "--wet" => args.wet = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| usage()),
             "--lod" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let parts: Vec<f32> = list.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -521,7 +526,7 @@ fn main() {
     if args.deterministic {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
     }
-    app.insert_resource(args.season);
+    app.insert_resource(args.season).insert_resource(FloraWetness(args.wet));
     let leaf_fall = args.leaf_fall_animate.is_some();
     let fire = args.fire.is_some();
     // Unfocused, Bevy's default settings update 60 times a second; a benchmark
