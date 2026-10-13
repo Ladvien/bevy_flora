@@ -5,6 +5,42 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.33.0] - 2026-10-13
+
+Saving and loading. What a game did to its trees comes back from a save as it was left: a felled
+tree lying where it fell, picked fruit off the tree, a fire's grid still burning. `FellTree`
+gains a field, hence a minor release (a `FellTree { .. }` written out in full needs
+`lying: false` or `..default()`).
+
+### Added
+
+- **`FellTree::lying`**: lay the tree down at once where it would come to rest, with its stump and
+  cut faces, on its still materials, and no landing (no `TreeLanded`, no shake, no leaves shed):
+  a tree felled before a save, restored. A fall always ends exactly at the rest angle the cut
+  finds, so it lies as the fallen tree did; `BuckTree` cuts it into logs as soon as it lies.
+- **`TreeFruit::picked`** (the keys of the picked fruit, to save) and **`TreeFruit::with_picked`**
+  (a tree's fruit with those keys picked: insert it with the tree, before or after it is built).
+- **`FloraFire::restore`**: set every cell as `FloraFire::cells` gave them: the char as it was,
+  and the cells still burning burn on from now. `false`, changing nothing, for a grid of
+  another size.
+- Examples: `inspect --fell <deg> --lying`.
+- README: "Saving and loading the forest": what to save for a tree, a notch, a felled tree,
+  picked fruit, a fire, and the weather.
+
+### Measured
+
+- **Look.** The 441 gallery scenarios render byte for byte as in 0.32.0 on the CPU and with
+  `--gpu` (no `ERROR`), and so do the nine clips frame for frame, but one of the chop clip's
+  (another leaf falling).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.32.0, on a
+  machine another job was loading, a quarter slower than usual for both): 1 000 individual oaks
+  30.65, 30.54 and 31.32 ms median (0.32.0: 31.39, 30.64 and 29.49), 100 000 pooled oaks 9.09 and
+  9.10 ms (8.73 and 9.84): alike; nothing new runs a frame.
+- **The restored tree.** An oak felled toward 45° and settled, against the same oak restored
+  lying: the same pose (the test asserts a millimetre and a milliradian), stump and cut faces;
+  the rendered frames differ only where the felled oak's own landing shake still rustles its
+  leaves (PSNR 34 dB).
+
 ## [0.32.0] - 2026-10-13
 
 Harvest. A fruiting tree's fruit can be picked, and a shake knocks fruit to the ground for the
@@ -1939,6 +1975,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.33.0]: https://github.com/Ladvien/bevy_flora/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/Ladvien/bevy_flora/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/Ladvien/bevy_flora/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/Ladvien/bevy_flora/compare/v0.29.0...v0.30.0

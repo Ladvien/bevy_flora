@@ -147,6 +147,17 @@ impl TreeFruit {
     pub fn regrow(&mut self) {
         self.picked.clear();
     }
+
+    /// The keys of the picked fruit, to save.
+    pub fn picked(&self) -> impl Iterator<Item = u32> + '_ {
+        self.picked.iter().copied()
+    }
+
+    /// A tree's fruit with the fruit `keys` picked, from a save: insert it on the tree before or
+    /// after it is built; the plugin fills in the fruit it grew and keeps the picks.
+    pub fn with_picked(keys: impl IntoIterator<Item = u32>) -> Self {
+        Self { picked: keys.into_iter().collect(), ..Default::default() }
+    }
 }
 
 /// How much fruit a shake knocks loose and how long it lies. A resource; the plugin adds the
@@ -579,6 +590,33 @@ mod tests {
             app.update();
         }
         assert_eq!(app.world_mut().query::<&FallenFruit>().iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn picks_saved_from_one_tree_hide_the_same_fruit_on_its_restored_twin() {
+        let apple = TreePreset::Apple.params();
+        let mut before = app();
+        let tree = before.world_mut().spawn((ProceduralTree(apple.clone()), Transform::default())).id();
+        before.update();
+        before.update();
+        let keys: Vec<u32> = before.world().get::<TreeFruit>(tree).unwrap().all().iter().step_by(5).map(|f| f.key).collect();
+        let mut fruit = before.world_mut().get_mut::<TreeFruit>(tree).unwrap();
+        for &key in &keys {
+            assert!(fruit.pick(key));
+        }
+        let saved: Vec<u32> = fruit.picked().collect();
+
+        // A new world: the tree comes back with its picks before it is first built.
+        let mut loaded = app();
+        let twin = loaded.world_mut().spawn((ProceduralTree(apple), Transform::default(), TreeFruit::with_picked(saved))).id();
+        loaded.update();
+        loaded.update();
+        let fruit = loaded.world().get::<TreeFruit>(twin).unwrap();
+        assert_eq!(fruit.all().len(), before.world().get::<TreeFruit>(tree).unwrap().all().len());
+        assert!(keys.iter().all(|&key| fruit.is_picked(key)));
+        assert_eq!(fruit.on_tree(&FloraSeason::SUMMER).count(), fruit.all().len() - keys.len());
+        let hidden: Vec<u32> = fruit_vertices(&loaded, twin)[0].iter().filter(|(_, a)| *a == PICKED_ALPHA).map(|&(k, _)| k).collect();
+        assert!(!hidden.is_empty() && hidden.iter().all(|k| keys.contains(k)), "the restored picks are not the drawn ones");
     }
 
     #[test]

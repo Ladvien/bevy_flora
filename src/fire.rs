@@ -241,6 +241,24 @@ impl FloraFire {
         }
     }
 
+    /// Set every cell to `cells` (as [`cells`](Self::cells) gave them, row by row), as when a
+    /// save is loaded: the char as it was, and a cell still burning (heat above 0) burns on, its
+    /// fire spreading again from now. `false`, and nothing changes, if `cells` is not one entry a
+    /// cell.
+    pub fn restore(&mut self, cells: &[FireCell]) -> bool {
+        if cells.len() != self.cells.len() {
+            return false;
+        }
+        let now = self.steps as f32 * STEP;
+        for (i, cell) in cells.iter().enumerate() {
+            let (char, heat) = (cell.char.clamp(0.0, 1.0), cell.heat.clamp(0.0, 1.0));
+            self.cells[i] = FireCell { char, heat };
+            self.lit[i] = if heat > 0.0 { now } else { f32::INFINITY };
+        }
+        self.burning = self.cells.iter().filter(|cell| cell.heat > 0.0).count();
+        true
+    }
+
     /// Char the cells within `radius` metres of `at` to at least `char` (0..1) with no fire: an old
     /// burn, laid down when a level loads.
     pub fn scorch(&mut self, at: Vec3, radius: f32, char: f32) {
@@ -596,6 +614,25 @@ mod tests {
     fn run(fire: &mut FloraFire, seconds: f32, wind: Vec2) {
         for _ in 0..(seconds / STEP).round() as usize {
             fire.step(wind);
+        }
+    }
+
+    #[test]
+    fn a_fire_restored_from_its_cells_burns_on_from_where_it_was() {
+        let mut fire = row_of_trees();
+        fire.ignite(Vec3::new(-24.0, 0.0, 0.0), 1.0);
+        run(&mut fire, 8.0, Vec2::ZERO);
+        assert!(fire.is_burning());
+        let saved = fire.cells().to_vec();
+        let mut loaded = row_of_trees();
+        assert!(!loaded.restore(&saved[1..]), "a grid of another size was restored");
+        assert!(loaded.restore(&saved));
+        assert_eq!(loaded.cells(), &saved[..]);
+        assert!(loaded.is_burning());
+        // It burns on along the row to its end.
+        run(&mut loaded, 120.0, Vec2::ZERO);
+        for i in -6..=6 {
+            assert!(loaded.char_at(Vec3::new(i as f32 * 4.0, 0.0, 0.0)) > 0.95, "tree {i}");
         }
     }
 
