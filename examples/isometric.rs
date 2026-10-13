@@ -187,11 +187,14 @@ fn setup(
     ));
 
     // A pool per species, scattered in groves, and a path kept clear along the screen's x axis
-    // through the forest's middle.
+    // through the forest's middle. The impostors are pictures taken from the camera's own pitch, so
+    // the far trees show their crowns from above as the near ones do, and they cast shadows, so the
+    // far forest stands on its shadows as the near one does.
     let species = [TreePreset::Pine, TreePreset::Spruce, TreePreset::Oak, TreePreset::Maple];
+    let lod = LodSettings { impostor_elevation: PITCH, impostor_shadows: true, ..default() };
     let pools: Vec<Handle<TreePool>> = species
         .iter()
-        .map(|preset| pools.add(build_pool(&preset.params(), 4, f32::INFINITY, &LodSettings::default(), &mut meshes)))
+        .map(|preset| pools.add(build_pool(&preset.params(), 4, f32::INFINITY, &lod, &mut meshes)))
         .collect();
     let forest = Scatter {
         seed: 3,

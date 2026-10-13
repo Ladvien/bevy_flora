@@ -5,6 +5,50 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.37.0] - 2026-10-13
+
+Impostors for cameras that look down (issue #62, D-070 in `qa/visual_findings.md`): under the
+`isometric` example's camera the impostor half of a forest read flatter and lighter than the
+level 2 half beside it. `LodSettings` has two new fields, so a literal that names all of its
+fields needs them: a minor release.
+
+### Added
+
+- **`LodSettings::impostor_elevation`** (degrees, 10 by default, at most 60): a pool's impostor
+  pictures are taken from that height above the horizon. An isometric or top-down game sets its
+  camera's pitch, and its far trees show their crowns from above as the near ones do.
+- **`LodSettings::impostor_shadows`** (off by default): a pool's impostors cast shadows, each its
+  tree's silhouette with the quad turned toward the light, where the shadow cascades reach
+  (`impostor_prepass.wesl`). `NotShadowCaster` on a pooled tree still keeps its impostor out.
+- `forest --impostor-elevation <deg>` and `--impostor-shadows`. The `isometric` example builds its
+  pools from its camera's pitch, with impostor shadows (`docs/isometric.gif`).
+
+### Changed
+
+- An impostor is drawn at the front of its crown: each corner of its quad moves toward the camera
+  along its own view ray by the crown's reach, so the picture on screen is the same and the
+  picture's lowest part, the near edge of a crown seen from above, is no longer hidden under the
+  ground. Under an orthographic camera every impostor faces along the camera's view.
+- `ImpostorMaterial::params.z` carries the crown's reach (0 draws the quad where it stands).
+
+### Measured
+
+- **Look.** The 441 gallery scenarios render byte for byte as in 0.36.0 on the CPU and with
+  `--gpu` but the CPU toon maple and oak (a mean difference of 0.000 of 255; no `ERROR`), and so do
+  the nine clips and the playground's demo frame for frame but three push frames by a level: none
+  of them draws an impostor. A perspective pooled forest at the default 10° differs from 0.36.0's
+  by a mean of 0.000 of 255 (the quad drawn at the front of the crown leaves the picture where it
+  was), and with `--impostor-shadows` the far band, with the sun in front or behind, darkens no
+  impostor under its own shadow. In the isometric demo the impostor half of the forest shows its
+  crowns from above and stands on its shadows (D-070, moved to Fixed).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.36.0 on a
+  machine loaded by other builds, about 20% slower than quiet): 1 000 individual oaks, run after
+  0.36.0 in each pair, 31.37 ms against 30.26 (medians of five pairs) and, run before it, 25.35,
+  25.39, 26.25 and 26.11 ms against 25.46, 28.45, 26.25 and 27.78: the binary run second was the
+  slower, so no difference; 100 000 pooled oaks 9.45, 8.46 and 8.32 ms (0.36.0: 10.00, 8.77 and
+  8.27). Impostor shadows cost 100 000 pooled oaks 1.0 to 1.6 ms (9.93, 9.22 and 9.31 ms against
+  8.33, 8.48 and 8.14 without, the default camera's cascades): they are off by default.
+
 ## [0.36.0] - 2026-10-13
 
 Orthographic cameras, for a game with an isometric camera (issues #51 and #52): the levels of
@@ -2129,6 +2173,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.37.0]: https://github.com/Ladvien/bevy_flora/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/Ladvien/bevy_flora/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/Ladvien/bevy_flora/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/Ladvien/bevy_flora/compare/v0.33.0...v0.34.0

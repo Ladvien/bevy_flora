@@ -45,7 +45,11 @@ pub struct ImpostorMaterial {
     /// light it lets through in `a`. Linear.
     #[texture(2)]
     pub surface: Handle<Image>,
-    /// `x`: the number of views in the atlas; `y`: the [`RenderStyle`] (0 natural, 1 painterly, 2 toon).
+    /// `x`: the number of views in the atlas; `y`: the [`RenderStyle`] (0 natural, 1 painterly, 2 toon);
+    /// `z`: how far the crown reaches from the trunk axis, in the tree's units: the quad stands in
+    /// the trunk's plane but is drawn that far before it, toward the camera, each vertex moved along
+    /// its own view ray, so the picture on screen is the same and its foot is not under the ground
+    /// (0: drawn where it stands).
     #[uniform(3)]
     pub params: Vec4,
     /// The look of the leaves and the species' response to the wind.
@@ -113,15 +117,24 @@ impl Material for ImpostorMaterial {
         AlphaMode::AlphaToCoverage
     }
 
-    // The vertex stage places the quad itself, so the default prepass and
-    // shadow shaders would draw it somewhere else; impostors are far away and
-    // cast no shadows.
+    // The vertex stage places the quad itself, so Bevy's own prepass shaders would draw it
+    // somewhere else. The camera's prepasses leave impostors out; shadow maps draw them with
+    // `impostor_prepass.wesl`, turned toward the light, for the pools that ask for it
+    // (`LodSettings::impostor_shadows`: the others' impostors are `NotShadowCaster`s).
+    fn prepass_vertex_shader() -> ShaderRef {
+        "embedded://bevy_flora/impostor/impostor_prepass.wesl".into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://bevy_flora/impostor/impostor_prepass.wesl".into()
+    }
+
     fn enable_prepass() -> bool {
         false
     }
 
     fn enable_shadows() -> bool {
-        false
+        true
     }
 
     fn specialize(
@@ -187,6 +200,8 @@ impl Material for ImpostorBakeMaterial {
 
 /// Embed the shaders.
 pub(crate) fn add_shaders(app: &mut App) {
+    bevy::shader::load_shader_library!(app, "impostor_common.wesl");
     bevy::asset::embedded_asset!(app, "impostor.wesl");
+    bevy::asset::embedded_asset!(app, "impostor_prepass.wesl");
     bevy::asset::embedded_asset!(app, "impostor_bake.wesl");
 }
