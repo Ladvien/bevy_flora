@@ -11,6 +11,7 @@ use super::material::{GrowthMaterial, growth_material};
 use super::mesh::build_growth_data;
 use super::state::GrowthState;
 use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterialAdded};
+use crate::background::{BuildInBackground, PendingBuild};
 use crate::felling::Felled;
 use crate::params::TreeParams;
 use crate::plugin::{
@@ -18,7 +19,7 @@ use crate::plugin::{
     build_in_batches, replace_mesh, sync_leaf_child,
 };
 use crate::shading::{FloraWindBuffer, Surface, TextureLibrary};
-use crate::skeleton::generate_skeleton;
+use crate::skeleton::{Skeleton, generate_skeleton};
 
 /// What a tree that grows on the GPU draws with.
 pub(crate) struct GrowthPaint {
@@ -140,7 +141,9 @@ fn spawn_growth_leaf(
     commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), marker, ChildOf(tree))).id()
 }
 
-/// Build (or bring up to date) the render state of trees that grow on the GPU.
+/// Build (or bring up to date) the render state of trees that grow on the GPU. A tree with
+/// [`BuildInBackground`] has its mature meshes built on the async compute pool instead, and put
+/// in the frame the build is done.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn rebuild_gpu_trees(
     mut commands: Commands,
@@ -152,14 +155,33 @@ pub(crate) fn rebuild_gpu_trees(
     mut textures: TextureLibrary,
     mut generated: MessageWriter<TreeGenerated>,
     mut trees: Query<
-        (Entity, Ref<ProceduralTree>, &TreeAge, Option<&mut TreeRender>, Has<GpuGrowth>),
-        (Or<(Changed<ProceduralTree>, Changed<TreeAge>, Without<TreeRender>)>, Without<Felled>),
+        (Entity, Ref<ProceduralTree>, Ref<TreeAge>, Option<&mut TreeRender>, Has<GpuGrowth>, Has<BuildInBackground>),
+        Without<Felled>,
     >,
+    mut pending: Query<(Entity, &mut PendingBuild<GrowthBuilt>)>,
 ) {
+    // The background builds that are done.
+    let mut finished = Vec::new();
+    for (entity, mut build) in &mut pending {
+        if let Some(out) = build.poll() {
+            commands.entity(entity).remove::<PendingBuild<GrowthBuilt>>();
+            finished.push(out);
+        }
+    }
+
     // Trees that only aged are updated here; the others are built on all cores below.
     let mut jobs = Vec::new();
-    for (entity, tree, age, mut render, gpu) in &mut trees {
+    for (entity, tree, age, mut render, gpu, background) in &mut trees {
         if !(gpu && support.0) {
+            continue;
+        }
+        let building = pending.contains(entity);
+        if !(tree.is_changed() || age.is_changed() || (render.is_none() && !building)) {
+            continue;
+        }
+        // While a build is under way the tree keeps its state (the new meshes take the age they
+        // find); only a change of parameters replaces the build.
+        if building && !tree.is_changed() {
             continue;
         }
         match render.as_deref_mut() {
@@ -180,27 +202,30 @@ pub(crate) fn rebuild_gpu_trees(
                     height: tree.0.trunk.height * paint.state.trunk_progress,
                     radius: tree.0.trunk.radius,
                 });
+                continue;
             }
             // The parameters changed: rebuild the mature meshes in place.
-            Some(render) => {
-                if matches!(render.paint, Paint::Growth(_)) {
-                    jobs.push(GrowthJob { entity, params: tree.0.clone(), age: age.0 });
-                }
-            }
-            None => jobs.push(GrowthJob { entity, params: tree.0.clone(), age: age.0 }),
+            Some(render) if !matches!(render.paint, Paint::Growth(_)) => continue,
+            _ => {}
+        }
+        let job = GrowthJob { entity, params: tree.0.clone(), background };
+        if background {
+            commands.entity(entity).insert(PendingBuild::spawn(move || build_growth(job)));
+        } else {
+            jobs.push(job);
         }
     }
 
-    let build = |job: GrowthJob| {
-        let full = generate_skeleton(&job.params);
-        let mut data = build_growth_data(&full, &job.params);
-        let state = std::mem::take(&mut data.state);
-        let (wood, leaves, flowers) = data.into_meshes();
-        (job.entity, job.age, full, state, wood, leaves, flowers)
-    };
-    build_in_batches(jobs, true, build, |(entity, age, full, state, wood, leaves, flowers)| {
-        let Ok((_, tree, _, mut render, _)) = trees.get_mut(entity) else { return };
+    let mut apply = |out: GrowthBuilt| {
+        let GrowthBuilt { entity, background, full, state, wood, leaves, flowers } = out;
+        let Ok((_, tree, age, mut render, gpu, _)) = trees.get_mut(entity) else { return };
+        // A background build is out of date if the parameters changed again since it started (a
+        // new one is under way) or the tree has left the GPU.
+        if background && (tree.is_changed() || !(gpu && support.0)) {
+            return;
+        }
         let params = &tree.0;
+        let age = age.0;
         let progress;
         match render.as_deref_mut() {
             Some(render) => {
@@ -209,6 +234,7 @@ pub(crate) fn rebuild_gpu_trees(
                 write_state(&mut buffers, &paint.nodes, &paint.state);
                 progress = paint.state.trunk_progress;
                 render.mature_at = full.mature_at(&params.growth);
+                render.age = age;
                 render.full = full;
                 if let Some(handle) = render.trunk_mesh.as_mut() {
                     replace_mesh(&mut commands, &mut meshes, render.trunk, handle, wood);
@@ -260,6 +286,7 @@ pub(crate) fn rebuild_gpu_trees(
                     foliage,
                     flowers: flowers_child,
                     mature_at: full.mature_at(&params.growth),
+                    age,
                     full,
                 });
             }
@@ -270,12 +297,38 @@ pub(crate) fn rebuild_gpu_trees(
             height: params.trunk.height * progress,
             radius: params.trunk.radius,
         });
-    });
+    };
+    for out in finished {
+        apply(out);
+    }
+    build_in_batches(jobs, true, build_growth, &mut apply);
 }
 
-/// One tree for `rebuild_gpu_trees` to build: its parameters and the age to write.
+/// One tree for `rebuild_gpu_trees` to build: its parameters.
 struct GrowthJob {
     entity: Entity,
     params: TreeParams,
-    age: f32,
+    background: bool,
+}
+
+/// What a worker makes of one [`GrowthJob`]: the full skeleton, the mature state and the tagged
+/// mature meshes.
+pub(crate) struct GrowthBuilt {
+    entity: Entity,
+    /// Built by a [`PendingBuild`] task: it may be out of date by the time it is done.
+    background: bool,
+    full: Skeleton,
+    state: GrowthState,
+    wood: Mesh,
+    leaves: Option<Mesh>,
+    flowers: Option<Mesh>,
+}
+
+/// Build one [`GrowthJob`]: on any thread, so a pure function of the job.
+fn build_growth(job: GrowthJob) -> GrowthBuilt {
+    let full = generate_skeleton(&job.params);
+    let mut data = build_growth_data(&full, &job.params);
+    let state = std::mem::take(&mut data.state);
+    let (wood, leaves, flowers) = data.into_meshes();
+    GrowthBuilt { entity: job.entity, background: job.background, full, state, wood, leaves, flowers }
 }

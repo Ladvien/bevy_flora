@@ -5,6 +5,50 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.21.0] - 2026-10-13
+
+Trees built in the background. A game that plants trees while it runs (a streamed chunk, a
+sapling the player plants) no longer stalls the frame they are spawned in. Nothing is drawn
+differently. `rebuild_trees` takes a new system parameter, which only matters to code that
+names its signature; otherwise this adds to the API.
+
+### Added
+
+- **`BuildInBackground`** (a marker component, in the prelude): the tree is built on Bevy's async
+  compute pool instead of in the frame it is spawned or changes, and appears the frame its build
+  is done, usually a few later (`TreeGenerated` is sent then; until its first build it has no
+  `TreeRender` and draws nothing). The meshes are the ones the frame would have built: a forest
+  screenshot is the same image, byte for byte, either way, for `ProceduralTree` and `GpuGrowth`
+  trees, leaves and flowers alike. A change of parameters while a build runs starts a new one in
+  its place and the tree keeps its old meshes until the new ones are in; a change of age waits
+  for the build and is caught up after. A `Growing` tree is rebuilt in the background at every
+  age too (each age shows a frame or two late); a `GpuGrowth` tree builds its mature meshes in
+  the background and ages in the frame. Despawning a tree drops its build.
+- `forest --background` builds its `ProceduralTree`s that way.
+- README: "Planting without a hitch: `BuildInBackground`", with the measurements below.
+
+### Changed
+
+- `rebuild_trees` and `rebuild_gpu_trees` test for changed parameters and ages themselves
+  instead of filtering their queries by `Changed`, since a background build is applied in a
+  frame its tree did not change; trees not built in the background are rebuilt exactly when they
+  were.
+
+### Measured
+
+- **The frame trees are spawned in** (a headless `App` doing 8 ms of other work a frame, release,
+  Apple M4 Pro): 10, 50 and 200 oaks cost 4.0, 8.2 and 22.8 ms built in the frame and 0.31, 0.42
+  and 0.47 ms with `BuildInBackground`, all drawn 2, 2 and 3 frames later; 200 cherries 37.7 ms
+  against 0.45 ms, drawn 5 frames later. The GPU uploads of their meshes come on top, in the
+  frames their builds land.
+- **Look.** The 424 gallery scenarios render as in 0.20.0 (a mean difference of 0.000 of 255).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, interleaved with 0.20.0, two runs
+  each): 100 000 pooled oaks 7.61 and 7.66 ms (0.20.0: 7.63 and 7.61); 1 000 individual oaks 24.50
+  and 24.46 ms (24.49 and 24.48); 200 oaks growing on the CPU 10.36 and 10.41 ms (10.29 and 10.22);
+  1 000 growing on the GPU 61.71 and 60.69 ms (60.91 and 60.72). Testing for changes in the
+  systems instead of in their queries costs nothing measurable. The five clips are frame for
+  frame 0.20.0's.
+
 ## [0.20.0] - 2026-10-12
 
 Spring blossom. Flowering trees come into blossom in spring, one flower at a time, on every way a
@@ -1393,6 +1437,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.21.0]: https://github.com/Ladvien/bevy_flora/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/Ladvien/bevy_flora/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/Ladvien/bevy_flora/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Ladvien/bevy_flora/compare/v0.17.0...v0.18.0

@@ -28,7 +28,7 @@ cargo run --release --example tree_file --features ron,file_watcher [-- --export
 - `src/params.rs`, `crown.rs`, `presets.rs`: `TreeParams` and the 17 presets (16 trees, the cherry with spring blossom among them, and a shrub)
 - `src/skeleton.rs`, `growth.rs`: node tree and age model
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
-- `src/foliage.rs`, `pipeline.rs`, `plugin.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems
+- `src/foliage.rs`, `pipeline.rs`, `plugin.rs`, `background.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems, building trees on the async compute pool (`BuildInBackground`)
 - `src/shape.rs`: `TreeShape`, the gameplay capsules and crown box (opt-in component kept up to date by the plugin)
 - `src/felling.rs`: `FellTree`, `Felled`, `TreeStump`, `TreeLanded`, `BuckTree`, `TreeLog`, `TreeBucked`: the cut, the fall about the hinge, the landing, bucking the trunk into logs; `src/mesh/cut.rs`: cutting a mesh at a height and closing it with end-grain faces
 - `src/tree_asset.rs`: `TreeParams` as an asset, `ProceduralTreeAsset` (a tree from a handle), and with the `ron` feature the `.tree.ron` loader and `to_ron`/`from_ron`

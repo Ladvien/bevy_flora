@@ -10,6 +10,7 @@ use bevy::render::storage::ShaderBuffer;
 use super::state::GrowthState;
 use super::{GpuGrowth, GpuGrowthSupport, GrowthMaterial};
 use crate::params::TreeParams;
+use crate::background::BuildInBackground;
 use crate::plugin::{FloraPlugin, Paint, ProceduralTree, TreeAge, TreeGenerated, TreeRender};
 use crate::presets::TreePreset;
 use crate::skeleton::generate_skeleton;
@@ -90,6 +91,33 @@ fn growing_on_the_gpu_writes_node_state_and_nothing_else() {
     let wood = world.resource::<Assets<Mesh>>().get(render.trunk_mesh.as_ref().unwrap()).unwrap();
     assert!(wood.count_vertices() >= mature.trunk.positions.len());
     assert!(wood.attribute(super::ATTRIBUTE_GROWTH_ID).is_some());
+}
+
+#[test]
+fn a_gpu_tree_built_in_the_background_takes_the_age_it_finds_and_then_ages_in_the_frame() {
+    let params = TreePreset::Oak.params();
+    let mut app = app(true);
+    let tree = app
+        .world_mut()
+        .spawn((ProceduralTree(params.clone()), TreeAge(2.0), GpuGrowth, BuildInBackground))
+        .id();
+    app.update();
+    assert!(!is_gpu(&app, tree), "the first frame only starts the build");
+    // It ages while it is built: the state it gets is of the age it has when the build is done.
+    app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 4.0;
+    for _ in 0..3000 {
+        app.update();
+        if is_gpu(&app, tree) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(is_gpu(&app, tree), "the build never finished");
+    assert_eq!(uploaded_buffer(&app, tree).unwrap(), expected_buffer(&params, 4.0));
+    // From then on its age is written in the frame, as without the component.
+    app.world_mut().get_mut::<TreeAge>(tree).unwrap().0 = 5.0;
+    app.update();
+    assert_eq!(uploaded_buffer(&app, tree).unwrap(), expected_buffer(&params, 5.0));
 }
 
 #[test]

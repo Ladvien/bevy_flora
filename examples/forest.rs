@@ -40,7 +40,8 @@
 //! grid centred on the origin), and `--fov <deg>` sets its vertical field of view (45 by default).
 //! `--mode gpu` and `--mode gpu-live` draw the trees as `ProceduralTree` with `GpuGrowth`,
 //! fully grown or still growing through the whole run; `--mode cpu-live` grows them on the
-//! CPU, rebuilding every mesh each frame.
+//! CPU, rebuilding every mesh each frame. `--background` builds those trees off the main thread
+//! (`BuildInBackground`): they appear a few frames after the start instead of in its first frame.
 //!
 //! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
 //! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
@@ -84,9 +85,9 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances, LodSettings,
-    PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset, TreeShake,
-    TreeShakes, build_pool,
+    BuildInBackground, FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront, LodDistances,
+    LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, TreeAge, TreeParams, TreePool, TreePreset,
+    TreeShake, TreeShakes, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -168,6 +169,8 @@ struct Args {
     /// Step the clock a fixed 1/60 s per frame and count the warmup in frames, so two runs of
     /// different code render the same image at the same frame.
     deterministic: bool,
+    /// Build the `ProceduralTree`s in the background (`BuildInBackground`).
+    background: bool,
     /// Render into an image, with no window.
     offscreen: bool,
     screenshot: Option<PathBuf>,
@@ -201,7 +204,7 @@ fn usage() -> ! {
          [--wind-dir <x,z>] [--gust <speed>] [--wind-animate] [--shake-animate] [--deterministic] \
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
-         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>]"
+         [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background]"
     );
     std::process::exit(2);
 }
@@ -228,6 +231,7 @@ fn parse_args() -> Args {
         wind_animate: false,
         shake_animate: false,
         deterministic: false,
+        background: false,
         offscreen: false,
         screenshot: None,
         season: FloraSeason::SUMMER,
@@ -320,6 +324,7 @@ fn parse_args() -> Args {
             "--wind-animate" => args.wind_animate = true,
             "--shake-animate" => args.shake_animate = true,
             "--deterministic" => args.deterministic = true,
+            "--background" => args.background = true,
             "--scatter" => {
                 let list = it.next().unwrap_or_else(|| usage());
                 let species = list
@@ -637,6 +642,9 @@ fn setup(
                 tree.insert((TreeAge(3.0), Growing { rate: 0.01 }));
             }
             _ => {}
+        }
+        if bench.args.background {
+            tree.insert(BuildInBackground);
         }
     }
 }
