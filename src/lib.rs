@@ -275,6 +275,12 @@
 //! shadow maps and other cameras keep the whole trees. Nothing carries the fade while no camera
 //! has it.
 //!
+//! # Walking through undergrowth
+//!
+//! A [`FoliagePusher`] on the player, an NPC or a cart pushes the leaves and thin stems it walks
+//! through out of its way, shadows included, and they close up behind it; trunks stay put. Nothing
+//! carries the push while no entity has one; see [`push`].
+//!
 //! # Building meshes without Bevy's ECS
 //!
 //! ```rust
@@ -302,6 +308,7 @@ pub mod pipeline;
 pub mod plugin;
 pub mod pool;
 pub mod presets;
+pub mod push;
 pub mod rng;
 pub mod scatter;
 pub mod see_through;
@@ -335,6 +342,7 @@ pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
 pub use see_through::SeeThroughTrees;
+pub use push::{FoliagePusher, MAX_PUSHERS};
 pub use shading::{
     FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWind,
     FloraWindBuffer, GustFront,
@@ -352,10 +360,11 @@ pub use skeleton::{Node, NodeKind, Skeleton, generate_skeleton};
 pub mod prelude {
     pub use crate::{
         BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled, FloraFire,
-        FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams, GpuGrowth, Growing, GustFront, LeafBurst, LeafScan,
-        LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle, Scatter, ScatterPoint,
-        SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog, TreeMature, TreeParams,
-        TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse, WoodCapsule, build_pool,
+        FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliageParams, FoliagePusher, GpuGrowth, Growing, GustFront,
+        LeafBurst, LeafScan, LodDistances, LodSettings, PooledTree, ProceduralTree, ProceduralTreeAsset, RenderStyle,
+        Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
+        TreeMature, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump, WindResponse,
+        WoodCapsule, build_pool,
     };
 }
 

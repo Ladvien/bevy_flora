@@ -59,6 +59,9 @@ pub struct GrowthExtension {
     /// Whether the fire burns this material's trees; see
     /// [`FloraExtension::fire`](crate::FloraExtension::fire).
     pub fire: bool,
+    /// Whether foliage pushers bend this material's leaves and thin stems aside; see
+    /// [`FloraExtension::push`](crate::FloraExtension::push).
+    pub push: bool,
 }
 
 impl From<&GrowthExtension> for FloraKey {
@@ -71,6 +74,7 @@ impl From<&GrowthExtension> for FloraKey {
             see_through: extension.see_through,
             falling: false,
             fire: extension.fire,
+            push: extension.push,
         }
     }
 }
@@ -95,6 +99,7 @@ pub(crate) fn growth_material(
             style: surface.style,
             see_through: false,
             fire: false,
+            push: false,
         },
     }
 }

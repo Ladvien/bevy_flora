@@ -11,6 +11,7 @@
 //!     [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod]
 //!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]
+//!     [--push <x,z>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -51,7 +52,8 @@
 //! `--fire <x>,<z>[,<radius>]` puts a `FloraFire` over the forest (cells of about 2 m) and lights
 //! it there, `radius` metres round (4 by default), once the trees are placed; it spreads through
 //! the forest from there. `--fire armed` puts the fire there and lights nothing: what a game pays
-//! for having one before anything burns.
+//! for having one before anything burns. `--push <x>,<z>` stands a body with a `FoliagePusher`
+//! there (no mesh): every flora shader then carries the push.
 //!
 //! `--terrain <relief>` replaces the flat ground with rolling hills about `relief` metres high
 //! (a heightfield mesh) and makes them the `FloraGround`: every tree and shrub stands at its
@@ -95,9 +97,9 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind, GpuGrowth, Growing, GustFront,
-    LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees, TreeAge,
-    TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
+    BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWind, FoliagePusher, GpuGrowth, Growing,
+    GustFront, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, Scatter, SeededRng, SeeThroughTrees,
+    TreeAge, TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, build_pool,
 };
 
 const WINDOW: UVec2 = UVec2::new(1920, 1080);
@@ -187,6 +189,8 @@ struct Args {
     leaf_fall_animate: Option<f32>,
     /// A `FloraFire` over the forest, lit where it says.
     fire: Option<FireStart>,
+    /// A `FoliagePusher` standing there (x, z).
+    push: Option<Vec2>,
     /// Step the clock a fixed 1/60 s per frame and count the warmup in frames, so two runs of
     /// different code render the same image at the same frame.
     deterministic: bool,
@@ -233,7 +237,7 @@ fn usage() -> ! {
          [--offscreen] [--screenshot <path>] [--style <natural|painterly|toon>] \
          [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] \
-         [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]"
+         [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>] [--push <x,z>]"
     );
     std::process::exit(2);
 }
@@ -261,6 +265,7 @@ fn parse_args() -> Args {
         shake_animate: false,
         leaf_fall_animate: None,
         fire: None,
+        push: None,
         deterministic: false,
         background: false,
         tree_lod: false,
@@ -398,6 +403,12 @@ fn parse_args() -> Args {
                     Some("all") => 2,
                     _ => usage(),
                 };
+            }
+            "--push" => {
+                let item = it.next().unwrap_or_else(|| usage());
+                let v: Vec<f32> = item.split(',').map(|p| p.parse().unwrap_or_else(|_| usage())).collect();
+                let [x, z]: [f32; 2] = v.try_into().unwrap_or_else(|_| usage());
+                args.push = Some(Vec2::new(x, z));
             }
             "--fire" => {
                 let item = it.next().unwrap_or_else(|| usage());
@@ -573,6 +584,10 @@ fn setup(
     if bench.args.fire.is_some() {
         let cells = (extent / 2.0).ceil().clamp(2.0, FloraFire::MAX_CELLS as f32) as u32;
         commands.insert_resource(FloraFire::with_cells(Vec2::ZERO, extent + 8.0, cells));
+    }
+    // `--push`: a body pushing foliage aside, standing there (no mesh: what the shaders pay).
+    if let Some(at) = bench.args.push {
+        commands.spawn((Transform::from_xyz(at.x, ground.height(at) + 0.9, at.y), FoliagePusher::default()));
     }
 
     commands.spawn((

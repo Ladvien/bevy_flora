@@ -20,6 +20,9 @@ import package::shading::common::{fire_at, leaf_burnt, leaf_fire_alpha};
 @if(FLORA_FIRE && !FLORA_LEAF)
 import package::shading::common::flora;
 
+@if(FLORA_PUSH)
+import package::shading::common::{push_offset, wood_flex};
+
 @vertex
 fn vertex(
     vertex_no_morph: Vertex,
@@ -71,6 +74,16 @@ fn vertex(
         wind_bend(world.xyz, local.y, origin, length(world_from_local[1].xyz), globals.time, shake),
         1.0
     );
+    // Pushed aside by a body moving through, as in `shading/vertex.wesl`, by the growing radius.
+@if(FLORA_PUSH) {
+    var flex = 0.0;
+@if(FLORA_LEAF)
+    flex = 1.0;
+@if(!FLORA_LEAF)
+    flex = wood_flex(grown_wood_radius(growth_attrs) * length(world_from_local[1].xyz));
+    let pushed = out.world_position.xyz + push_offset(out.world_position.xyz, origin, flex);
+    out.world_position = vec4<f32>(pushed, 1.0);
+}
     out.position = position_world_to_clip(out.world_position.xyz);
 
 @if(VERTEX_UVS_A)
