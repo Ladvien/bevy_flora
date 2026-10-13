@@ -451,7 +451,12 @@ pub(crate) fn build(app: &mut bevy::app::App) {
         .register_type::<FallingFruit>()
         .register_type::<TreeFruit>()
         .register_type::<FallenFruit>()
-        .add_systems(bevy::app::Update, drop_fallen_fruit.run_if(any_with_component::<FallenFruit>))
+        // After the felling systems: both move `Transform`s (fruit there, trees here), and an
+        // order keeps the schedule free of ambiguities.
+        .add_systems(
+            bevy::app::Update,
+            drop_fallen_fruit.run_if(any_with_component::<FallenFruit>).after(crate::felling::buck_trees),
+        )
         // After transform propagation: fruit falls from where the trees stand this frame. Before
         // the meshes go to the renderer, the picks are marked in them.
         .add_systems(

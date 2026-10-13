@@ -597,6 +597,8 @@ fn setup(mut leaves: ResMut<FallingLeaves>) {
 }
 ```
 
+Which leaves fall is drawn from where the tree stands and the time, never from its `Entity`: the same tree, hit at the same moment, drops the same leaves however many entities were spawned before it, so a replay, a lockstep game or a world streamed in another order sees the leaves it saw before. The season sheds the trees nearest the camera first, so the leaves it lets go do not depend on the order the trees were spawned in either.
+
 ![An autumn maple dropping red leaves: they tumble through the air around its trunk at every angle, the lowest about to reach the grass](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/falling_leaves.jpg)
 
 *`inspect --mode tree --preset maple --season 1,0.3 --drop 40,2.6`: forty leaves of an autumn maple, 2.6 seconds after they let go.*

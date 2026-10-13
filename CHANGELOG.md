@@ -5,6 +5,45 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.38.2] - 2026-10-13
+
+The same frame every time (issue #68): which leaves a tree drops no longer depends on the order
+entities were spawned in, and every pair of the plugin's systems that share data now has an order.
+
+### Fixed
+
+- Which leaves fall was drawn from the tree's `Entity` (and the drop's place among the frame's
+  messages): the same scene dropped other leaves when its trees were spawned in another order, a
+  save restored or one more system added anywhere, and each release that added a system re-shuffled
+  the leaves of the clips. Now a drop draws from where the tree stands and the time (a second drop
+  of the same tree in the frame from a stream of its own), and the season sheds the trees within
+  reach nearest a camera first (ties by position), each from its own draws, so when `max_leaves`
+  runs out it is the farther trees that keep their leaves, not the last spawned.
+- `index_trees` ran before or after Bevy's asset events as the executor chose, so a pool added in a
+  frame was indexed that frame or the next; it now runs after them. The pool systems now run after
+  the procedural trees' (both make textures and write `TreeShape`s) and `drop_fallen_fruit` after
+  the felling systems (both move `Transform`s): the plugin's `PreUpdate`, `Update` and `PostUpdate`
+  build with ambiguity detection as an error, which a new test holds them to.
+
+### Measured
+
+- **Look.** The 441 gallery scenarios render byte for byte as in 0.38.1 on the CPU and with
+  `--gpu` (but the CPU toon maple and oak at a mean of 0.000 of 255; no `ERROR`), and so do the
+  growth, grove, seasons, fire and push clips and the isometric demo. The shake, fell, chop and
+  harvest clips and the playground's demo drop other leaves of the same trees, every tree, stump,
+  log and apple where it was (old, new and their difference side by side), and their GIFs are
+  re-encoded, for the last time a release adds a system. A pooled forest's screenshot differs by
+  leaves a hair elsewhere in their sway (a mean of 0.303 and 0.030 of 255, the same trees zoomed
+  4x), most likely because its trees get their children a frame apart from before.
+- **Cost.** Nothing is added to a frame in which no leaves fall (the leaf systems run only then;
+  the rest is order between systems). The frame times could not be measured cleanly: the Apple M4
+  Pro's GPU was shared with a document-conversion model and a language model throughout, and
+  100 000 pooled oaks took 11.9 to 29 ms a frame in either version (about 8 on a quiet machine).
+  In six alternating pairs each, 0.38.2 took a median 3.3 ms less than 0.38.1 with 100 000 pooled
+  oaks and 2.8 ms less with 1 000 individual ones, and in four earlier pairs the CPU time per
+  frame was 53.1 against 50.8 ms (pooled) and 25.2 against 25.7 ms (individual): no regression to
+  be seen in the noise.
+
 ## [0.38.1] - 2026-10-13
 
 Pooled forests load three times faster (issue #66). A trace of 100 000 pooled oaks loading put
@@ -2250,6 +2289,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.38.2]: https://github.com/Ladvien/bevy_flora/compare/v0.38.1...v0.38.2
 [0.38.1]: https://github.com/Ladvien/bevy_flora/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/Ladvien/bevy_flora/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/Ladvien/bevy_flora/compare/v0.36.0...v0.37.0
