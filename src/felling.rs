@@ -57,11 +57,16 @@ pub struct FellTree {
     /// How fast it falls: 1 as a real tree of its height would (a 15 m tree takes about four
     /// seconds from the first lean to the ground), 2 twice as fast.
     pub speed: f32,
+    /// Lay it down at once where it would come to rest, with no fall and no landing (no
+    /// [`TreeLanded`], no shake, no leaves shed): a tree felled before a save, restored. Its
+    /// stump, its cut faces and the ground it lies on are as a fallen tree's; [`BuckTree`] cuts it
+    /// into logs as soon as it lies.
+    pub lying: bool,
 }
 
 impl Default for FellTree {
     fn default() -> Self {
-        Self { direction: Vec2::X, cut_height: 0.5, speed: 1.0 }
+        Self { direction: Vec2::X, cut_height: 0.5, speed: 1.0, lying: false }
     }
 }
 
@@ -221,6 +226,8 @@ struct Fall {
     /// Angular speed, radians a second.
     spin: f32,
     landed: bool,
+    /// Laid down at once ([`FellTree::lying`]).
+    lying: bool,
     /// How far the crown reaches from the trunk, for the shake it gives its neighbours.
     crown_radius: f32,
     /// Its wood and leaves, and the materials they take once it lands (they do not sway).
@@ -396,6 +403,7 @@ pub(crate) fn start_felling(
                 pull: 1.5 * GRAVITY / length.max(0.5) * speed * speed,
                 spin: START_SPIN * speed,
                 landed: false,
+                lying: fell.lying,
                 crown_radius,
                 still,
             },
@@ -553,6 +561,17 @@ pub(crate) fn drive_felling(
         }
         let felled = &mut *felled;
         let fall = &mut felled.fall;
+        // A tree restored lying: at once where it would come to rest, on its still materials,
+        // with no landing.
+        if fall.lying {
+            felled.angle = fall.rest;
+            fall.landed = true;
+            fall.spin = 0.0;
+            felled.at_rest = true;
+            for (child, material) in fall.still.drain(..) {
+                commands.entity(child).insert(MeshMaterial3d(material));
+            }
+        }
         let mut left = dt;
         while left > 0.0 && !felled.at_rest {
             let h = left.min(STEP);
@@ -936,6 +955,34 @@ mod tests {
     }
 
     #[test]
+    fn a_tree_restored_lying_lies_at_once_where_a_felled_one_comes_to_rest() {
+        let params = TreePreset::Oak.params();
+        let lay = |lying: bool| {
+            let mut app = app();
+            let tree = app.world_mut().spawn((ProceduralTree(params.clone()), Transform::from_xyz(2.0, 0.0, -1.0))).id();
+            app.update();
+            app.world_mut().entity_mut(tree).insert(FellTree { direction: Vec2::new(1.0, 1.0), lying, ..Default::default() });
+            app.update();
+            let at_once = app.world().get::<Felled>(tree).map(|felled| felled.at_rest);
+            let landings = settle(&mut app, 900);
+            let lying_at = *app.world().get::<Transform>(tree).unwrap();
+            (app, tree, at_once, landings, lying_at)
+        };
+        let (_, _, fell_at_once, fell_landings, fell_at) = lay(false);
+        let (mut app, tree, at_once, landings, at) = lay(true);
+        assert_eq!((fell_at_once, fell_landings), (Some(false), 1));
+        assert_eq!(at_once, Some(true), "a tree restored lying fell first");
+        assert_eq!(landings, 0, "a tree restored lying landed");
+        assert!(at.translation.distance(fell_at.translation) < 1e-3, "{at:?} against {fell_at:?}");
+        assert!(at.rotation.angle_between(fell_at.rotation) < 1e-3, "{at:?} against {fell_at:?}");
+        // Bucked as soon as it lies.
+        app.world_mut().entity_mut(tree).insert(BuckTree::default());
+        app.update();
+        app.update();
+        assert!(app.world_mut().query::<&TreeLog>().iter(app.world()).count() > 0, "no logs");
+    }
+
+    #[test]
     fn a_felled_tree_falls_the_way_it_was_sent_lands_once_and_leaves_a_stump() {
         let mut app = app();
         let tree = app
@@ -1213,7 +1260,7 @@ mod tests {
         app.world_mut().entity_mut(tree).insert(TreeNotch { direction: Vec2::X, height: 0.8, depth: 0.3 });
         app.update();
         let standing = app.world().get::<NotchCarved>(tree).unwrap().faces.unwrap();
-        app.world_mut().entity_mut(tree).insert(FellTree { direction: Vec2::X, cut_height: 0.3, speed: 4.0 });
+        app.world_mut().entity_mut(tree).insert(FellTree { direction: Vec2::X, cut_height: 0.3, speed: 4.0, ..Default::default() });
         assert_eq!(settle(&mut app, 900), 1, "it did not land exactly once");
         let felled = app.world().get::<Felled>(tree).unwrap().clone();
         assert!((felled.fall.hinge.y - 0.8).abs() < 1e-4, "cut at {}, not at the notch's floor", felled.fall.hinge.y);

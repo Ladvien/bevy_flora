@@ -7,7 +7,7 @@
 //!     [--fov <deg>] [--yaw <deg>] [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>]
 //!     [--size <w>x<h>] [--lod <a,b,c>] [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa]
 //!     [--style <natural|painterly|toon>] [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>]
-//!     [--fell <deg> [--buck <m>]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
+//!     [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
 //!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]
 //! ```
@@ -132,6 +132,8 @@ struct Args {
     fell: Option<f32>,
     /// With `--fell`, cut the trunk into logs this long once it lies still.
     buck: Option<f32>,
+    /// With `--fell`, lay it down at once where it would come to rest (`FellTree::lying`).
+    lying: bool,
     /// The ground falls toward +x at this angle, degrees.
     slope: f32,
     /// Stand the tree at the ground's height under its centre, not at its footing.
@@ -159,7 +161,7 @@ fn usage() -> ! {
          [--frames <n>] [--distance <m>[,<m>]] [--constant-size [<share>]] [--fov <deg>] [--yaw <deg>] \
          [--eye <m>] [--look <share>] [--sun <x,y,z>] [--wind <s>] [--size <w>x<h>] [--lod <a,b,c>] \
          [--no-impostors] [--level <0|1|2|3>] [--empty] [--no-msaa] [--style <natural|painterly|toon>] \
-         [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--fell <deg> [--buck <m>]] [--slope <deg>] \
+         [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
          [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]"
     );
@@ -198,6 +200,7 @@ fn parse_args() -> Args {
         wet: 0.0,
         fell: None,
         buck: None,
+        lying: false,
         slope: 0.0,
         on_centre: false,
         drop: None,
@@ -294,6 +297,7 @@ fn parse_args() -> Args {
             "--wet" => args.wet = value(&mut it),
             "--fell" => args.fell = Some(value(&mut it)),
             "--buck" => args.buck = Some(value(&mut it)),
+            "--lying" => args.lying = true,
             "--slope" => args.slope = value(&mut it),
             "--on-centre" => args.on_centre = true,
             "--drop" => {
@@ -600,7 +604,7 @@ fn fell(commands: &mut Commands, tree: Entity, args: &Args) {
     }
     if let Some(degrees) = args.fell {
         let (sin, cos) = degrees.to_radians().sin_cos();
-        commands.entity(tree).insert(FellTree { direction: Vec2::new(cos, sin), speed: 4.0, ..default() });
+        commands.entity(tree).insert(FellTree { direction: Vec2::new(cos, sin), speed: 4.0, lying: args.lying, ..default() });
         if let Some(log_length) = args.buck {
             commands.entity(tree).insert(BuckTree { log_length, ..default() });
         }

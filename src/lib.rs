@@ -324,6 +324,14 @@
 //! }
 //! ```
 //!
+//! # Saving and loading
+//!
+//! A tree is its parameters and seed; a save holds what the game did to it. On load,
+//! [`FellTree::lying`] lays a felled tree down at once where it came to rest (no fall, no
+//! landing), [`TreeFruit::with_picked`] keeps its picked fruit off it ([`TreeFruit::picked`] gave
+//! the keys), and [`FloraFire::restore`] puts a fire's grid back as [`FloraFire::cells`] gave it,
+//! the cells still burning burning on.
+//!
 //! # Seeing the player through the trees
 //!
 //! [`SeeThroughTrees`] on a third-person or top-down camera dithers out the parts of trees between
