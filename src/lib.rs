@@ -434,7 +434,7 @@ pub use crown::CrownShape;
 pub use deadfall::{Deadfall, DeadfallKind, DeadfallSettings, IntoDeadfall, PoolLog, PooledDeadfall};
 pub use falling::{DropLeaves, FallingLeaves, LeafBurst};
 pub use felling::{BuckTree, FellTree, Felled, TreeBucked, TreeLanded, TreeLog, TreeNotch, TreeStump};
-pub use fire::{BURNT, Burnt, FireCell, FireSpread, FloraFire, TreeBurnt};
+pub use fire::{BURNT, Burnt, FireCell, FireSnapshot, FireSpot, FireSpread, FloraFire, TreeBurnt};
 pub use foliage::LeafPoint;
 pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;

@@ -48,7 +48,7 @@
 //! glowing and then cooling (`docs/fire.gif`, encoded like the grove). Its fire is sped up like
 //! the rest of a clip (`FireSpread` 3.5 m/s, each spot burnt through in two seconds), its
 //! ground scorches by the fire's char, as a game's own ground would read it, and six point
-//! lights over the fire's hottest 4 m squares (`FloraFire::burning`) light the ground and the
+//! lights over the fire's hottest 4 m squares (`FloraFire::hottest`) light the ground and the
 //! trunks around it. `--push` records a
 //! patch of shrubs from a still camera while a red stand-in for a character walks through it
 //! (`FoliagePusher`): the leaves and stems give way around it and close up behind it
@@ -71,7 +71,6 @@
 //! instead of rebuilding their meshes (compare the two runs' frames with the `compare_gallery`
 //! example).
 
-use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::fs;
 use std::path::PathBuf;
@@ -988,29 +987,18 @@ fn drive(
 }
 
 /// The fire clip's firelight: its point lights over the hottest squares of the fire
-/// (`FloraFire::burning`), each at its square's heat-weighted middle and as bright as the heat
+/// (`FloraFire::hottest`), each at its square's heat-weighted middle and as bright as the heat
 /// in it, the rest dark. Read only when the fire stepped.
 fn light_the_fire(fire: Option<Res<FloraFire>>, mut lights: Query<(&mut PointLight, &mut Transform), With<FireLight>>) {
     let Some(fire) = fire.filter(|fire| fire.is_changed()) else {
         return;
     };
-    // Heat and heat-weighted position of each square, in a fixed order so the clip is the same
-    // every run.
-    let mut squares: BTreeMap<(i32, i32), (f32, Vec2)> = BTreeMap::new();
-    for (at, cell) in fire.burning() {
-        let square = (at / FIRE_LIGHT_SQUARE).floor();
-        let sum = squares.entry((square.x as i32, square.y as i32)).or_default();
-        sum.0 += cell.heat;
-        sum.1 += at * cell.heat;
-    }
-    let mut hottest: Vec<((i32, i32), (f32, Vec2))> = squares.into_iter().collect();
-    hottest.sort_by(|a, b| b.1.0.total_cmp(&a.1.0).then(a.0.cmp(&b.0)));
-    let mut hottest = hottest.into_iter();
+    let mut hottest = fire.hottest(FIRE_LIGHT_SQUARE, FIRE_LIGHTS).into_iter();
     for (mut light, mut transform) in &mut lights {
         match hottest.next() {
-            Some((_, (heat, sum))) => {
-                light.intensity = heat * FIRE_LIGHT_LUMENS;
-                transform.translation = (sum / heat).extend(FIRE_LIGHT_HEIGHT).xzy();
+            Some(spot) => {
+                light.intensity = spot.heat * FIRE_LIGHT_LUMENS;
+                transform.translation = spot.at.extend(FIRE_LIGHT_HEIGHT).xzy();
             }
             None => light.intensity = 0.0,
         }

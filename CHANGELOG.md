@@ -5,6 +5,38 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.46.0] - 2026-10-13
+
+The fire's hottest spots and a save of only what burnt (issue #77): a game bucketed the burning
+cells into squares itself to place its lights, and hand-rolled a sparse form of a 262 144-cell grid
+to save it. On crates.io this is the release after 0.36.0: it carries 0.37.0 to 0.45.0 too,
+entered below, each also released on GitHub.
+
+### Added
+
+- `FloraFire::hottest(square, n)`: the burning cells gathered into world squares `square` wide,
+  the `n` hottest as `FireSpot { at, heat, share }` (the heat-weighted middle of a square's
+  burning cells, their heat summed, and that heat over the cells a square holds), hottest first,
+  ties in the squares' order. Only the touched rectangle is read. The `fire` clip's lights use it.
+- `FloraFire::snapshot()` and `FloraFire::restore_snapshot`: `FireSnapshot { side, cells }` lists
+  `(index, char, heat)` of the cells holding any (serializable with the `serde` feature), and
+  restores a fire of as many cells as `restore` does from every cell, a cell still burning
+  burning on; a snapshot of another grid size is refused.
+
+### Fixed
+
+- `ARCHITECTURE.md` gave the shared buffer's weather 60 vectors and the fire's grid slot 60; since
+  0.45.0 they are 189.
+
+### Measured
+
+- **Look.** The `fire` clip, its six lights now placed by `hottest`, is 0.45.0's frame for frame;
+  so are the 491 gallery scenarios (CPU and `--gpu`), the other clips (but a chop frame at a mean
+  of 0.000 of 255) and a pooled forest's screenshot, no `ERROR`.
+- **Cost.** No system was added: `hottest` and `snapshot` read only the touched rectangle when the
+  game calls them. 100 000 pooled trees (`forest --offscreen --deterministic`, Apple M4 Pro, two
+  alternating pairs on a loaded machine): 10.7 to 11.5 ms a frame against 10.9 to 14.4.
+
 ## [0.45.0] - 2026-10-13
 
 Gliding recolours and a shadow range that follows the camera (issue #76): a game's palette
@@ -2702,6 +2734,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.46.0]: https://github.com/Ladvien/bevy_flora/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/Ladvien/bevy_flora/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/Ladvien/bevy_flora/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/Ladvien/bevy_flora/compare/v0.42.0...v0.43.0

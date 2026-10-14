@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.45 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.46 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.45"
+bevy_flora = "0.46"
 ```
 
 | feature | default | what it does |
@@ -861,22 +861,23 @@ fn burn_the_player(fire: Res<FloraFire>, players: Query<&Transform, With<Player>
     }
 }
 
-// Where it burns now, for the game's lights and its AI.
+// Where it burns now, for the game's lights and its AI: the six hottest 4 m squares.
 fn watch_the_fire(fire: Res<FloraFire>) {
-    let hottest = fire.burning().max_by(|a, b| a.1.heat.total_cmp(&b.1.heat));
-    if let (Some((at, cell)), Some(burnt)) = (hottest, fire.touched_bounds()) {
-        info!("hottest at {at} ({:.2}), all of it within {burnt:?}", cell.heat);
+    for spot in fire.hottest(4.0, 6) {
+        info!("burning at {} ({:.0}% of its square)", spot.at, spot.share * 100.0);
     }
 }
 ```
 
 `char_at` and `heat_at` read the grid between the cell centres, as the shaders do: to hurt what stands in the fire, make a burnt tree worthless, or scorch the game's own ground (the clip below colours its ground by `char_at`). A tree the fire burns through (the char where its trunk stands passes `BURNT`, 0.95) is reported once with a `TreeBurnt` message and marked `Burnt`: insert `Burnt` on the burnt trees of a save, with the fire's restored grid, and loading reports none of them. `extinguish` puts the fire out where rain or water falls, keeping the char, and `scorch` lays an old burn down with no fire, for a level that starts burnt. `FireSpread` (`FloraFire::with_spread`) sets how fast the fire moves, how long a spot burns and its embers glow, how far a tree's fire reaches and whether the ground itself burns; `FloraFire::with_cells` sets the size of the cells (smaller cells burn along finer lines). The same fire lit the same way on the same clock burns the same way (`FloraFire::seed` makes its front ragged).
 
-`burning()` hands out every cell burning now (heat above 0, cooling embers included) with its centre, for the game's lights and its AI: put lights where it burns hottest, keep the living out of it, feed a map of what the watch can see. It looks only at the cells inside `touched_bounds()`, the rectangle outside which nothing has burnt, so a small fire on a large grid is cheap to read, and the fire is marked changed only in a frame it steps (ten times a second while anything burns) or the game changed it, so a system run on `resource_changed::<FloraFire>` reads it just when there is something new.
+`burning()` hands out every cell burning now (heat above 0, cooling embers included) with its centre, for the game's lights and its AI: keep the living out of it, feed a map of what the watch can see. `hottest(square, n)` gathers them into squares `square` world units wide and hands out the `n` hottest as `FireSpot`s: the heat-weighted middle of the square's burning cells, their heat summed, and `share`, that heat over the cells a square holds (0..1, whatever the size of the cells): a few lights where it burns hottest, each as bright as its share. Both look only at the cells inside `touched_bounds()`, the rectangle outside which nothing has burnt, so a small fire on a large grid is cheap to read, and the fire is marked changed only in a frame it steps (ten times a second while anything burns) or the game changed it, so a system run on `resource_changed::<FloraFire>` reads it just when there is something new.
+
+A save needs only what burnt: `snapshot()` is a `FireSnapshot`, the grid's side and the cells holding any char or heat (a burnt corner of a 512² grid is a few hundred entries, not 262 144; it serializes with the `serde` feature), and `restore_snapshot` puts a fire of as many cells back as it was, a cell still burning burning on. `restore(&cells)` does the same from every cell.
 
 ![The grove at dusk from a still camera: a fire lit on its right runs through it on the wind, each crown scorching and flaring orange as its leaves burn away, the trunks blackening with glowing seams, the ground going to ash under them and lit orange by the fire, until bare black trees stand on a burnt clearing and their embers cool](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/fire.gif)
 
-*`cargo run --release --example capture_growth -- --fire`: the grove at dusk, a fire lit on its upwind edge. Like the rest of a clip it is sped up (`FireSpread` 3.5 m/s, each spot burnt through in 2.5 s), the clip's own ground scorches by `char_at`, and six point lights over the fire's hottest 4 m squares (`burning`) light the ground and the trunks around it.*
+*`cargo run --release --example capture_growth -- --fire`: the grove at dusk, a fire lit on its upwind edge. Like the rest of a clip it is sped up (`FireSpread` 3.5 m/s, each spot burnt through in 2.5 s), the clip's own ground scorches by `char_at`, and six point lights over the fire's hottest 4 m squares (`hottest`) light the ground and the trunks around it.*
 
 ![An oak burning in daylight, three moments: the char climbing the trunk from the ground in black blocks with orange glowing seams under a green crown; the trunk black and the crown scorching, leaves flaring orange as they burn away; the bare black tree, its seams still glowing](https://raw.githubusercontent.com/Ladvien/bevy_flora/main/docs/fire_burn.jpg)
 
