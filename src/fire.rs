@@ -134,6 +134,31 @@ pub struct FireCell {
     pub heat: f32,
 }
 
+/// A patch of a fire ([`FloraFire::hottest`]): where it burns and how much.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FireSpot {
+    /// The heat-weighted middle of its burning cells, world x and z.
+    pub at: Vec2,
+    /// Its cells' heat summed: a cell burning at its hottest counts 1.
+    pub heat: f32,
+    /// `heat` over the cells its square holds, 0..1: how much of the square burns, whatever the
+    /// size of the cells (a light's brightness).
+    pub share: f32,
+}
+
+/// The cells of a fire that hold any char or heat ([`FloraFire::snapshot`]), for a save: what
+/// [`FloraFire::restore_snapshot`] sets a fire of as many cells back to. With the `serde` feature
+/// it serializes.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FireSnapshot {
+    /// Cells along a side of the grid it was taken of.
+    pub side: u32,
+    /// Each cell holding any char or heat: its index (row by row along x, as
+    /// [`FloraFire::cells`]), its char and its heat.
+    pub cells: Vec<(u32, f32, f32)>,
+}
+
 /// The fire over the game's world: a square grid of [`FireCell`]s that the plugin spreads a fire
 /// through and every flora shader reads (see the [module](crate::fire)). Insert it to have fires;
 /// its size is fixed when it is made.
@@ -248,6 +273,29 @@ impl FloraFire {
         })
     }
 
+    /// The `n` hottest patches of the fire: its burning cells gathered into squares `square` world
+    /// units on a side (at least a cell), laid on the world from (0, 0), hottest first (of two as
+    /// hot, the one whose square is at the lower x, then the lower z): where to put a few lights,
+    /// or what to keep the living away from. Only the [touched rectangle](Self::touched_bounds) is
+    /// read.
+    pub fn hottest(&self, square: f32, n: usize) -> Vec<FireSpot> {
+        let square = if square.is_finite() && square > self.cell { square } else { self.cell };
+        let held = (square / self.cell).powi(2);
+        let mut squares: std::collections::BTreeMap<(i64, i64), (Vec2, f32)> = std::collections::BTreeMap::new();
+        for (centre, cell) in self.burning() {
+            let key = ((centre.x / square).floor() as i64, (centre.y / square).floor() as i64);
+            let entry = squares.entry(key).or_insert((Vec2::ZERO, 0.0));
+            entry.0 += centre * cell.heat;
+            entry.1 += cell.heat;
+        }
+        // In the squares' order; a stable sort keeps it among the equally hot.
+        let mut spots: Vec<FireSpot> =
+            squares.into_values().map(|(weighted, heat)| FireSpot { at: weighted / heat, heat, share: (heat / held).min(1.0) }).collect();
+        spots.sort_by(|a, b| b.heat.total_cmp(&a.heat));
+        spots.truncate(n);
+        spots
+    }
+
     /// Light the cells within `radius` (world units) of `at` (world x, z; at least the cell `at` is in).
     /// They burn if a tree stands within [`FireSpread::reach`] of them (or the ground burns) and
     /// spread from there; a cell burnt through does not light again.
@@ -288,6 +336,55 @@ impl FloraFire {
             self.lit[i] = if heat > 0.0 { now } else { f32::INFINITY };
         }
         self.touched = Some([0, 0, self.side as usize - 1, self.side as usize - 1]);
+        self.settle();
+        true
+    }
+
+    /// The cells holding any char or heat, for a save: a burnt corner of a grid of 512² cells is a
+    /// few hundred entries instead of 262 144. Only the [touched
+    /// rectangle](Self::touched_bounds) is read. [`restore_snapshot`](Self::restore_snapshot) sets a
+    /// fire of as many cells back to it.
+    pub fn snapshot(&self) -> FireSnapshot {
+        let side = self.side as usize;
+        let mut cells = Vec::new();
+        if let Some([x0, z0, x1, z1]) = self.touched {
+            for z in z0..=z1 {
+                for x in x0..=x1 {
+                    let i = z * side + x;
+                    let cell = self.cells[i];
+                    if cell.char > 0.0 || cell.heat > 0.0 {
+                        cells.push((i as u32, cell.char, cell.heat));
+                    }
+                }
+            }
+        }
+        FireSnapshot { side: self.side, cells }
+    }
+
+    /// Set the grid to `snapshot`, as [`restore`](Self::restore) sets it to every cell: the cells
+    /// it lists as they were, every other untouched, and a cell still burning burns on, its fire
+    /// spreading again from now. `false`, and nothing changes, if the snapshot was taken of a grid
+    /// with another number of cells; an entry past the grid is dropped.
+    pub fn restore_snapshot(&mut self, snapshot: &FireSnapshot) -> bool {
+        if snapshot.side != self.side {
+            return false;
+        }
+        let now = self.steps as f32 * STEP;
+        self.cells.fill(FireCell::default());
+        self.lit.fill(f32::INFINITY);
+        self.touched = None;
+        for &(i, char, heat) in &snapshot.cells {
+            let i = i as usize;
+            if i >= self.cells.len() {
+                continue;
+            }
+            let (char, heat) = (char.clamp(0.0, 1.0), heat.clamp(0.0, 1.0));
+            self.cells[i] = FireCell { char, heat };
+            if heat > 0.0 {
+                self.lit[i] = now;
+            }
+            self.touch(i);
+        }
         self.settle();
         true
     }
@@ -735,6 +832,64 @@ mod tests {
 
     fn run(fire: &mut FloraFire, seconds: f32, wind: Vec2) {
         run_in(fire, seconds, wind, 1.0);
+    }
+
+    #[test]
+    fn the_hottest_squares_hold_their_burning_cells_hottest_first() {
+        // 64 m in 1 m cells from (-32, -32): a hot patch of four cells and a cooler one of two.
+        let mut fire = FloraFire::with_cells(Vec2::ZERO, 64.0, 64);
+        let side = 64;
+        let mut cells = vec![FireCell::default(); side * side];
+        for (x, z) in [(40, 40), (41, 40), (40, 41), (41, 41)] {
+            cells[z * side + x] = FireCell { char: 0.5, heat: 1.0 };
+        }
+        for (x, z) in [(10, 50), (11, 50)] {
+            cells[z * side + x] = FireCell { char: 0.2, heat: 0.5 };
+        }
+        // Burnt out: no heat, no spot.
+        cells[5 * side + 5] = FireCell { char: 1.0, heat: 0.0 };
+        assert!(fire.restore(&cells));
+        let spots = fire.hottest(8.0, 5);
+        assert_eq!(spots.len(), 2);
+        assert_eq!((spots[0].at, spots[0].heat), (Vec2::new(9.0, 9.0), 4.0));
+        assert!((spots[0].share - 4.0 / 64.0).abs() < 1.0e-6, "four of an 8 m square's 64 cells");
+        assert_eq!((spots[1].at, spots[1].heat), (Vec2::new(-21.0, 18.5), 1.0));
+        assert_eq!(fire.hottest(8.0, 1), spots[..1]);
+        // A square smaller than a cell is a cell: a spot a burning cell, of two as hot the one at
+        // the lower x, then the lower z.
+        let cells: Vec<Vec2> = fire.hottest(0.0, 10).iter().map(|spot| spot.at).collect();
+        assert_eq!(cells.len(), 6);
+        assert_eq!(cells[..4], [Vec2::new(8.5, 8.5), Vec2::new(8.5, 9.5), Vec2::new(9.5, 8.5), Vec2::new(9.5, 9.5)]);
+    }
+
+    #[test]
+    fn a_snapshot_holds_the_touched_cells_only_and_restores_the_fire_as_it_was() {
+        let mut fire = row_of_trees();
+        fire.ignite(Vec3::new(-24.0, 0.0, 0.0), 2.0);
+        run(&mut fire, 6.0, Vec2::ZERO);
+        let snapshot = fire.snapshot();
+        let touched = fire.cells().iter().filter(|c| c.char > 0.0 || c.heat > 0.0).count();
+        assert!(touched > 0 && snapshot.cells.len() == touched, "{} entries for {touched} touched cells", snapshot.cells.len());
+        assert!(touched < fire.cells().len() / 4);
+        let mut loaded = row_of_trees();
+        assert!(loaded.restore_snapshot(&snapshot));
+        assert_eq!(loaded.cells(), fire.cells());
+        assert_eq!((loaded.is_burning(), loaded.touched_bounds()), (fire.is_burning(), fire.touched_bounds()));
+        // It burns on as a fire restored from every cell does.
+        let mut dense = row_of_trees();
+        assert!(dense.restore(fire.cells()));
+        run(&mut loaded, 4.0, Vec2::ZERO);
+        run(&mut dense, 4.0, Vec2::ZERO);
+        assert_eq!(loaded.cells(), dense.cells());
+        // A grid of another size refuses it and stays as it was.
+        let mut other = FloraFire::with_cells(Vec2::ZERO, 64.0, 16);
+        assert!(!other.restore_snapshot(&snapshot));
+        assert!(!other.is_burning() && other.touched_bounds().is_none());
+        #[cfg(feature = "ron")]
+        {
+            let text = ron::to_string(&snapshot).unwrap();
+            assert_eq!(ron::from_str::<FireSnapshot>(&text).unwrap(), snapshot, "it saves");
+        }
     }
 
     #[test]
