@@ -1,6 +1,6 @@
 //! Recolouring trees that are not pooled.
 //!
-//! A [`PooledTree`](crate::PooledTree) is recoloured through its pool ([`RecolorPool`](crate::RecolorPool),
+//! A [`PooledTree`](crate::PooledTree) is recoloured through its pool ([`RecolorPool`],
 //! [`PooledLook`](crate::PooledLook)). A tree that left its pool (felled, notched) or never had
 //! one (a [`ProceduralTree`]) has materials of its own, which [`RecolorTree`] swaps for those of
 //! the new colours: no mesh is rebuilt, and trees with equal colours share a material again
@@ -10,23 +10,24 @@ use std::sync::Arc;
 
 use bevy::ecs::prelude::*;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-use bevy::asset::Assets;
+use bevy::asset::{AssetId, Assets};
 
-use crate::felling::{CutFace, Felled, calm_params};
+use crate::felling::{CutFace, Felled, TreeStump, calm_params};
 use crate::params::TreeParams;
 use crate::plugin::{Paint, ProceduralTree, TreeRender, repaint_flora, set_color};
-use crate::pool::PoolColors;
+use crate::pool::{PoolColors, RecolorPool, TreePool};
 use crate::shading::{FloraMaterial, FloraMaterialSupport, FloraWindBuffer, SharedFlora, TextureLibrary};
 
 /// Dress a tree that is not pooled in new colours: the wood and the leaves of a
 /// [`ProceduralTree`] (every level of detail of a [`TreeLod`](crate::TreeLod) tree), its cut faces,
-/// and, for a felled one, its stump; or a [`TreeStump`](crate::TreeStump) or
+/// and, for a felled one, its stump; or a [`TreeStump`] or
 /// [`TreeLog`](crate::TreeLog) itself, which outlive the tree (send one per entity: a bucked tree's
 /// stump and logs are separate entities). `colors` are as for a pool's look
 /// ([`PoolColors`]: scans keep their pattern, an unlit look draws the end grain unlit too).
 ///
 /// The meshes are not rebuilt. The tree keeps the colours: its later rebuilds use them over the
 /// ones in its [`TreeParams`], and a pooled tree felled in a look begins with that look's
+/// colours and follows its later [`RecolorPool`]s ([`FromPool`]), which override this message's
 /// colours. A felled tree that is lying on the ground keeps its still (non-swaying) materials.
 /// A tree that grows on the GPU ([`GpuGrowth`](crate::GpuGrowth)) is left as it is: it takes its
 /// colours from its parameters.
@@ -52,6 +53,38 @@ pub(crate) struct CutWood {
     pub(crate) params: Arc<TreeParams>,
     pub(crate) unlit: bool,
     pub(crate) calm: bool,
+}
+
+/// The pool and look a tree left: put by the plugin on a [`PooledTree`](crate::PooledTree) that
+/// is felled ([`FellTree`](crate::FellTree)) or notched ([`TreeNotch`](crate::TreeNotch)) as it
+/// becomes a [`ProceduralTree`], and on the stump and the logs cut from it. Every
+/// [`RecolorPool`] of that pool and look recolours them as a [`RecolorTree`] would, so felled wood
+/// keeps following its pool's palette with the standing trees. Remove it to keep an entity in the
+/// colours it has whatever its pool does.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FromPool {
+    /// The pool it was a tree of.
+    pub pool: AssetId<TreePool>,
+    /// Its look in the pool ([`PooledLook`](crate::PooledLook), 0 without one).
+    pub look: u32,
+}
+
+/// Pass every [`RecolorPool`] on to what left that pool and look ([`FromPool`]) as
+/// [`RecolorTree`]s: felled and notched trees, stumps and logs. A stump whose tree is still there
+/// is left to the tree's, which reaches it.
+pub(crate) fn recolor_from_pools(
+    mut pools: MessageReader<RecolorPool>,
+    mut trees: MessageWriter<RecolorTree>,
+    left: Query<(Entity, &FromPool, Option<&TreeStump>)>,
+) {
+    for recolor in pools.read() {
+        for (entity, from, stump) in &left {
+            if (from.pool, from.look) != (recolor.pool, recolor.look) || stump.and_then(|s| s.tree).is_some_and(|tree| left.contains(tree)) {
+                continue;
+            }
+            trees.write(RecolorTree { tree: entity, colors: recolor.colors });
+        }
+    }
 }
 
 /// Apply every [`RecolorTree`].

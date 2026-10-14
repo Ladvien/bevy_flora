@@ -284,6 +284,7 @@ impl bevy::app::Plugin for FloraPlugin {
                     start_felling,
                     drive_felling,
                     buck_trees,
+                    crate::recolor::recolor_from_pools,
                     recolor_trees,
                     show_flowers,
                 )

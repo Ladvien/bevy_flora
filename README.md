@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.43 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.44 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.43"
+bevy_flora = "0.44"
 ```
 
 | feature | default | what it does |
@@ -261,7 +261,7 @@ The pool is the one `build_pool` makes from the same arguments, mesh for mesh, a
 
 ### One forest, many looks: `PoolColors`
 
-A pool can be drawn in more than one colouring without a second set of meshes. `TreePool::looks` starts with look 0, the colours of the parameters; `add_look` adds more (before the pool goes into the assets), and a `PooledTree` picks one with `PooledLook(n)`. Three looks of one forest draw the same meshes with three pairs of materials, impostors included: they are baked neutral grey and take a look's colours as a tint. Pools whose looks are equal share their materials: the ages of one species, or two looks of one wood colour, draw with the same ones, so a forest of four species at three ages in three looks draws with at most 24 materials instead of 72 (`forest --ages 3 --looks`: 4.55 ms a frame instead of 5.49 for 20 000 trees, Apple M4 Pro). A look can be `unlit`: its wood, leaves, impostors and cut faces then show their colour as it is, with no lighting, shadows or light through the leaves (the rain, the snow and the fire still mark it), for a map, a diagram or a dream. `RecolorPool` changes a look's colours at runtime, every tree in it at once, and only that pool's: the pool asset is never touched and no mesh is rebuilt. When every pool that shares a material is recoloured alike in one frame (a palette that glides through the day over a species' pools) the material is written in place, a few material writes a frame; a pool recoloured on its own takes materials of its own, and its trees are pointed at them, until it is recoloured like the others again. Scans keep their pattern and the autumn and blossom colours follow the new leaf colour. A pooled tree that is felled keeps its look (`TreePool::tree_params_for`), and `RecolorTree` recolours it, its stump, its cut faces and its logs afterwards.
+A pool can be drawn in more than one colouring without a second set of meshes. `TreePool::looks` starts with look 0, the colours of the parameters; `add_look` adds more (before the pool goes into the assets), and a `PooledTree` picks one with `PooledLook(n)`. Three looks of one forest draw the same meshes with three pairs of materials, impostors included: they are baked neutral grey and take a look's colours as a tint. Pools whose looks are equal share their materials: the ages of one species, or two looks of one wood colour, draw with the same ones, so a forest of four species at three ages in three looks draws with at most 24 materials instead of 72 (`forest --ages 3 --looks`: 4.55 ms a frame instead of 5.49 for 20 000 trees, Apple M4 Pro). A look can be `unlit`: its wood, leaves, impostors and cut faces then show their colour as it is, with no lighting, shadows or light through the leaves (the rain, the snow and the fire still mark it), for a map, a diagram or a dream. `RecolorPool` changes a look's colours at runtime, every tree in it at once, and only that pool's: the pool asset is never touched and no mesh is rebuilt. When every pool that shares a material is recoloured alike in one frame (a palette that glides through the day over a species' pools) the material is written in place, a few material writes a frame; a pool recoloured on its own takes materials of its own, and its trees are pointed at them, until it is recoloured like the others again. Scans keep their pattern and the autumn and blossom colours follow the new leaf colour. A pooled tree that is felled or notched keeps its look (`TreePool::tree_params_for`) and goes on following it: it, its stump and its logs carry `FromPool { pool, look }`, and every `RecolorPool` of that look recolours them with the standing trees (remove `FromPool` to keep one as it is; `RecolorTree` recolours any of them on its own).
 
 ```rust,no_run
 use bevy::prelude::*;

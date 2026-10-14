@@ -167,7 +167,8 @@ pub struct PooledLook(pub u32);
 /// materials and its impostors' are rewritten in place (only where a value changed), and the pool
 /// itself is not touched, so no tree is re-indexed or rebuilt. The pool must have the look
 /// ([`TreePool::add_look`]); a pool that was never drawn takes the colours when it first is.
-/// `look` and `colors` are as for [`TreePool::looks`]; felled trees follow with [`RecolorTree`](crate::RecolorTree).
+/// `look` and `colors` are as for [`TreePool::looks`]; felled and notched trees of the look, their
+/// stumps and logs follow ([`FromPool`](crate::FromPool)).
 ///
 /// [`TreePool::looks`] keeps the colours the look was added with: the current ones are in the
 /// materials.
@@ -2186,6 +2187,65 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(colours(&app, late), (violet.wood, violet.leaves));
+    }
+
+    #[test]
+    fn a_recoloured_look_reaches_its_felled_trees_their_stumps_and_logs_and_no_other_look() {
+        use crate::felling::{BuckTree, TreeBucked, TreeStump};
+        use crate::recolor::FromPool;
+        let mut app = app();
+        let mut oak = TreePreset::Oak.params();
+        oak.bark.scan = None;
+        oak.foliage.scan = None;
+        let pool = pool_of(&mut app, &oak, 2, &[CRIMSON, FLAT_BLUE]);
+        let spawn = |app: &mut App, look: u32| {
+            app.world_mut().spawn((PooledTree { pool: pool.clone(), variant: 0 }, PooledLook(look), Transform::default())).id()
+        };
+        let (lying, bucked, other) = (spawn(&mut app, 1), spawn(&mut app, 1), spawn(&mut app, 2));
+        app.update();
+        for tree in [lying, bucked, other] {
+            app.world_mut().entity_mut(tree).insert(FellTree { lying: true, ..Default::default() });
+        }
+        app.world_mut().entity_mut(bucked).insert(BuckTree::default());
+        let mut cursor = app.world().resource::<bevy::ecs::message::Messages<TreeBucked>>().get_cursor();
+        let mut logs = Vec::new();
+        for _ in 0..6 {
+            app.update();
+            let messages = app.world().resource::<bevy::ecs::message::Messages<TreeBucked>>();
+            logs.extend(cursor.read(messages).flat_map(|b| b.logs.clone()));
+        }
+        assert!(!logs.is_empty(), "the tree was bucked");
+        assert_eq!(app.world().get::<FromPool>(lying), Some(&FromPool { pool: pool.id(), look: 1 }));
+        // Every wood colour (the plain materials of a headless app) of an entity and its children.
+        let wood = |app: &App, entity: Entity| -> Vec<Color> {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let mut colours = Vec::new();
+            for e in std::iter::once(entity).chain(app.world().get::<Children>(entity).into_iter().flat_map(|c| c.iter())) {
+                if let Some(m) = app.world().get::<MeshMaterial3d<StandardMaterial>>(e) {
+                    colours.push(materials.get(&m.0).unwrap().base_color);
+                }
+            }
+            colours
+        };
+        let stumps: Vec<Entity> = app.world_mut().query_filtered::<Entity, With<TreeStump>>().iter(app.world()).collect();
+        assert_eq!(stumps.len(), 3);
+        let trunk = |app: &App, tree: Entity| app.world().get::<crate::TreeRender>(tree).unwrap().trunk_entity();
+        assert!(wood(&app, trunk(&app, lying)).contains(&CRIMSON.wood) && wood(&app, logs[0]).contains(&CRIMSON.wood));
+
+        let violet = PoolColors { wood: Color::srgb(0.4, 0.1, 0.5), leaves: Color::srgb(0.7, 0.2, 0.9), unlit: false };
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet });
+        app.update();
+        app.update();
+        assert!(wood(&app, trunk(&app, lying)).contains(&violet.wood), "the lying tree");
+        for log in &logs {
+            assert!(wood(&app, *log).contains(&violet.wood), "a log of the bucked tree");
+        }
+        for stump in &stumps {
+            let colours = wood(&app, *stump);
+            let of = app.world().get::<FromPool>(*stump).map(|from| from.look);
+            assert_eq!(of.is_some_and(|look| look == 1), colours.contains(&violet.wood), "a stump of look {of:?}: {colours:?}");
+        }
+        assert!(wood(&app, trunk(&app, other)).contains(&FLAT_BLUE.wood), "another look keeps its colours");
     }
 
     #[test]

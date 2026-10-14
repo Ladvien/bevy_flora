@@ -5,6 +5,35 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.44.0] - 2026-10-13
+
+Felled wood follows its pool's look (issue #75): a pooled tree that was felled became a
+`ProceduralTree` that `RecolorPool` no longer reached, so a game kept a marker of its own on every
+pooled tree and sent a `RecolorTree` per felled tree with each palette change. A later
+`RecolorPool` now overrides colours a game gave such wood with `RecolorTree` (a minor release). On
+crates.io this is the release after 0.36.0: it carries 0.37.0 to 0.43.0 too, entered below, each
+also released on GitHub.
+
+### Added
+
+- `FromPool { pool, look }`: put on a pooled tree that is felled or notched as it leaves its pool,
+  and on its stump and logs. Every `RecolorPool` of that pool and look recolours them with the
+  standing trees (a felled tree's leaves too, in their still materials once it lies); remove it to
+  keep one as it is.
+
+### Measured
+
+- **Look.** An oak of a pool, felled to lie (and another bucked into 2 m logs) under a pool
+  recoloured every frame to violet wood and orange leaves (a throwaway copy of `inspect`): its trunk,
+  leaves, stump and logs take the colours, the cut faces stay end grain; without the forwarding
+  they keep the bark and green they were cut in. Nothing else that draws changed: the 491 gallery
+  scenarios (but the CPU toon maple and oak at a mean of 0.000 of 255), the eleven clips (but three
+  push frames and a chop frame at 0.000) and a pooled forest's screenshot are 0.43.0's byte for
+  byte, no `ERROR`.
+- **Cost** (`forest --trees 100000 --mode pool --offscreen --deterministic`, Apple M4 Pro, three
+  pairs in alternating order with 0.43.0): 7.69 to 7.79 ms a frame against 7.69 to 8.08, the CPU
+  27.50 to 27.63 against 27.70 to 27.87.
+
 ## [0.43.0] - 2026-10-13
 
 A pooled tree felled before a save comes back as one insert, found by a name rather than by its
@@ -2621,6 +2650,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.44.0]: https://github.com/Ladvien/bevy_flora/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/Ladvien/bevy_flora/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/Ladvien/bevy_flora/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/Ladvien/bevy_flora/compare/v0.40.0...v0.41.0
