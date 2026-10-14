@@ -66,7 +66,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool};
 use bevy::light::NotShadowCaster;
 use bevy::log::warn;
 use bevy::math::{Vec3, Vec3A, Vec3Swizzles};
-use bevy::mesh::{Mesh, Mesh3d};
+use bevy::mesh::{Mesh, Mesh3d, MeshTag};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::reflect::{Reflect, TypePath};
 use bevy::camera::{Camera, Camera3d, Projection};
@@ -180,6 +180,23 @@ pub struct RecolorPool {
     pub look: u32,
     /// The new colours.
     pub colors: PoolColors,
+    /// Seconds over which the look glides from the colours it shows (a glide's in-between
+    /// included) to `colors`, blended in linear RGB; 0 or less changes it at once. A later
+    /// recolour of the look takes over from where it is. The glide is drawn on the GPU: the
+    /// shaders multiply the look's colours by each frame's blend, read from the shared buffer by
+    /// the look's [`MeshTag`] on its trees', impostors' and deadfall's meshes, and no material is
+    /// written until it arrives, when the look's materials take `colors` as at once (an unlit look
+    /// turns lit or unlit then). Turned leaves keep the autumn colour and flowers the blossom; the
+    /// look's felled wood follows frame by frame. Past [`MAX_GLIDE_LOOKS`](Self::MAX_GLIDE_LOOKS)
+    /// looks of all pools, or without flora materials, a look glides by being recoloured at once
+    /// every frame, which costs every tree drawn in it. A glide follows the app's
+    /// [`Time`](bevy::time::Time), so it stops while time is paused.
+    pub glide: f32,
+}
+
+impl RecolorPool {
+    /// How many looks, of all pools, glide on the GPU.
+    pub const MAX_GLIDE_LOOKS: usize = crate::glide::MAX_GLIDE_LOOKS;
 }
 
 /// The colours [`RecolorPool`] gave looks, over those in [`TreePool::looks`]: what a pool that
@@ -750,21 +767,31 @@ pub(crate) fn follow_orthographic_zoom(
 /// does at the same view.
 fn orthographic_zoom(height: f32, at: &GlobalTransform, ground: Option<&FloraGround>, units: &FloraUnits) -> f32 {
     let height = units.metres(height);
+    if height.is_nan() || height <= 0.0 {
+        return 1.0;
+    }
+    let Some(distance) = ground_distance(at, ground) else { return 1.0 };
+    let seen_from = height / (2.0 * (REFERENCE_FOV / 2.0).tan());
+    (units.metres(distance) / seen_from).clamp(1.0e-3, 1.0e3)
+}
+
+/// How far a camera at `at` looks along its forward axis to the ground: the plane y = 0, or
+/// `ground` under where the view meets the last guess, four times over. `None` when it does not
+/// look down.
+pub(crate) fn ground_distance(at: &GlobalTransform, ground: Option<&FloraGround>) -> Option<f32> {
     let forward = at.forward().as_vec3();
     let eye = at.translation();
-    if forward.y > -1.0e-3 || height.is_nan() || height <= 0.0 {
-        return 1.0;
+    if forward.y > -1.0e-3 {
+        return None;
     }
     let mut distance = eye.y / -forward.y;
     if let Some(ground) = ground {
-        // Down to the ground under where the view meets the last guess, a few times over.
         for _ in 0..4 {
             let floor = ground.height((eye + forward * distance).xz());
             distance = (eye.y - floor) / -forward.y;
         }
     }
-    let seen_from = height / (2.0 * (REFERENCE_FOV / 2.0).tan());
-    (units.metres(distance.max(0.0)) / seen_from).clamp(1.0e-3, 1.0e3)
+    Some(distance.max(0.0))
 }
 
 /// Keep every level-of-detail child's `VisibilityRange` at its band times [`LodScale`] and the
@@ -856,6 +883,7 @@ pub(crate) fn spawn_pooled_trees(
     recolors: Res<PoolRecolors>,
     trees: Query<(Entity, &PooledTree, Option<&PooledLook>, Has<NotShadowCaster>), Without<PooledTreeSpawned>>,
     units: Res<FloraUnits>,
+    mut slots: ResMut<crate::glide::GlideSlots>,
     mut warned: Local<bool>,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
@@ -912,6 +940,8 @@ pub(crate) fn spawn_pooled_trees(
         let Some(materials) = pool.materials.get(look % pool.materials.len().max(1)) else {
             continue;
         };
+        // The look's tag: what its gliding colours are found by (`glide.rs`).
+        let tag = MeshTag::new(slots.tag(pooled.pool.id(), (look % pool.looks.len().max(1)) as u32));
         // `NoAutoAabb`: the children keep these boxes. Bevy would otherwise recompute every new
         // child's from all of its mesh's vertices (100 000 trees: seconds of loading) and replace
         // the impostor's, which reaches past the quad.
@@ -926,6 +956,7 @@ pub(crate) fn spawn_pooled_trees(
                             range.clone(),
                             bounds,
                             NoAutoAabb,
+                            tag.clone(),
                             ChildOf(tree),
                         ))
                         .id()
@@ -939,6 +970,7 @@ pub(crate) fn spawn_pooled_trees(
                             range.clone(),
                             bounds,
                             NoAutoAabb,
+                            tag.clone(),
                             ChildOf(tree),
                         ))
                         .id()
@@ -973,6 +1005,7 @@ pub(crate) fn spawn_pooled_trees(
                 banded(impostor, f32::INFINITY, units),
                 aabb,
                 NoAutoAabb,
+                tag.clone(),
             );
             // An impostor casts only for a pool that asks, and not for a tree kept out of shadows.
             match (pool.lod.impostor_shadows, quiet) {
@@ -1134,6 +1167,10 @@ pub(crate) fn recolor_pools(
     // The frame's recolours of flora looks, the last one of each look.
     let mut asked: Vec<Asked> = Vec::new();
     for message in messages.read() {
+        // A glide's blends come as recolours at once (`glide_looks`).
+        if message.glide > 0.0 {
+            continue;
+        }
         let Some(pool) = pools.get(message.pool) else { continue };
         let look = message.look as usize;
         if look >= pool.looks.len() {
@@ -1256,7 +1293,7 @@ struct Repoint {
 
 /// Dress a [`PooledTree`] whose [`PooledLook`] changed (or was taken off: look 0) in its new
 /// look: its children take the matching material of the look, wood for wood, leaves for leaves,
-/// the impostor's for the impostor.
+/// the impostor's for the impostor, and the look's [`MeshTag`].
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn sync_pooled_looks(
     mut commands: Commands,
@@ -1267,6 +1304,7 @@ pub(crate) fn sync_pooled_looks(
     flora: Query<&MeshMaterial3d<FloraMaterial>>,
     standard: Query<&MeshMaterial3d<StandardMaterial>>,
     impostors: Query<&MeshMaterial3d<ImpostorMaterial>>,
+    mut slots: ResMut<crate::glide::GlideSlots>,
 ) {
     let touched: Vec<Entity> = changed.iter().chain(removed.read()).collect();
     for tree in touched {
@@ -1275,7 +1313,10 @@ pub(crate) fn sync_pooled_looks(
         let look = look.map_or(0, |look| look.0 as usize);
         let Some(now) = pool.materials.get(look % pool.materials.len().max(1)) else { continue };
         let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
+        // The new look's tag (`glide.rs`) on every mesh.
+        let tag = MeshTag::new(slots.tag(pooled.pool.id(), (look % pool.looks.len().max(1)) as u32));
         for child in children.iter() {
+            commands.entity(child).insert(tag.clone());
             if let Ok(current) = impostors.get(child) {
                 let wanted = variant
                     .impostor
@@ -1321,7 +1362,10 @@ pub(crate) fn sync_pooled_looks(
 /// The pool's messages and resources, and the asset type where the asset plugin is. Plugins may
 /// be added in any order, so [`finish`] tries again.
 pub(crate) fn build(app: &mut bevy::app::App) {
-    app.add_message::<RecolorPool>().init_resource::<PoolRecolors>();
+    app.add_message::<RecolorPool>()
+        .init_resource::<PoolRecolors>()
+        .init_resource::<crate::glide::GlideSlots>()
+        .init_resource::<crate::glide::GlideTints>();
     add_asset_types(app);
 }
 
@@ -1903,7 +1947,7 @@ mod tests {
         let drawn_before = drawn_by(&app, &[tree]);
 
         let mut events = app.world().resource::<bevy::ecs::message::Messages<AssetEvent<TreePool>>>().get_cursor_current();
-        send(&mut app, RecolorPool { pool: pool.id(), look: 0, colors: CRIMSON });
+        send(&mut app, RecolorPool { pool: pool.id(), look: 0, colors: CRIMSON, glide: 0.0 });
         app.update();
         let after = dressed(&app, &pool, 0);
 
@@ -1944,7 +1988,7 @@ mod tests {
         app.insert_resource(FloraMaterialSupport);
         let oak = TreePreset::Oak.params();
         let pool = pool_of(&mut app, &oak, 1, &[CRIMSON]);
-        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: FLAT_BLUE });
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: FLAT_BLUE, glide: 0.0 });
         app.update();
         app.world_mut().spawn((PooledTree { pool: pool.clone(), variant: 0 }, PooledLook(1)));
         app.update();
@@ -2018,7 +2062,7 @@ mod tests {
         let before = colours(&app, shared);
         let drawn = |app: &App, tree: Entity| drawn_by(app, &[tree]).1;
 
-        send(&mut app, RecolorPool { pool: young.id(), look: 0, colors: FLAT_BLUE });
+        send(&mut app, RecolorPool { pool: young.id(), look: 0, colors: FLAT_BLUE, glide: 0.0 });
         app.update();
         let blue = look_materials(&app, &young)[0];
         assert_ne!(blue, shared, "the recoloured pool takes materials of its own");
@@ -2028,7 +2072,7 @@ mod tests {
         assert_eq!(colours(&app, shared), before, "and so are the materials it draws with");
 
         // Recoloured alike, the two share again.
-        send(&mut app, RecolorPool { pool: old.id(), look: 0, colors: FLAT_BLUE });
+        send(&mut app, RecolorPool { pool: old.id(), look: 0, colors: FLAT_BLUE, glide: 0.0 });
         app.update();
         assert_eq!(look_materials(&app, &old)[0], blue);
         assert_eq!(drawn(&app, old_tree), drawn(&app, young_tree));
@@ -2038,8 +2082,8 @@ mod tests {
         // drawing with it.
         let dusk = PoolColors { wood: Color::srgb(0.20, 0.10, 0.30), leaves: Color::srgb(0.40, 0.20, 0.50), unlit: false };
         let blue_colours = colours(&app, blue);
-        send(&mut app, RecolorPool { pool: young.id(), look: 0, colors: dusk });
-        send(&mut app, RecolorPool { pool: old.id(), look: 0, colors: dusk });
+        send(&mut app, RecolorPool { pool: young.id(), look: 0, colors: dusk, glide: 0.0 });
+        send(&mut app, RecolorPool { pool: old.id(), look: 0, colors: dusk, glide: 0.0 });
         app.update();
         assert_eq!((look_materials(&app, &young)[0], look_materials(&app, &old)[0]), (blue, blue));
         assert_eq!(drawn(&app, young_tree), HashSet::from(blue.map(|id| id.untyped())));
@@ -2179,7 +2223,7 @@ mod tests {
 
         // A look recoloured since the pool was built is the look a tree is felled in.
         let violet = PoolColors { wood: Color::srgb(0.4, 0.1, 0.5), leaves: Color::srgb(0.7, 0.2, 0.9), unlit: false };
-        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet });
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet, glide: 0.0 });
         app.update();
         let late = spawn(&mut app, 1);
         app.update();
@@ -2233,7 +2277,7 @@ mod tests {
         assert!(wood(&app, trunk(&app, lying)).contains(&CRIMSON.wood) && wood(&app, logs[0]).contains(&CRIMSON.wood));
 
         let violet = PoolColors { wood: Color::srgb(0.4, 0.1, 0.5), leaves: Color::srgb(0.7, 0.2, 0.9), unlit: false };
-        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet });
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet, glide: 0.0 });
         app.update();
         app.update();
         assert!(wood(&app, trunk(&app, lying)).contains(&violet.wood), "the lying tree");
@@ -2292,6 +2336,62 @@ mod tests {
     }
 
     #[test]
+    fn a_glide_passes_through_the_blend_arrives_exactly_and_a_new_recolour_takes_over_where_it_is() {
+        use bevy::color::{LinearRgba, Mix};
+        let mut app = app();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)));
+        let mut oak = TreePreset::Oak.params();
+        oak.bark.scan = None;
+        oak.foliage.scan = None;
+        let pool = pool_of(&mut app, &oak, 1, &[CRIMSON]);
+        app.world_mut().spawn((PooledTree { pool: pool.clone(), variant: 0 }, PooledLook(1)));
+        app.update();
+        app.update();
+        // The look's plain materials (no flora support here): its wood and leaf colours.
+        let shown = |app: &App| {
+            let pools = app.world().resource::<Assets<TreePool>>();
+            let Some(PoolMaterials::Standard { wood, leaves }) = pools.get(&pool).unwrap().materials.get(1) else { panic!("plain materials") };
+            let plain = app.world().resource::<Assets<StandardMaterial>>();
+            (plain.get(wood).unwrap().base_color, plain.get(leaves).unwrap().base_color)
+        };
+        assert_eq!(shown(&app), (CRIMSON.wood, CRIMSON.leaves));
+        let near = |a: Color, b: Color| {
+            let (a, b) = (LinearRgba::from(a), LinearRgba::from(b));
+            [a.red - b.red, a.green - b.green, a.blue - b.blue].iter().all(|d| d.abs() < 1.0e-4)
+        };
+        let violet = PoolColors { wood: Color::srgb(0.4, 0.1, 0.5), leaves: Color::srgb(0.7, 0.2, 0.9), unlit: false };
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet, glide: 1.0 });
+        // The frame it is read it starts where it is; five frames of 0.1 s later it is halfway.
+        app.update();
+        assert!(near(shown(&app).0, CRIMSON.wood), "{:?}", shown(&app));
+        for _ in 0..5 {
+            app.update();
+        }
+        let half = Color::from(LinearRgba::from(CRIMSON.wood).mix(&LinearRgba::from(violet.wood), 0.5));
+        assert!(near(shown(&app).0, half), "halfway: {:?}, wanted {half:?}", shown(&app).0);
+        // Another glide takes over from where the first is when it is read (a frame on, 0.6 of
+        // the way), with no jump.
+        let green = PoolColors { wood: Color::srgb(0.1, 0.6, 0.1), leaves: Color::srgb(0.2, 0.9, 0.2), unlit: false };
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: green, glide: 0.5 });
+        app.update();
+        let on = Color::from(LinearRgba::from(CRIMSON.wood).mix(&LinearRgba::from(violet.wood), 0.6));
+        assert!(near(shown(&app).0, on), "it went on from {on:?}, not {:?}", shown(&app).0);
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(shown(&app), (green.wood, green.leaves), "arrived exactly");
+        // A recolour at once in the middle of a glide stops it there.
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet, glide: 2.0 });
+        app.update();
+        app.update();
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: CRIMSON, glide: 0.0 });
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(shown(&app), (CRIMSON.wood, CRIMSON.leaves), "the glide was stopped");
+    }
+
+    #[test]
     fn a_hull_crown_pool_recolours_and_keeps_its_hull_flag_in_every_look() {
         let mut app = app();
         app.insert_resource(FloraMaterialSupport);
@@ -2307,7 +2407,7 @@ mod tests {
             assert!(leaves.extension.flora.tree.y > 0.5, "look {look} lost the hull flag");
         }
         let violet = PoolColors { wood: Color::srgb(0.4, 0.1, 0.5), leaves: Color::srgb(0.7, 0.2, 0.9), unlit: false };
-        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet });
+        send(&mut app, RecolorPool { pool: pool.id(), look: 1, colors: violet, glide: 0.0 });
         app.update();
         let (wood, leaves) = dressed(&app, &pool, 1);
         assert_eq!((wood.base.base_color, leaves.base.base_color), (violet.wood, violet.leaves));

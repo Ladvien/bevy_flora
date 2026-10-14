@@ -28,6 +28,9 @@ import package::shading::common::{
     fire_at, leaf_burn_front, ember_flicker, ember_glow, LEAF_GLOW, LEAF_SCORCH, SCORCHED, CHARCOAL, EMBER, EMBER_NITS,
 };
 
+@if(FLORA_GLIDE)
+import package::shading::common::{gliding, glide_tint};
+
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var albedo: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var atlas_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var surface: texture_2d<f32>;
@@ -103,7 +106,14 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     let turned = mix(smoothstep(moment, moment + 0.2, season.x), saturate((season.x - 0.1) / 0.8), spread);
     let turn = turned * leafy;
     let summer = color;
-    color = vec4<f32>(color.rgb * mix(vec3<f32>(1.0), flora.autumn.rgb, turn), color.a * (1.0 - season.y * leafy));
+    // A gliding look (`RecolorPool::glide`): the wood, and the leaves that have not turned, take
+    // the look's blend; turned leaves keep the species' autumn colour.
+    var glide = vec3<f32>(1.0);
+@if(FLORA_GLIDE)
+    if gliding() {
+        glide = glide_tint(mesh_functions::get_tag(in.instance_index), baked.a > 0.5);
+    }
+    color = vec4<f32>(color.rgb * mix(glide, flora.autumn.rgb, turn), color.a * (1.0 - season.y * leafy));
     // A flowering tree (`FoliageParams::blossom`) wears its flowers in patches as they open, over
     // its leaves or on the bare crown in early spring; the picture was baked without them.
     let flower_spot = fract(sin(dot(floor(spot), vec2<f32>(39.346, 11.135))) * 24634.634);

@@ -5,6 +5,58 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.45.0] - 2026-10-13
+
+Gliding recolours and a shadow range that follows the camera (issue #76): a game's palette
+switched its trees at the middle of a glide because a look's colours could only snap, and it
+quieted the shadows of every tree beyond a fixed distance of the origin, once, as it planted them.
+`RecolorPool` gained a field, so its struct literals need `glide` (a minor release). On crates.io
+this is the release after 0.36.0: it carries 0.37.0 to 0.44.0 too, entered below, each also
+released on GitHub.
+
+### Added
+
+- `RecolorPool::glide`: seconds over which the look glides from the colours it shows to the new
+  ones, blended in linear RGB, on the GPU. Every mesh of a pooled tree, impostor and pooled
+  deadfall carries its look's `MeshTag` (a tag per pool and look, up to
+  `RecolorPool::MAX_GLIDE_LOOKS`, 64), the shared buffer holds what each gliding look's wood and
+  leaves are multiplied by, and the shaders multiply: a frame of a glide writes those few vectors
+  and no material, which would have Bevy re-prepare every mesh drawn with it (a first version that
+  wrote the blend into the materials every frame cost 20 000 trees +60 ms of CPU a frame, 5 000
+  +9 ms). The materials take the new colours once, when the glide arrives; an unlit look turns lit
+  or unlit then; turned leaves keep the autumn colour and flowers the blossom; the look's felled
+  wood (`FromPool`) follows frame by frame. A later recolour takes over from wherever the look is;
+  0 changes it at once, as before. Past 64 looks, or without flora materials, a look glides by
+  being recoloured at once every frame. `RecolorTree` still changes a tree at once.
+- `FloraShadows { radius }`: the standing trees (pooled or `ProceduralTree`) farther than `radius`
+  metres (times `FloraUnits`) from the main camera's place on the ground (where an orthographic
+  camera looks) cast no shadow, kept as the camera moves and as trees are planted or felled,
+  touching only the trees that cross the edge. Trees the game quiets itself are left alone;
+  removing the resource gives the others their shadows back. `forest --shadow-radius` uses it.
+- `forest --looks --recolor --glide <s>`.
+
+### Measured
+
+- **Look.** `forest --trees 3000 --looks --recolor --glide <s> --warmup-secs 2` shot 2 s into
+  glides of 8, 4 and 2.67 s (a quarter, half and three quarters of the way) and at once: the
+  autumn band goes from red through pink and magenta to violet and the unlit band from cyan
+  through olive to yellow, impostors with them, the oak's own band unmoved. With nothing gliding
+  the shaders draw as before: a 20 000-tree pooled forest and the three-look forest (`--wind 0`)
+  are 0.44.0's byte for byte, and so are the gallery (but the painterly and toon maple and oak, CPU
+  and `--gpu`, at a mean of 0.000 of 255), the eleven clips (but six push frames and a chop frame
+  at 0.000) and the pooled forest's screenshot, no `ERROR`. `forest --shadow-radius 40` from two
+  camera places: only the trees near each camera cast; 100 000 trees with a 150 m range end as
+  0.44.0's, which marked them as they were placed, at a mean of 0.007 (trees at the edge are
+  measured to the bark now, not the trunk's centre).
+- **Cost** (`forest --offscreen --deterministic`, Apple M4 Pro, alternating pairs, a machine
+  shared with other builds: load 4 to 15). A glide running through the whole measurement of a
+  20 000-tree three-look forest against a recolour at once: the CPU 20.5 to 21.2 ms a frame
+  against 20.6 to 22.2 (the first version, which wrote the materials, 86 to 90 against 22 to 27).
+  100 000 pooled trees with a 150 m shadow range against 0.44.0's spawn-time marking: four pairs
+  9.4 to 11.6 ms against 7.6 to 13.1, the pair differences -1.9 to +1.8 ms (mean -0.1); the
+  range's pass ran 26 times while the forest was planted and not once after. Without either,
+  13.1 to 13.7 ms against 13.3 to 18.0.
+
 ## [0.44.0] - 2026-10-13
 
 Felled wood follows its pool's look (issue #75): a pooled tree that was felled became a
@@ -2650,6 +2702,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.45.0]: https://github.com/Ladvien/bevy_flora/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/Ladvien/bevy_flora/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/Ladvien/bevy_flora/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/Ladvien/bevy_flora/compare/v0.41.0...v0.42.0

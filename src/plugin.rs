@@ -250,6 +250,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .register_type::<TreeLod>()
             .register_type::<FallingLeaves>()
             .register_type::<Burnt>()
+            .register_type::<crate::shadows::FloraShadows>()
             .init_resource::<LodScale>()
             .init_resource::<ZoomScale>()
             .init_resource::<PendingPools>()
@@ -298,6 +299,8 @@ impl bevy::app::Plugin for FloraPlugin {
                     finish_background_pools
                         .run_if(resource_exists::<Assets<TreePool>>)
                         .run_if(resource_exists::<Assets<Mesh>>),
+                    // Before the recolours are applied: a glide's blend is one of them.
+                    crate::glide::glide_looks.run_if(resource_exists::<Assets<TreePool>>),
                     // Before the trees are given children: a tree turned into deadfall as it is
                     // spawned (a save restored) never gets a standing tree's.
                     crate::deadfall::turn_into_deadfall.run_if(resource_exists::<Assets<TreePool>>),
@@ -329,7 +332,9 @@ impl bevy::app::Plugin for FloraPlugin {
                     crate::index::index_trees.after(bevy::asset::AssetEventSystems),
                     // The same index, the lying wood: after the standing trees.
                     crate::index::index_obstacles.after(crate::index::index_trees),
-                    sync_shadow_casting,
+                    // The far trees quieted, then every mesh of a tree told.
+                    crate::shadows::cut_far_shadows.after(crate::index::index_obstacles),
+                    sync_shadow_casting.after(crate::shadows::cut_far_shadows),
                 )
                     .after(bevy::transform::TransformSystems::Propagate),
             )

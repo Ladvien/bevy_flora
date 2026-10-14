@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.44 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.45 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.44"
+bevy_flora = "0.45"
 ```
 
 | feature | default | what it does |
@@ -235,7 +235,7 @@ Bark (0.7.0) and leaf scans (0.8.0) leave these figures where they were, within 
 
 The pool's trees are static: they have the age the pool was built at, and growing trees stay `ProceduralTree` (with `GpuGrowth`), which suits the few that are close. Impostors are baked once per variant by a few frames of offscreen rendering, so a tree appears when that is done (100 000 pooled oaks are all in about 2 s after they are placed, at most 4096 trees getting their children a frame; 0.38.1, Apple M4 Pro), and they need `FloraPlugin` added after `DefaultPlugins` (before it, with no renderer, or on a device without storage buffers in the vertex stage such as WebGL2, the coarsest level is drawn at every distance and one warning says so). They are baked unlit, as a neutral grey colour picture (a pool's looks tint it, below) and a surface picture, and shaded by the scene's own lights every frame: they follow the time of day, glow with the sun behind them and sway with the wind. They show one of eight views, all taken from one height above the horizon (`LodSettings::impostor_elevation`, 10° by default), and cast no shadows unless the pool asks (`LodSettings::impostor_shadows`; see the orthographic cameras below). With MSAA an impostor keeps the gaps of its crown: each pixel draws the share of its samples the baked tree covers, so a far crown is as airy, and as light, as the leaves it stands for. Level 2 and the impostors replace thin twigs and most leaves, so a forest seen from above or close up should keep its near trees at level 0.
 
-Shadows are a large part of a forest's cost: every shadow cascade draws every tree that casts into it. Put `NotShadowCaster` on a `PooledTree` (or a `ProceduralTree`) and none of what draws it casts; take it off and it casts again, so a game can keep the shadow maps to the trees near the player, re-marking them as the player moves. `forest --shadow-radius 150` lets only the trees within 150 m of the camera cast: 1 000 individual oaks take 20.3 ms a frame instead of 24.6, 100 000 pooled oaks 7.2-7.3 ms instead of 7.5 (0.35.0, Apple M4 Pro, `--offscreen --deterministic`).
+Shadows are a large part of a forest's cost: every shadow cascade draws every tree that casts into it. Put `NotShadowCaster` on a `PooledTree` (or a `ProceduralTree`) and none of what draws it casts; take it off and it casts again. `FloraShadows { radius }` does that for the whole forest around the camera: the standing trees farther than `radius` metres (times `FloraUnits`, like the levels' distances) from the main camera's place on the ground (under a perspective camera; where an orthographic one looks) cast no shadow, and it follows the camera as it moves, touching only the trees that cross the edge. A tree the game quiets itself is left alone, and removing the resource gives the others their shadows back. `forest --shadow-radius 150` lets only the trees within 150 m of the camera cast: 1 000 individual oaks take 20.3 ms a frame instead of 24.6, 100 000 pooled oaks 7.2-7.3 ms instead of 7.5 (0.35.0, Apple M4 Pro, `--offscreen --deterministic`, marking the trees once as they were placed).
 
 ### Building pools without a stall: `BackgroundPools`
 
@@ -282,14 +282,14 @@ fn looks(
     pool
 }
 
-// Later: dawn. Every tree in look 1 follows, and so does every impostor of it.
+// Later: dawn, over half a minute. Every tree in look 1 follows, and so does every impostor of it.
 fn dawn(pool: &Handle<TreePool>, mut recolor: MessageWriter<RecolorPool>) {
     let colors = PoolColors { wood: Color::srgb(0.35, 0.22, 0.12), leaves: Color::srgb(0.55, 0.60, 0.25), unlit: false };
-    recolor.write(RecolorPool { pool: pool.id(), look: 1, colors });
+    recolor.write(RecolorPool { pool: pool.id(), look: 1, colors, glide: 30.0 });
 }
 ```
 
-`forest --looks` draws a forest in three looks side by side (the oak's own, a lit autumn one, a flat unlit one), and `--looks --recolor` recolours two of them after the warmup.
+`glide` is how many seconds the look takes to get there, blended in linear RGB from the colours it shows, so a day's palette can fade instead of snap. The glide is drawn on the GPU: every mesh of a pooled tree, its impostor and the pool's deadfall carries its look's `MeshTag`, and while the look glides the shaders multiply its colours by the frame's blend, which the plugin writes into the shared buffer the wind already lives in. No material is written until the glide arrives; then the look's materials take the new colours once, as a recolour at once does (Bevy re-prepares every mesh drawn with a material that changes, so writing them every frame would cost the CPU 60 ms a frame for 20 000 trees; the glide costs it nothing to see). Turned leaves keep the species' autumn colour and flowers their blossom, an unlit look turns lit or unlit as it arrives, and the trees felled from the look follow it frame by frame. Up to `RecolorPool::MAX_GLIDE_LOOKS` (64) looks of all pools glide this way; past that, or on a device without flora materials, a look glides by being recoloured at once every frame. A glide of 0 changes it at once; a later recolour of the look takes over from wherever it is. `forest --looks` draws a forest in three looks side by side (the oak's own, a lit autumn one, a flat unlit one), and `--looks --recolor` recolours two of them after the warmup (`--glide <s>` over `s` seconds).
 
 ### Planting a forest: `Scatter`
 
@@ -421,7 +421,7 @@ fn setup(mut commands: Commands) {
 }
 ```
 
-The rule, written on every field it touches: a field that sizes or times the crate's own simulation is in **metres** and is multiplied by `units_per_metre` where it meets the world (`FellTree::cut_height`, `TreeNotch::height`, `BuckTree`, `FireSpread::speed` and `reach`, `FoliagePusher::radius` and `height`, `SeeThroughTrees::radius`, `TreeShake::radius`, `GustFront::speed` and `width`, `LodDistances`, `FallingLeaves::autumn_distance`); a position, or a size that addresses the world, is in **world units** (every `at`, `target`, `centre` and `origin`; the size of `FloraFire` and the radius of `ignite`, `extinguish` and `scorch`; `FloraIndex`'s radii and distances; `Scatter`'s area and spacing; `FloraGround`'s heights). The default, 1.0, is a world in metres and changes nothing. Set it before planting: a pooled tree's bands of distance are made when it is spawned. A felled oak lands on the same update in a world in feet as in metres, a fire spreads the same number of cells a second and the default pusher covers the same share of a shrub (tests in `felling.rs`, `fire.rs` and `push.rs`).
+The rule, written on every field it touches: a field that sizes or times the crate's own simulation is in **metres** and is multiplied by `units_per_metre` where it meets the world (`FellTree::cut_height`, `TreeNotch::height`, `BuckTree`, `FireSpread::speed` and `reach`, `FoliagePusher::radius` and `height`, `SeeThroughTrees::radius`, `TreeShake::radius`, `GustFront::speed` and `width`, `LodDistances`, `FloraShadows::radius`, `FallingLeaves::autumn_distance`); a position, or a size that addresses the world, is in **world units** (every `at`, `target`, `centre` and `origin`; the size of `FloraFire` and the radius of `ignite`, `extinguish` and `scorch`; `FloraIndex`'s radii and distances; `Scatter`'s area and spacing; `FloraGround`'s heights). The default, 1.0, is a world in metres and changes nothing. Set it before planting: a pooled tree's bands of distance are made when it is spawned. A felled oak lands on the same update in a world in feet as in metres, a fire spreads the same number of cells a second and the default pusher covers the same share of a shrub (tests in `felling.rs`, `fire.rs` and `push.rs`).
 
 ### Leaf shading and wind
 

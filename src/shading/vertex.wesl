@@ -10,7 +10,10 @@ import bevy_pbr::render::{
 import package::shading::common::{flutter_offset, shake_at, wind_bend};
 
 @if(FLORA_LEAF)
-import package::shading::common::{leaf_has_fallen, leaf_hidden, leaf_season_tint, FALLEN_LEAF_CLIP};
+import package::shading::common::{leaf_has_fallen, leaf_hidden, leaf_glide_tint, FALLEN_LEAF_CLIP};
+
+@if(FLORA_LEAF && FLORA_GLIDE)
+import package::shading::common::{gliding, glide_tint};
 
 @if(FLORA_FIRE && FLORA_LEAF)
 import package::shading::common::{fire_at, leaf_burnt, leaf_fire_alpha};
@@ -98,8 +101,15 @@ fn vertex(
     // the fragment stage which it draws; the opaque material ignores it otherwise.
 @if(VERTEX_COLORS && !FLORA_LEAF)
     out.color = vertex.color;
-@if(VERTEX_COLORS && FLORA_LEAF)
-    out.color = vec4<f32>(vertex.color.rgb * leaf_season_tint(sway, vertex.color), vertex.color.a);
+    // A pooled tree's look that glides (`RecolorPool::glide`): its leaves take the look's blend.
+@if(VERTEX_COLORS && FLORA_LEAF) {
+    var glide = vec3<f32>(1.0);
+@if(FLORA_GLIDE)
+    if gliding() {
+        glide = glide_tint(mesh_functions::get_tag(vertex_no_morph.instance_index), true);
+    }
+    out.color = vec4<f32>(vertex.color.rgb * leaf_glide_tint(sway, vertex.color, glide), vertex.color.a);
+}
     // In a fire the alpha also carries how scorched the leaf is and how bright it burns.
 @if(VERTEX_COLORS && FLORA_LEAF && FLORA_FIRE)
     out.color.a = leaf_fire_alpha(sway, vertex.color, fire);

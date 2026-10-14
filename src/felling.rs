@@ -349,7 +349,7 @@ pub(crate) fn start_felling(
                 .entity(entity)
                 .despawn_related::<Children>()
                 .remove::<(PooledTree, PooledTreeSpawned, PooledShapeFilled, PooledLook)>()
-                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors), from_pool(pooled, look)));
+                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors), from_pool(pool, pooled, look)));
             continue;
         }
         let Some(tree) = tree else { continue };
@@ -515,7 +515,7 @@ pub(crate) fn carve_notches(
                 .entity(entity)
                 .despawn_related::<Children>()
                 .remove::<(PooledTree, PooledTreeSpawned, PooledShapeFilled, PooledLook)>()
-                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors), from_pool(pooled, look)));
+                .insert((ProceduralTree(params), TreeAge(pool.age), TreeColors(colors), from_pool(pool, pooled, look)));
             continue;
         }
         let Some(tree) = tree else { continue };
@@ -584,9 +584,10 @@ fn pooled_to_tree(
     (colors.apply(&pool.tree_params_for(pooled.variant, look)), colors)
 }
 
-/// The pool and look a pooled tree leaves when it is cut or notched.
-fn from_pool(pooled: &PooledTree, look: Option<&PooledLook>) -> FromPool {
-    FromPool { pool: pooled.pool.id(), look: look.map_or(0, |look| look.0) }
+/// The pool and look (taken modulo the pool's looks) a pooled tree leaves when it is cut or
+/// notched.
+fn from_pool(pool: &TreePool, pooled: &PooledTree, look: Option<&PooledLook>) -> FromPool {
+    FromPool { pool: pooled.pool.id(), look: look.map_or(0, |look| look.0) % pool.looks.len().max(1) as u32 }
 }
 
 /// `params` of a tree that does not sway in the wind: what a felled tree lying on the ground has.

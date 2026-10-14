@@ -20,7 +20,7 @@ use bevy::ecs::prelude::*;
 use bevy::ecs::system::EntityCommands;
 use bevy::light::NotShadowCaster;
 use bevy::math::{Quat, Vec2, Vec3, Vec3Swizzles};
-use bevy::mesh::{Mesh, Mesh3d};
+use bevy::mesh::{Mesh, Mesh3d, MeshTag};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::transform::components::Transform;
 
@@ -227,6 +227,8 @@ pub(crate) struct DeadMaterials {
     face: Material,
     /// The colours they are made in.
     colors: PoolColors,
+    /// The look's tag, which its gliding colours are found by (`glide.rs`).
+    tag: MeshTag,
 }
 
 #[derive(Clone)]
@@ -263,12 +265,15 @@ fn dead_materials<'a>(
     standard: &mut Assets<StandardMaterial>,
     textures: &mut TextureLibrary,
     cut_face: &mut CutFace,
+    slots: &mut crate::glide::GlideSlots,
 ) -> &'a DeadMaterials {
     let look = look % pool.looks.len().max(1) as u32;
     cache.0.entry((id, look)).or_insert_with(|| {
         let colors = recolors.colors(id, look, pool);
         let face = Material::Standard(cut_face.get(textures, standard, colors.unlit));
         let calm = calm_params(&pool.params);
+        // The look's tag (`glide.rs`): the deadfall glides with the look's trees.
+        let tag = MeshTag::new(slots.tag(id, look));
         match wind {
             Some(wind) => {
                 let (wood, leaves) = colors.surfaces(&calm, textures);
@@ -277,6 +282,7 @@ fn dead_materials<'a>(
                     leaves: Material::Flora(shared.resolve(flora, &leaves, wind)),
                     face,
                     colors,
+                    tag,
                 }
             }
             None => {
@@ -286,17 +292,20 @@ fn dead_materials<'a>(
                     leaves: Material::Standard(standard.add(unlit(crown_material(&colors.apply(&pool.params))))),
                     face,
                     colors,
+                    tag,
                 }
             }
         }
     })
 }
 
-fn dress(child: &mut EntityCommands, material: &Material) {
-    match material {
+/// Dress a deadfall mesh in its role's material of the look, and the look's tag.
+fn dress(child: &mut EntityCommands, materials: &DeadMaterials, role: DeadRole) {
+    match materials.of(role) {
         Material::Flora(m) => child.insert(MeshMaterial3d(m.clone())),
         Material::Standard(m) => child.insert(MeshMaterial3d(m.clone())),
     };
+    child.insert(materials.tag.clone());
 }
 
 fn spawn_mesh(
@@ -309,7 +318,7 @@ fn spawn_mesh(
     quiet: bool,
 ) -> Entity {
     let mut child = commands.spawn((Mesh3d(mesh.clone()), at, role, ChildOf(parent)));
-    dress(&mut child, materials.of(role));
+    dress(&mut child, materials, role);
     if quiet {
         child.insert(NotShadowCaster);
     }
@@ -395,6 +404,7 @@ pub(crate) fn spawn_pooled_deadfall(
     ground: Option<Res<FloraGround>>,
     units: Res<FloraUnits>,
     deadfall: Query<(Entity, &PooledDeadfall, Option<&PooledLook>, &Transform, Has<NotShadowCaster>), Without<DeadfallSpawned>>,
+    mut slots: ResMut<crate::glide::GlideSlots>,
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
     let mut spawned = 0;
@@ -417,6 +427,7 @@ pub(crate) fn spawn_pooled_deadfall(
             &mut standard,
             &mut textures,
             &mut cut_face,
+            &mut slots,
         )
         .clone();
         commands.entity(entity).insert(DeadfallSpawned);
@@ -564,6 +575,7 @@ pub(crate) struct LookParams<'w> {
     cut_face: ResMut<'w, CutFace>,
     recolors: Res<'w, PoolRecolors>,
     cache: ResMut<'w, DeadMaterialCache>,
+    slots: ResMut<'w, crate::glide::GlideSlots>,
 }
 
 /// Re-dress deadfall whose look changed ([`PooledLook`] changed or taken off) or whose pool's look
@@ -588,7 +600,8 @@ pub(crate) fn restyle_deadfall(
 ) {
     let wind = wind.as_deref().filter(|_| flora_support.is_some());
     let mut stale: Vec<(AssetId<TreePool>, u32)> = Vec::new();
-    for message in recolored.read() {
+    // A glide's blends come as recolours at once (`glide_looks`).
+    for message in recolored.read().filter(|message| message.glide <= 0.0) {
         stale.push((message.pool, message.look));
     }
     let moved: Vec<Entity> = changed.iter().chain(removed.read()).collect();
@@ -617,6 +630,7 @@ pub(crate) fn restyle_deadfall(
             &mut look.standard,
             &mut textures,
             &mut look.cut_face,
+            &mut look.slots,
         )
         .clone();
         let wood = CutWood { params: Arc::new(materials.colors.apply(&pool.params)), unlit: materials.colors.unlit, calm: true };
@@ -626,7 +640,7 @@ pub(crate) fn restyle_deadfall(
         let mut stack: Vec<Entity> = children.iter().collect();
         while let Some(child) = stack.pop() {
             if let Ok(role) = roles.get(child) {
-                dress(&mut commands.entity(child), materials.of(*role));
+                dress(&mut commands.entity(child), &materials, *role);
             }
             if let Ok(mut cut) = cuts.get_mut(child) {
                 // A log: its meshes are its children.
@@ -946,7 +960,7 @@ mod tests {
         // A recolour of the pool's look reaches the deadfall in it, and not the other looks'.
         let blue = PoolColors { wood: Color::srgb(0.0, 0.0, 1.0), leaves: Color::srgb(1.0, 1.0, 0.0), unlit: false };
         let id = pool.id();
-        app.world_mut().write_message(RecolorPool { pool: id, look: 1, colors: blue });
+        app.world_mut().write_message(RecolorPool { pool: id, look: 1, colors: blue, glide: 0.0 });
         app.update();
         app.update();
         for e in [dressed, other] {

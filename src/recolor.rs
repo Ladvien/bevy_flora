@@ -65,7 +65,8 @@ pub(crate) struct CutWood {
 pub struct FromPool {
     /// The pool it was a tree of.
     pub pool: AssetId<TreePool>,
-    /// Its look in the pool ([`PooledLook`](crate::PooledLook), 0 without one).
+    /// Its look in the pool ([`PooledLook`](crate::PooledLook) taken modulo the pool's looks, 0
+    /// without one).
     pub look: u32,
 }
 
@@ -75,11 +76,15 @@ pub struct FromPool {
 pub(crate) fn recolor_from_pools(
     mut pools: MessageReader<RecolorPool>,
     mut trees: MessageWriter<RecolorTree>,
+    assets: Option<Res<bevy::asset::Assets<TreePool>>>,
     left: Query<(Entity, &FromPool, Option<&TreeStump>)>,
 ) {
-    for recolor in pools.read() {
+    // A gliding message is `glide::glide_looks`' to apply.
+    for recolor in pools.read().filter(|recolor| recolor.glide <= 0.0) {
+        let looks = assets.as_deref().and_then(|assets| assets.get(recolor.pool)).map_or(u32::MAX, |pool| pool.looks.len().max(1) as u32);
+        let look = recolor.look % looks;
         for (entity, from, stump) in &left {
-            if (from.pool, from.look) != (recolor.pool, recolor.look) || stump.and_then(|s| s.tree).is_some_and(|tree| left.contains(tree)) {
+            if (from.pool, from.look) != (recolor.pool, look) || stump.and_then(|s| s.tree).is_some_and(|tree| left.contains(tree)) {
                 continue;
             }
             trees.write(RecolorTree { tree: entity, colors: recolor.colors });

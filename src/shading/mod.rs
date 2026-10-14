@@ -50,6 +50,7 @@ use crate::impostor::ImpostorSupport;
 use crate::mesh::ATTRIBUTE_LEAF_SWAY;
 use crate::params::{CrownStyle, LeafStyle, RenderStyle, TreeParams};
 use crate::push::{PUSH_SLOT, PUSH_VECTORS, PushSlots};
+use crate::glide::{GLIDE_SLOT, GLIDE_VECTORS};
 use crate::see_through::{SEE_THROUGH_SLOT, SEE_THROUGH_VECTORS, SeeThroughCapsule};
 use crate::units::FloraUnits;
 
@@ -437,9 +438,9 @@ impl FloraUniform {
 }
 
 /// How many `Vec4`s the shared buffer holds before the fire's grid: see [`wind_vectors`], and after
-/// them the see-through fade's (`see_through::SEE_THROUGH_SLOT`) and the pushers'
-/// (`push::PUSH_SLOT`).
-pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + SEE_THROUGH_VECTORS + PUSH_VECTORS;
+/// them the see-through fade's (`see_through::SEE_THROUGH_SLOT`), the pushers'
+/// (`push::PUSH_SLOT`) and the gliding looks' (`glide::GLIDE_SLOT`).
+pub(crate) const WIND_VECTORS: usize = 7 + 2 * TreeShakes::MAX + SEE_THROUGH_VECTORS + PUSH_VECTORS + GLIDE_VECTORS;
 
 /// The shared buffer's slot whose third lane holds [`FloraWetness`] (`sync_wind` writes it).
 pub(crate) const WETNESS_SLOT: usize = 2;
@@ -472,6 +473,10 @@ pub(crate) fn wind_vectors(wind: &FloraWind, season: &FloraSeason, shakes: &Tree
         _ => (Vec4::ZERO, Vec4::ZERO),
     };
     let mut packed = [Vec4::ZERO; WIND_VECTORS];
+    // No look glides: the glide vectors at rest (`glide::glide_looks` writes them).
+    for (slot, vector) in packed[GLIDE_SLOT..].iter_mut().zip(crate::glide::GlideTints::default().0) {
+        *slot = Vec4::from_array(vector);
+    }
     packed[..6].copy_from_slice(&[
         Vec4::new(d.x, d.y, wind.strength.max(0.0), wind.speed.max(0.0)),
         Vec4::new(wind.bend.max(0.0), wind.flutter.max(0.0), wind.gust_strength.clamp(0.0, 1.0), wind.turbulence.max(0.0)),
@@ -662,6 +667,18 @@ pub(crate) fn specialize_flora(
         && let Some(fragment) = descriptor.fragment.as_mut()
     {
         fragment.shader_defs.push("FLORA_TOON".into());
+    }
+    // A gliding look (`RecolorPool::glide`, glide.rs): the main pass multiplies a tagged mesh's
+    // colours by the look's blend, the leaves in the vertex stage, the wood in the fragment stage
+    // (which reads the mesh's tag by its instance).
+    let prepass = descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE"));
+    if !prepass && !key.falling {
+        for def in ["FLORA_GLIDE", "VERTEX_OUTPUT_INSTANCE_INDEX"] {
+            descriptor.vertex.shader_defs.push(def.into());
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push(def.into());
+            }
+        }
     }
     if !key.leaf {
         return Ok(());
@@ -899,6 +916,7 @@ pub(crate) fn sync_wind(
     units: Res<FloraUnits>,
     capsule: Res<SeeThroughCapsule>,
     push: Res<PushSlots>,
+    glides: Res<crate::glide::GlideTints>,
     buffer: Res<FloraWindBuffer>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
@@ -908,8 +926,9 @@ pub(crate) fn sync_wind(
     for (i, vector) in capsule.0.iter().enumerate() {
         packed[SEE_THROUGH_SLOT + i] = vector.to_array();
     }
-    // So are the pushers', by `push::sync_pushers`.
+    // So are the pushers', by `push::sync_pushers`, and the gliding looks', by `glide::glide_looks`.
     packed[PUSH_SLOT..PUSH_SLOT + PUSH_VECTORS].copy_from_slice(&push.0);
+    packed[GLIDE_SLOT..GLIDE_SLOT + GLIDE_VECTORS].copy_from_slice(&glides.0);
     // Look before borrowing mutably: a mutable borrow marks the buffer changed.
     let current = buffers.get(&buffer.0).and_then(|buffer| buffer.cast_slice::<[f32; 4]>());
     if current.and_then(|slice| slice.get(..WIND_VECTORS)) == Some(&packed[..]) {
@@ -1052,6 +1071,8 @@ mod tests {
         assert_eq!(literal("UNITS"), UNITS_SLOT);
         assert_eq!(literal("SEE_THROUGH"), SEE_THROUGH_SLOT);
         assert_eq!(literal("PUSH"), PUSH_SLOT);
+        assert_eq!(literal("GLIDE"), crate::glide::GLIDE_SLOT);
+        assert_eq!(literal("MAX_GLIDE_LOOKS"), crate::glide::MAX_GLIDE_LOOKS);
         assert_eq!(literal("FIRE"), crate::fire::FIRE_SLOT);
     }
 
@@ -1336,7 +1357,7 @@ mod tests {
         // Nothing shaking: the header says so, and every slot is empty.
         let none = pack(&TreeShakes::default());
         assert_eq!(none[6].x, -1.0);
-        assert!(none[7..].iter().all(|v| *v == Vec4::ZERO));
+        assert!(none[7..7 + 2 * TreeShakes::MAX].iter().all(|v| *v == Vec4::ZERO));
 
         let mut shakes = TreeShakes::default();
         let hit = TreeShake { at: Vec2::new(3.0, -4.0), radius: 0.0, strength: 2.0, direction: Vec2::new(0.0, 5.0), duration: 3.0, start: -1.0 };
