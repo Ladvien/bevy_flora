@@ -13,7 +13,7 @@
 //!     [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]]
 //!     [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>]
 //!     [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>]
-//!     [--push <x,z>] [--looks [--recolor]] [--ages <n>]
+//!     [--push <x,z>] [--looks [--recolor [--glide <s>]]] [--ages <n>]
 //! ```
 //!
 //! Trees stand on a square grid with a deterministic jitter and a random yaw, or, with
@@ -64,13 +64,15 @@
 //! the forest from there. `--fire armed` puts the fire there and lights nothing: what a game pays
 //! for having one before anything burns. `--push <x>,<z>` stands a body with a `FoliagePusher`
 //! there (no mesh): every flora shader then carries the push. `--shadow-radius <m>` lets only the
-//! trees within `m` metres of the camera cast shadows (the others get `NotShadowCaster`), as a game
-//! keeps the shadow maps to the trees near the player. `--looks` (pool mode) gives every pool two
+//! trees within `m` metres of the camera cast shadows (`FloraShadows`), as a game keeps the shadow
+//! maps to the trees near the player. `--looks` (pool mode) gives every pool two
 //! looks beyond its own (`TreePool::add_look`: a lit autumn one, and a flat unlit one in two other
 //! colours) and stands the forest in three bands along x, one in each (`PooledLook`): the meshes
 //! are the same, the impostors take the colours as a tint. `--recolor` then, after the warmup,
 //! changes the colours of looks 1 and 2 (`RecolorPool`) and stands another warmup in them, so a
-//! `--screenshot` shows the forest after a recolour. `--ages <n>` (pool mode) builds every
+//! `--screenshot` shows the forest after a recolour; with `--glide <s>` the looks glide to the new
+//! colours over `s` seconds (measured and shot while they glide when `s` is longer than the
+//! warmup). `--ages <n>` (pool mode) builds every
 //! species' pool at n ages (4, 8, ... years, the last mature) and spreads the trees among them, as
 //! a game plants young and old trees: pools whose surfaces are equal share their materials.
 //!
@@ -108,7 +110,7 @@ use std::time::{Duration, Instant};
 
 use bevy::app::AppExit;
 use bevy::camera::RenderTarget;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -116,7 +118,7 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy_flora::{
-    BackgroundPools, BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraWetness, FloraWind,
+    BackgroundPools, BuildInBackground, FloraFire, FloraGround, FloraPlugin, FloraSeason, FloraShadows, FloraWetness, FloraWind,
     FoliagePusher,
     GpuGrowth, Growing,
     GustFront, LodDistances, LodSettings, PoolColors, PooledLook, PooledTree, ProceduralTree, RecolorPool, RenderStyle,
@@ -265,7 +267,7 @@ struct Args {
     /// A stand of the last `--scatter` species: its centre (world x, z) and radius
     /// (`Scatter::points_with`).
     stand: Option<(Vec2, f32)>,
-    /// Only the trees within this many metres of the camera cast shadows (`NotShadowCaster`).
+    /// Only the trees within this many metres of the camera cast shadows (`FloraShadows`).
     shadow_radius: Option<f32>,
     /// A second `Scatter`, of this species this far apart, clear of the trunks.
     undergrowth: Option<(TreePreset, f32)>,
@@ -280,6 +282,8 @@ struct Args {
     looks: bool,
     /// With `--looks`: after the warmup, looks 1 and 2 change colour (`RecolorPool`).
     recolor: bool,
+    /// With `--recolor`: the looks glide to their new colours over this many seconds.
+    glide: f32,
     /// Pool mode: every species' pool built at this many ages, the trees spread among them.
     ages: u32,
 }
@@ -304,7 +308,7 @@ fn usage() -> ! {
          [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>] \
          [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>] [--push <x,z>] \
-         [--looks [--recolor]] [--ages <n>]"
+         [--looks [--recolor [--glide <s>]]] [--ages <n>]"
     );
     std::process::exit(2);
 }
@@ -355,6 +359,7 @@ fn parse_args() -> Args {
         prepass: 0,
         looks: false,
         recolor: false,
+        glide: 0.0,
         ages: 1,
     };
     let mut it = std::env::args().skip(1);
@@ -532,6 +537,7 @@ fn parse_args() -> Args {
             }
             "--looks" => args.looks = true,
             "--recolor" => args.recolor = true,
+            "--glide" => args.glide = value(&mut it),
             "--ages" => args.ages = value(&mut it),
             "--screenshot" => args.screenshot = Some(it.next().unwrap_or_else(|| usage()).into()),
             _ => usage(),
@@ -865,16 +871,15 @@ fn setup(
     };
     bench.placed = trees.len() as u32;
     eprintln!("forest: placed {} trees over {extent:.0} m in {placing:.1} ms", trees.len());
+    // `--shadow-radius`: the trees farther from the camera cast no shadow.
+    if let Some(radius) = bench.args.shadow_radius {
+        commands.insert_resource(FloraShadows { radius });
+    }
     for (transform, species, variant) in trees {
         let base = &bases[species];
-        // `--shadow-radius`: the trees farther from the camera cast no shadow.
-        let quiet = bench.args.shadow_radius.is_some_and(|r| transform.translation.xz().distance(view.translation.xz()) > r);
         if let Some(pool) = pools.get(species).map(|ages| &ages[variant as usize % ages.len()]) {
             let look = PooledLook(look_at(transform.translation.x, bench.extent, bench.args.looks));
-            let mut tree = commands.spawn((PooledTree { pool: pool.clone(), variant }, look, transform, ForestTree));
-            if quiet {
-                tree.insert(NotShadowCaster);
-            }
+            commands.spawn((PooledTree { pool: pool.clone(), variant }, look, transform, ForestTree));
             continue;
         }
         let mut params: TreeParams = base.clone();
@@ -899,9 +904,6 @@ fn setup(
         }
         if bench.args.tree_lod {
             tree.insert(TreeLod(lods[species]));
-        }
-        if quiet {
-            tree.insert(NotShadowCaster);
         }
     }
 }
@@ -1153,7 +1155,7 @@ fn drive(
                 bench.recolored = true;
                 for (id, _) in pools.iter() {
                     for (look, (_, colors)) in LOOKS.iter().enumerate() {
-                        recolor.write(RecolorPool { pool: id, look: look as u32 + 1, colors: *colors });
+                        recolor.write(RecolorPool { pool: id, look: look as u32 + 1, colors: *colors, glide: bench.args.glide });
                     }
                 }
                 eprintln!("forest: recoloured looks 1 and 2");

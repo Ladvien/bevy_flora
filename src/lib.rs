@@ -401,6 +401,7 @@ pub mod falling;
 pub mod felling;
 pub mod fire;
 pub mod foliage;
+mod glide;
 mod gpu;
 pub mod ground;
 pub mod growth;
@@ -420,6 +421,7 @@ pub mod rng;
 pub mod scatter;
 pub mod see_through;
 pub mod shading;
+pub mod shadows;
 pub mod skeleton;
 pub mod shape;
 mod textures;
@@ -459,6 +461,7 @@ pub use presets::TreePreset;
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
 pub use see_through::SeeThroughTrees;
+pub use shadows::FloraShadows;
 pub use push::{FoliagePusher, MAX_PUSHERS};
 pub use shading::{
     FloraExtension, FloraKey, FloraMaterial, FloraMaterialSupport, FloraSeason, FloraUniform, FloraWetness,
@@ -479,7 +482,7 @@ pub mod prelude {
     pub use crate::{
         BackgroundPools, BarkParams, BarkScan, BuckTree, BuildInBackground, DropLeaves, FallingLeaves, FellTree, Felled,
         FloraFire,
-        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraUnits, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
+        FloraGround, FloraIndex, FloraPlugin, FloraSeason, FloraShadows, FloraUnits, FloraWetness, FloraWind, FoliageParams, FoliagePusher,
         Burnt, FallenFruit, FallingFruit, FruitFell, FruitParams, TreeBurnt, TreeFruit,
         GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodScale, LodSettings, PoolColors, PooledLook, PooledTree, ProceduralTree,

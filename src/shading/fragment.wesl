@@ -42,6 +42,12 @@ import bevy_pbr::render::mesh_view_bindings::globals;
 @if(FLORA_FIRE && FLORA_LEAF)
 import package::shading::common::{scorch_leaf, LEAF_FLAME, LEAF_FLAME_NITS};
 
+@if(FLORA_GLIDE && !FLORA_LEAF)
+import bevy_pbr::render::mesh_functions;
+
+@if(FLORA_GLIDE && !FLORA_LEAF)
+import package::shading::common::{gliding, glide_tint};
+
 @fragment
 fn fragment(
     vertex_output: VertexOutput,
@@ -63,6 +69,14 @@ fn fragment(
         pbr_input.material.alpha_cutoff,
         pbr_input.material.base_color
     );
+
+    // A pooled tree's look that glides (`RecolorPool::glide`): its wood takes the look's blend.
+@if(FLORA_GLIDE && !FLORA_LEAF) {
+    if gliding() {
+        let glide = glide_tint(mesh_functions::get_tag(in.instance_index), false);
+        pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * glide, pbr_input.material.base_color.a);
+    }
+}
 
 @if(FLORA_DETAIL && !FLORA_LEAF)
     bark_surface(&pbr_input, in.uv, in.uv_b.x);

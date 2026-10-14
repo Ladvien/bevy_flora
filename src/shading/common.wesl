@@ -242,12 +242,13 @@ fn leaf_has_fallen(sway: vec4<f32>) -> bool {
 // corners of each of its triangles are clipped.
 const FALLEN_LEAF_CLIP: vec4<f32> = vec4<f32>(2.0, 2.0, 0.5, 1.0);
 
-// What a leaf's vertex colour is multiplied by this season: 1 in summer, the autumn colour over
-// the leaf colour (`flora.autumn.rgb`) once it has turned, a short blend while it turns.
-fn leaf_autumn_tint(sway: vec4<f32>) -> vec3<f32> {
+// What a leaf's vertex colour is multiplied by this season: `green` (1, or a gliding look's
+// multiplier) in summer, the autumn colour over the leaf colour (`flora.autumn.rgb`) once it has
+// turned, a short blend while it turns.
+fn leaf_autumn_tint(sway: vec4<f32>, green: vec3<f32>) -> vec3<f32> {
     let moment = leaf_season_moment(sway) * 0.8;
     let turn = smoothstep(moment, moment + 0.2, flora_wind[5].x) * flora.autumn.w;
-    return mix(vec3<f32>(1.0), flora.autumn.rgb, turn);
+    return mix(green, flora.autumn.rgb, turn);
 }
 
 // A flower card's vertex: its colour's alpha is 0, a fruit's 0.25, a leaf's 1
@@ -292,13 +293,39 @@ fn leaf_hidden(sway: vec4<f32>, color: vec4<f32>) -> bool {
 // the blossom colour over the leaf colour (`flora.blossom.rgb`), a fruit's 1 (its colour is in the
 // vertex), a leaf's its autumn tint.
 fn leaf_season_tint(sway: vec4<f32>, color: vec4<f32>) -> vec3<f32> {
+    return leaf_glide_tint(sway, color, vec3<f32>(1.0));
+}
+
+// `leaf_season_tint` while the leaves' look glides by `glide` (`glide_tint`): a leaf not turned
+// and a fruit take it; a turned leaf keeps the species' autumn colour and a flower its blossom
+// colour, as they will once the look's materials hold the new colours.
+fn leaf_glide_tint(sway: vec4<f32>, color: vec4<f32>, glide: vec3<f32>) -> vec3<f32> {
     if is_flower(color) {
         return flora.blossom.rgb;
     }
     if is_fruit(color) {
+        return glide;
+    }
+    return leaf_autumn_tint(sway, glide);
+}
+
+// The gliding looks (`RecolorPool::glide`, glide.rs). Slot `GLIDE`'s x is 1 while a look glides
+// on the GPU; then two vectors per look, what its wood and its leaves are multiplied by (linear
+// rgb, 1 while it does not glide), found by the `MeshTag` of a pooled tree's meshes: tag k
+// (1 to `MAX_GLIDE_LOOKS`) is the pair at `GLIDE + 2k - 1`, tag 0 no look.
+const GLIDE: u32 = 60u;
+const MAX_GLIDE_LOOKS: u32 = 64u;
+
+fn gliding() -> bool {
+    return flora_wind[GLIDE].x > 0.5;
+}
+
+// What the mesh tagged `tag` multiplies its colour by, its leaves' if `leaf`.
+fn glide_tint(tag: u32, leaf: bool) -> vec3<f32> {
+    if tag == 0u || tag > MAX_GLIDE_LOOKS {
         return vec3<f32>(1.0);
     }
-    return leaf_autumn_tint(sway);
+    return flora_wind[GLIDE + 2u * tag - 1u + select(0u, 1u, leaf)].rgb;
 }
 
 // The fire (`FloraFire`, fire.rs), compiled in while one exists (`FLORA_FIRE`). Slot `FIRE` holds
@@ -306,7 +333,7 @@ fn leaf_season_tint(sway: vec4<f32>, color: vec4<f32>) -> vec3<f32> {
 // anything); `FIRE + 1` the world x, z rectangle (min x, min z, max x, max z) outside which every
 // cell is empty. The cells follow two to a vector (char, heat, char, heat), row by row along x,
 // rows along z.
-const FIRE: u32 = 60u;
+const FIRE: u32 = 189u;
 
 // The cell (x, z) of a grid `side` cells wide: (char, heat), nothing off the grid.
 fn fire_cell(x: i32, z: i32, side: i32) -> vec2<f32> {

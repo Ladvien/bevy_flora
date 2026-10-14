@@ -185,6 +185,17 @@ impl Material for ImpostorMaterial {
                 fragment.shader_defs.push(def.into());
             }
         }
+        // A gliding look (`RecolorPool::glide`): the main pass reads the quad's tag by its
+        // instance and multiplies the look's colours by the blend (`glide.rs`).
+        let prepass = descriptor.vertex.shader_defs.contains(&"PREPASS_PIPELINE".into());
+        if !prepass {
+            for def in ["FLORA_GLIDE", "VERTEX_OUTPUT_INSTANCE_INDEX"] {
+                descriptor.vertex.shader_defs.push(def.into());
+                if let Some(fragment) = descriptor.fragment.as_mut() {
+                    fragment.shader_defs.push(def.into());
+                }
+            }
+        }
         Ok(())
     }
 }
