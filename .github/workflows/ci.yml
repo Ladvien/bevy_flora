@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,35 +15,25 @@ env:
 jobs:
   build:
     name: build + test + lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, big]
     steps:
       - uses: actions/checkout@v4
-
-      # Bevy's Linux build needs ALSA / udev / windowing headers for the
-      # examples, even though no test opens a window: every test here is CPU
-      # geometry.
-      - name: Install Bevy build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      - uses: Swatinem/rust-cache@v2
 
       # `build` before `test`, on purpose: `cargo test` compiles the
       # dev-dependency `bevy` with default features, and Cargo unifies features,
       # so a missing entry in the crate's own `bevy` feature list cannot fail
       # there. A plain `cargo build` compiles exactly what a consumer gets.
       - name: Build with only the declared features
-        run: cargo build --release
+        run: cargo build
 
       - name: Build with serde
-        run: cargo build --release --features serde
+        run: cargo build --features serde
 
+      # Every test here is CPU geometry; none opens a window.
       - name: Test
         run: cargo test --all-features
 
@@ -65,23 +59,12 @@ jobs:
   # rebuild and once with `GpuGrowth`, which must come out close.
   gpu-smoke:
     name: GPU growth on software Vulkan
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, big]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Bevy build dependencies and a software Vulkan driver
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
-            mesa-vulkan-drivers libvulkan1 xvfb libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon-x11-0
-
       - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: gpu-smoke
 
       - name: Build the examples
         run: cargo build --release --example gallery --example compare_gallery --example forest
