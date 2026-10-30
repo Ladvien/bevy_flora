@@ -225,7 +225,7 @@ fn oak() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.8, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -316,7 +316,7 @@ fn pine() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
+        wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
 
@@ -409,7 +409,7 @@ fn willow() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 1.6, flutter: 1.6, sway_frequency: 0.7, flutter_frequency: 0.8 },
+        wind: WindResponse { sway: 1.4, flutter: 1.6, sway_frequency: 0.7, flutter_frequency: 0.8 },
     }
 }
 
@@ -502,7 +502,7 @@ fn birch() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 1.1, flutter: 1.3, sway_frequency: 1.1, flutter_frequency: 1.3 },
+        wind: WindResponse { sway: 1.2, flutter: 1.3, sway_frequency: 1.1, flutter_frequency: 1.3 },
     }
 }
 
@@ -593,7 +593,7 @@ fn palm() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 1.4, flutter: 1.2, sway_frequency: 0.6, flutter_frequency: 0.9 },
+        wind: WindResponse { sway: 1.5, flutter: 1.2, sway_frequency: 0.6, flutter_frequency: 0.9 },
     }
 }
 
@@ -684,7 +684,7 @@ fn cypress() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.6, sway_frequency: 1.0, flutter_frequency: 1.2 },
+        wind: WindResponse { sway: 0.6, flutter: 0.6, sway_frequency: 1.0, flutter_frequency: 1.2 },
     }
 }
 
@@ -777,7 +777,7 @@ fn bonsai() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.6, sway_frequency: 1.5, flutter_frequency: 1.2 },
+        wind: WindResponse { sway: 0.2, flutter: 0.6, sway_frequency: 1.5, flutter_frequency: 1.2 },
     }
 }
 
@@ -870,7 +870,7 @@ fn maple() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 1.0, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.9, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -967,7 +967,7 @@ fn spruce() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
+        wind: WindResponse { sway: 0.7, flutter: 0.5, sway_frequency: 0.8, flutter_frequency: 1.4 },
     }
 }
 
@@ -1152,7 +1152,7 @@ fn baobab() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.8, sway_frequency: 0.8, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.3, flutter: 0.8, sway_frequency: 0.8, flutter_frequency: 1.0 },
     }
 }
 
@@ -1243,7 +1243,7 @@ fn dragon_tree() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.7, sway_frequency: 0.9, flutter_frequency: 0.9 },
+        wind: WindResponse { sway: 0.3, flutter: 0.7, sway_frequency: 0.9, flutter_frequency: 0.9 },
     }
 }
 
@@ -1420,7 +1420,7 @@ fn cherry() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 1.0, flutter: 1.1, sway_frequency: 1.0, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.9, flutter: 1.1, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -1505,7 +1505,7 @@ fn apple() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 1.0, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.8, flutter: 1.0, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -1583,7 +1583,7 @@ fn dead_tree() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.0, sway_frequency: 1.2, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.6, flutter: 0.0, sway_frequency: 1.2, flutter_frequency: 1.0 },
     }
 }
 
@@ -1674,7 +1674,7 @@ fn redwood() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: false,
-        wind: WindResponse { sway: 0.9, flutter: 0.6, sway_frequency: 0.6, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 0.5, flutter: 0.6, sway_frequency: 0.6, flutter_frequency: 1.0 },
     }
 }
 
@@ -1762,7 +1762,7 @@ fn shrub() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: true,
-        wind: WindResponse { sway: 1.0, flutter: 1.2, sway_frequency: 1.0, flutter_frequency: 1.0 },
+        wind: WindResponse { sway: 1.2, flutter: 1.2, sway_frequency: 1.0, flutter_frequency: 1.0 },
     }
 }
 
@@ -1933,7 +1933,7 @@ fn fern() -> TreeParams {
         crown: CrownStyle::Leaves,
         trunk_style: TrunkStyle::Round,
         undergrowth: true,
-        wind: WindResponse { sway: 1.0, flutter: 1.3, sway_frequency: 1.2, flutter_frequency: 1.2 },
+        wind: WindResponse { sway: 1.1, flutter: 1.3, sway_frequency: 1.2, flutter_frequency: 1.2 },
     }
 }
 

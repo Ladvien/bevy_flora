@@ -655,9 +655,9 @@ fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32, shake: vec3<f32
     return sway.xyz * (FLUTTER * motion.y * flora.response.y * strength * (w.x + w.y - 1.0));
 }
 
-// `world` bent downwind with the tree. `scale_y`: the tree's scale along y, `shake`:
-// `shake_at(origin, time)`.
-fn wind_bend(world: vec3<f32>, origin: vec3<f32>, scale_y: f32, time: f32, shake: vec3<f32>) -> vec3<f32> {
+// `world` bent downwind with the tree. `local_y`: the vertex's height in the tree's own units,
+// `scale_y`: the tree's scale along y, `shake`: `shake_at(origin, time)`.
+fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, time: f32, shake: vec3<f32>) -> vec3<f32> {
     let wind = flora_wind[0];
     let motion = flora_wind[1];
     let rate = flora_wind[2];
@@ -674,22 +674,11 @@ fn wind_bend(world: vec3<f32>, origin: vec3<f32>, scale_y: f32, time: f32, shake
     let down = wind.xy * (wind.z * gust);
     let across = vec2<f32>(-wind.y, wind.x) * (wind.z * motion.w * (2.0 * g.z - 1.0));
     let push = down + across + front.zw * bump;
-    // The lean's height term: a fixed share of the plant's **own** height, not a trunk-normalised
-    // one. The old term (`h = local_y * flora.tree.x`, then `h * h`) measured every species against
-    // its own trunk, so `h` was 1.0 at *any* plant's top — a 0.5 m shrub and an 8 m pine reached it
-    // alike — and the `scale_y * trunk_height` factor made the lean proportional to the plant's
-    // height in units. That left the species' `sway` as the only thing deciding who moved: the
-    // shrub presets carry 1.2-1.5 against the pines' 0.6-0.9, so a bush leaned 4.8% of its own
-    // height and the pine 2.8% of its far greater one (the owner's "This bush seems to be swaying
-    // with the wind a lot, but the big trees aren't even a little", 1792016453). Setting the lean
-    // from the vertex's own distance from the root (`rel`) makes the share height-independent
-    // instead: every species leans a fixed percentage of its own height, the absolute displacement
-    // grows with the plant, so both read as the same weather, and `sway` goes back to meaning what
-    // it says — a species' character, a modest multiplier, retuned to 0.9-1.6 (`presets.rs`) so a
-    // bush no longer out-leans a pine.
-    let rel = world - origin;
-    let lean = MAIN_BEND * flora.response.x * scale_y * length(rel);
+    let h = max(local_y, 0.0) * flora.tree.x;
+    // How far this vertex moves per unit of lean: the species' sway, more toward the top.
+    let lean = MAIN_BEND * flora.response.x * (scale_y / max(flora.tree.x, 1.0e-4)) * h * h;
     let reach = lean * motion.x;
+    let rel = world - origin;
     // A shake leans the tree whatever `FloraWind::bend` says: a still day has knocks too.
     let moved = rel + vec3<f32>(push.x, 0.0, push.y) * reach + vec3<f32>(shake.x, 0.0, shake.y) * lean;
     // Bend, do not stretch.
