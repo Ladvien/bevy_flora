@@ -116,14 +116,18 @@ a world unit sways like a bigger tree of its kind, not like a rubber one.
   `Scatter` forest (scale 0.85-1.15 by default) leans 0.85-1.15 times the share, a foot world
   (`FloraUnits` 3.28, trees scaled by 3.28) 3.28 times, a centimetre world 100 times (the bend's
   rescale then lays the tree nearly flat). 0.46.0 did not have this (its term used the trunk's
-  height in the mesh's own units). The fix is `lean = MAIN_BEND * sway * |rel|` (and dropping the
-  `scale_y` argument), but the test `the_lean_comes_from_the_vertexs_own_distance_from_the_root`
-  finds the lean line by `contains("scale_y")` and fails without it; the loop may not edit a test,
-  so this waits for the owner (filed as an issue).
+  height in the mesh's own units). Measured (two mature pines, steady wind, side view, crown top
+  shift over height): 0.46.0 3.14% at scale 1 and 3.10% at scale 3; 0.46.1 3.43% and 10.34%.
+  The fix is `lean = MAIN_BEND * sway * |rel|` (and dropping the `scale_y` argument), but the test
+  `the_lean_comes_from_the_vertexs_own_distance_from_the_root` finds the lean line by
+  `contains("scale_y")` and fails without it; the loop may not edit a test, so this waits for the
+  owner (issue #90).
+- Validation target 3 is therefore not met in 0.46.1.
 - The profile below the top changed from quadratic in the trunk-normalised height to linear in the
   distance from the root (Crysis' bend factor is linear at the root too, `2h + ...`). Approved with
   D-071.
-- README's "a bonsai hardly at all" no longer holds (the bonsai's sway is 0.9 since D-072).
+- README's "a bonsai hardly at all" no longer held (the bonsai's sway is 0.9 since D-072); the
+  wind section now says "a willow or a palm moves more than an oak or a pine".
 
 ## Pending index
 
