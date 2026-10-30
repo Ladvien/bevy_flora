@@ -655,9 +655,9 @@ fn flutter_offset(sway: vec4<f32>, origin: vec3<f32>, time: f32, shake: vec3<f32
     return sway.xyz * (FLUTTER * motion.y * flora.response.y * strength * (w.x + w.y - 1.0));
 }
 
-// `world` bent downwind with the tree. `local_y`: the vertex's height in the tree's own units,
-// `scale_y`: the tree's scale along y, `shake`: `shake_at(origin, time)`.
-fn wind_bend(world: vec3<f32>, local_y: f32, origin: vec3<f32>, scale_y: f32, time: f32, shake: vec3<f32>) -> vec3<f32> {
+// `world` bent downwind with the tree. `scale_y`: the tree's scale along y, `shake`:
+// `shake_at(origin, time)`.
+fn wind_bend(world: vec3<f32>, origin: vec3<f32>, scale_y: f32, time: f32, shake: vec3<f32>) -> vec3<f32> {
     let wind = flora_wind[0];
     let motion = flora_wind[1];
     let rate = flora_wind[2];
