@@ -272,12 +272,14 @@ pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32
 /// Fewest sides of a non-adaptive branch tube; 4 read as flat square planks.
 const MIN_BRANCH_SEGMENTS: u32 = 6;
 
-/// Radial segment count for a branch node.
+/// Radial segment count for a branch node. With `adaptive_resolution` the count follows the
+/// radius, raised to `min_radial_segments` and then capped at `max_radial_segments`: the cap is
+/// applied last, so when a caller's bounds cross, the upper bound wins (`Ord::clamp` would panic).
 fn radial_segments_for(node: &Node, params: &TreeParams) -> u32 {
     let m = &params.mesh;
     if m.adaptive_resolution {
         let segments = (node.base_radius * m.resolution_scale).round() as u32;
-        segments.clamp(m.min_radial_segments, m.max_radial_segments)
+        segments.max(m.min_radial_segments).min(m.max_radial_segments)
     } else if node.depth > 0 {
         MIN_BRANCH_SEGMENTS
     } else {
@@ -1191,6 +1193,27 @@ mod tests {
             params.mesh.pipe_radius_enabled = true;
             let out = crate::pipeline::build_tree(&params, age);
             crate::mesh::rings::tests::assert_faces_outward(&out.trunk, preset.name());
+        }
+    }
+
+    #[test]
+    fn crossed_side_bounds_build_the_ceilings_tree() {
+        // Issue #91: a floor above the ceiling panicked in `u32::clamp` ("assertion failed:
+        // min <= max") on caller data, from code, a `.tree.ron` (`max_radial_segments: 3` under
+        // the default floor of 4) or an inspector. The ceiling wins: the tree is the one whose
+        // floor equals its ceiling, closed and facing outward.
+        for (min, max) in [(20, 16), (4, 3), (u32::MAX, 0)] {
+            let mut params = TreePreset::Oak.params();
+            params.mesh.adaptive_resolution = true;
+            params.mesh.min_radial_segments = min;
+            params.mesh.max_radial_segments = max;
+            let crossed = crate::pipeline::build_tree(&params, f32::INFINITY);
+            let name = format!("min {min}, max {max}");
+            assert_indices_valid(&crossed.trunk, &name);
+            assert_faces_outward(&crossed.trunk, &name);
+            params.mesh.min_radial_segments = max;
+            let ceiling = crate::pipeline::build_tree(&params, f32::INFINITY);
+            assert_eq!(crossed.trunk.positions, ceiling.trunk.positions, "{name}");
         }
     }
 }
