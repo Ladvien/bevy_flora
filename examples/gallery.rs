@@ -224,6 +224,12 @@ fn scenarios() -> Vec<Scenario> {
             p.mesh.smooth_iterations = 3;
             p.mesh.adaptive_resolution = true;
         }),
+        // A floor above the ceiling (issue #91): the ceiling wins, three sides everywhere.
+        ("extreme_crossed_sides", |p| {
+            p.mesh.adaptive_resolution = true;
+            p.mesh.min_radial_segments = 16;
+            p.mesh.max_radial_segments = 3;
+        }),
         ("extreme_lowpoly", |p| {
             p.trunk.radial_segments = 3;
             p.trunk.height_segments = 1;
