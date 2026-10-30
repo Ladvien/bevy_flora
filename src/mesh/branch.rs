@@ -1193,4 +1193,25 @@ mod tests {
             crate::mesh::rings::tests::assert_faces_outward(&out.trunk, preset.name());
         }
     }
+
+    #[test]
+    fn crossed_side_bounds_build_the_ceilings_tree() {
+        // Issue #91: a floor above the ceiling panicked in `u32::clamp` ("assertion failed:
+        // min <= max") on caller data, from code, a `.tree.ron` (`max_radial_segments: 3` under
+        // the default floor of 4) or an inspector. The ceiling wins: the tree is the one whose
+        // floor equals its ceiling, closed and facing outward.
+        for (min, max) in [(20, 16), (4, 3), (u32::MAX, 0)] {
+            let mut params = TreePreset::Oak.params();
+            params.mesh.adaptive_resolution = true;
+            params.mesh.min_radial_segments = min;
+            params.mesh.max_radial_segments = max;
+            let crossed = crate::pipeline::build_tree(&params, f32::INFINITY);
+            let name = format!("min {min}, max {max}");
+            assert_indices_valid(&crossed.trunk, &name);
+            assert_faces_outward(&crossed.trunk, &name);
+            params.mesh.min_radial_segments = max;
+            let ceiling = crate::pipeline::build_tree(&params, f32::INFINITY);
+            assert_eq!(crossed.trunk.positions, ceiling.trunk.positions, "{name}");
+        }
+    }
 }
