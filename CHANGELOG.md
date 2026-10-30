@@ -5,6 +5,20 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [Unreleased]
+
+### Fixed
+
+- `build_tree` panicked (`assertion failed: min <= max` in `u32::clamp`) when
+  `MeshParams::min_radial_segments` was above `max_radial_segments` with `adaptive_resolution` on,
+  from code, a `.tree.ron` (`max_radial_segments: 3` under the default floor of 4, saved while
+  `file_watcher` regrows the tree) or a reflection inspector (issue #91). The upper bound now wins
+  when they cross: every branch gets `max_radial_segments` sides, never fewer than 3. Bounds in
+  order build the same trees as before. New gallery scenario `extreme_crossed_sides` (492
+  scenarios).
+- `forest --offscreen` never got past its first frames on Linux: `WinitSettings::continuous`
+  waits for a window's redraw there, and offscreen there is no window. Offscreen it now polls.
+
 ## [0.46.0] - 2026-10-13
 
 The fire's hottest spots and a save of only what burnt (issue #77): a game bucketed the burning
