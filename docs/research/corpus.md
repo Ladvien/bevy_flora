@@ -24,6 +24,14 @@ what it rests on; this file only says what exists. Newest additions last in each
 - `10.1145_3502220`: "Procedural urban forestry".
 - `10.1111_cgf.13106`: "Interactive modeling and authoring of climbing plants" (2017; wind
   bending and breaking of branches).
+- `10.48550_arxiv.2204.03237`: Yang, Wang and Huo 2022, "Rule-based Procedural Tree Modeling
+  Approach" (survey of rule-based tree models; branch surfaces as generalized cylinders swept along
+  the skeleton).
+- `sig2024_Interactive_Invigoration_Volumetric_Modeling_of_Trees_with_Strands`: "Interactive
+  Invigoration: Volumetric Modeling of Trees with Strands" (SIGGRAPH 2024; strand-based branch
+  meshes against generalized cylinders, mesh generation times).
+- `10.48550_arxiv.2306.09310`: Raistrick et al. 2023, "Infinite Photorealistic Worlds using
+  Procedural Generation" (Infinigen: procedural trees and plants in a whole-scene generator).
 
 ## Plant growth and branching
 
@@ -82,3 +90,6 @@ what it rests on; this file only says what exists. Newest additions last in each
 - `book_level_of_detail_3d_graphics_luebke`: Luebke et al., "Level of Detail for 3D Graphics".
 - `s2008-advances-full-course-notes-5`: SIGGRAPH 2008 "Advances in Real-Time Rendering" course notes
   (CryEngine terrain and vegetation).
+- Web, not indexed: SpeedTree Modeler manual (Unity), "Branch generator properties", Segments:
+  Radial (Absolute, + Relative from the branch radius) and Dynamic LOD,
+  <https://docs.unity3d.com/speedtree-modeler/manual/branch-generator-properties.html>.

@@ -277,9 +277,12 @@ pub struct MeshParams {
     pub adaptive_resolution: bool,
     /// Segments per unit radius when `adaptive_resolution` is on.
     pub resolution_scale: f32,
-    /// Lower bound on radial segments when `adaptive_resolution` is on.
+    /// Lower bound on radial segments when `adaptive_resolution` is on. Above
+    /// `max_radial_segments` it gives way: the upper bound wins.
     pub min_radial_segments: u32,
-    /// Upper bound on radial segments when `adaptive_resolution` is on.
+    /// Upper bound on radial segments when `adaptive_resolution` is on. It always holds, even
+    /// below `min_radial_segments`, so it caps the wood's vertex cost; a tube never has fewer than
+    /// 3 sides.
     pub max_radial_segments: u32,
     /// Recompute parent radii from children (Da Vinci's pipe model).
     pub pipe_radius_enabled: bool,

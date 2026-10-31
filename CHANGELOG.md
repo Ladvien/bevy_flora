@@ -43,6 +43,13 @@ be swaying with the wind a lot, but the big trees aren't even a little. This sho
   run has no window, so 10 000 pooled trees sat in loading for 30 minutes. Offscreen, the benchmark
   now runs a reactive update mode with no wait, which polls. `inspect`, which never opens a window,
   still hangs on Linux the same way.
+- `build_tree` panicked (`assertion failed: min <= max` in `u32::clamp`) when
+  `MeshParams::min_radial_segments` was above `max_radial_segments` with `adaptive_resolution` on,
+  from code, a `.tree.ron` (`max_radial_segments: 3` under the default floor of 4, saved while
+  `file_watcher` regrows the tree) or a reflection inspector (issue #91). The upper bound now wins
+  when they cross: every branch gets `max_radial_segments` sides, never fewer than 3. Bounds in
+  order build the same trees as before. New gallery scenario `extreme_crossed_sides` (492
+  scenarios).
 
 ### Known issues
 
