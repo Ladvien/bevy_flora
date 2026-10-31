@@ -225,7 +225,9 @@ fn cells_in(map: &HashMap<IVec2, Vec<Entity>>, extent: Option<(IVec2, IVec2)>, l
     } else {
         let mut inside: Vec<IVec2> = map.keys().copied().filter(|c| c.cmpge(low).all() && c.cmple(high).all()).collect();
         inside.sort_unstable_by_key(|c| (c.y, c.x));
-        (1..=0, 1..=0, inside)
+        // No rows: only the listed cells. (`RangeInclusive::new`, not the literal `1..=0`, which clippy reads as a mistake.)
+        let none = std::ops::RangeInclusive::new(1, 0);
+        (none.clone(), none, inside)
     };
     rows.flat_map(move |y| columns.clone().map(move |x| IVec2::new(x, y))).chain(listed)
 }
