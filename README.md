@@ -22,13 +22,13 @@
 
 | `bevy_flora` | `bevy` | Rust |
 |---|---|---|
-| 0.46 | 0.20 | 1.97.1+ (edition 2024) |
+| 0.47 | 0.20 | 1.97.1+ (edition 2024) |
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_flora = "0.46"
+bevy_flora = "0.47"
 ```
 
 | feature | default | what it does |
