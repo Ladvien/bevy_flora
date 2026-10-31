@@ -18,7 +18,7 @@ be swaying with the wind a lot, but the big trees aren't even a little. This sho
   plant's height in units. What decided who moved was the species' `sway` (the shrub presets carried
   1.2-1.5, the pines' 0.6-0.9), so a bush leaned 4.8% of its own height and the pine 2.8% of its far
   greater one. The lean now measures the vertex's own distance from the root
-  (`MAIN_BEND * response.x * scale_y * length(rel)`): every species leans a fixed share of its own
+  (`MAIN_BEND * response.x * length(rel)`): every species leans a fixed share of its own
   height, `MAIN_BEND` is unchanged (the top-of-plant lean is reproduced exactly), and the profile down
   the trunk is linear in that distance rather than a square of the trunk-normalised height.
 - The presets' `wind.sway` is retuned from a 0.2-1.5 spread to a 0.9-1.6 multiplier band (bonsai
@@ -31,6 +31,8 @@ be swaying with the wind a lot, but the big trees aren't even a little. This sho
 
 - `the_lean_comes_from_the_vertexs_own_distance_from_the_root`: the shader's lean must come from
   `length(rel)` and must not be trunk-normalised (holds 1792016453 fixed).
+- `wind_bend_takes_no_scale_and_the_lean_has_no_scale_factor`: `wind_bend` takes no scale and none
+  of its six callers hands it one (issue #90).
 - `a_shrub_and_a_pine_sway_by_near_the_same_share_of_their_own_height`: mirrors the formula over the
   shipped presets; a pine and a shrub within 0.02 of each other's share, the pine's absolute lean
   still greater, and the species' sway spread at most 2:1.
@@ -59,20 +61,20 @@ be swaying with the wind a lot, but the big trees aren't even a little. This sho
 - The forest benchmark's `cpu ... ms/frame` had a resolution of 1 s on Linux (`ps -o cputime` prints
   whole seconds there), up to 1.7 ms/frame of rounding over 600 frames (issue #93). It reads
   `utime + stime` from `/proc/self/stat` there (10 ms); macOS keeps `ps`.
+- A tree drawn at a `Transform` scale other than 1 leaned that many times too far (D-073, issue
+  #90): `rel = world - origin` is a distance between two world-space positions and already carries
+  the tree's scale, and the first 0.46.1 lean multiplied `scale_y` in a second time, so a tree at
+  scale `s` leaned `s` times the share of its own height it leans at scale 1. Measured with two
+  mature pines under a steady wind (crown top's shift over the tree's height): 3.43% at scale 1 and
+  10.34% at scale 3 with the double count, 3.14% and 3.10% before 0.46.1. It showed in a `Scatter`
+  forest (scale 0.85-1.15 by default) as a spread of leans, and in a world in feet or centimetres,
+  whose trees are scaled by 3.28 or 100, as trees bent too far, lain nearly flat by the bend's
+  rescale. `wind_bend` no longer takes `scale_y`; at scale 1 nothing moves.
 
 ### Docs
 
 - `AGENTS.md`'s release checklist re-records all eleven README clips, not five, with the capture and
   `ffmpeg` lines for `fire`, `push`, `chop`, `harvest`, `playground` and `isometric` (issue #94).
-
-### Known issues
-
-- The lean counts a tree's `Transform` scale twice (D-073, issue #90): `rel` is in world units and
-  the lean multiplies it by `scale_y` again, so a tree drawn at scale `s` leans `s` times the share
-  of its own height it leans at scale 1. Measured with two mature pines under a steady wind: 3.43% of
-  their height at scale 1, 10.34% at scale 3 (0.46.0: 3.14% and 3.10%). It shows in a `Scatter`
-  forest (scale 0.85-1.15 by default) as a spread of leans, and in a world in feet or centimetres,
-  whose trees are scaled by 3.28 or 100, as trees bent too far. The fix waits for a test change.
 
 ## [0.46.0] - 2026-10-13
 
