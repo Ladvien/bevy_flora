@@ -474,7 +474,7 @@ pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
 pub use mesh::MeshData;
 pub use params::{
     BarkParams, BarkScan, BranchParams, CrownStyle, FoliageParams, FoliagePlacement, FruitParams, LeafOrientation,
-    LeafScan, LeafShading, LeafStyle, MeshParams, RenderStyle, SplitParams, TreeParams, TrunkParams,
+    LeafScan, LeafShading, LeafStyle, MeshParams, RenderStyle, SplitParams, StrandParams, TreeParams, TrunkParams,
     TrunkStyle, TrunkTermination,
     WindResponse,
 };

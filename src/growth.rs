@@ -59,7 +59,7 @@ pub fn assign_birth_times(skeleton: &mut Skeleton, growth: &GrowthParams) {
                 (parent.duration * skeleton.nodes[i].attach_t, branch_duration)
             }
             NodeKind::Split => (parent.birth + parent.duration, branch_duration),
-            NodeKind::Sub => (
+            NodeKind::Sub | NodeKind::Strand => (
                 parent.birth + parent.duration * skeleton.nodes[i].attach_t,
                 parent.duration * growth.child_duration_scale,
             ),
@@ -272,5 +272,27 @@ mod tests {
                 assert!(off_axis < 1e-4, "age {age}: primary {} anchor {off_axis} m off the trunk axis", n.id);
             }
         }
+    }
+
+    #[test]
+    fn a_strand_is_born_when_its_branch_reaches_the_point_it_hangs_from() {
+        let params = TreePreset::Willow.params();
+        let full = generate_skeleton(&params);
+        let strands = |s: &Skeleton| s.nodes.iter().filter(|n| n.kind == NodeKind::Strand).count();
+        let mut last = 0;
+        for age in [1.0, 2.0, 3.0, 4.0, 6.0, f32::INFINITY] {
+            let aged = full.aged(age, &params.growth);
+            for n in aged.nodes.iter().filter(|n| n.kind == NodeKind::Strand) {
+                let parent = &aged.nodes[n.parent.unwrap() as usize];
+                assert!(parent.progress + 1e-4 >= n.attach_t, "age {age}: a strand hangs from {} of a branch grown to {}", n.attach_t, parent.progress);
+                let along = if parent.progress > 0.0 { n.attach_t / parent.progress } else { 0.0 };
+                assert!(n.start.distance(parent.point_at(along)) < 1e-3, "age {age}: a strand starts off its branch");
+            }
+            let now = strands(&aged);
+            assert!(now >= last, "age {age}: strands dropped from {last} to {now}");
+            last = now;
+        }
+        assert_eq!(last, strands(&full));
+        assert!(strands(&full.aged(2.0, &params.growth)) < last, "every strand is there at age 2");
     }
 }

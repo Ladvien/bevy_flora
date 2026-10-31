@@ -108,9 +108,12 @@ pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32, tile: Vec2) 
 }
 
 /// Rings (axis points) of `node`'s tube: two for straight untwisted wood,
-/// the node's [`Node::axis_points`] when it bends or twists. Independent of age.
+/// the node's [`Node::axis_points`] when it bends or twists. A pendant strand is a
+/// straight rope a few millimetres thick, so the twist of its branch's wood is not drawn
+/// on it. Independent of age.
 pub(crate) fn tube_rings(node: &Node, twist_deg: f32) -> u32 {
-    if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 }
+    let twisted = twist_deg.abs() > 0.1 && node.kind != NodeKind::Strand;
+    if twisted || node.bend > 0.0 { node.axis_points() } else { 2 }
 }
 
 /// [`tube_mesh`], appended to `mesh`. A tube with more than `max_rings` rings
@@ -233,7 +236,9 @@ pub fn calculate_pipe_radius(child_radii: &[f32], exponent: f32, min_radius: f32
 /// Recompute every non-trunk node's radii bottom-up from its children. The
 /// `min_radius` floor scales with each node's `radius_progress`, so a branch
 /// that has only just been born stays thin instead of becoming a wide,
-/// paper-thin disc.
+/// paper-thin disc. A pendant strand is a rope, not a twig of the pipe: it keeps its own
+/// radius (the floor would make each one a rod as thick as the thinnest branch), and the branch
+/// it hangs from carries the sum of their areas.
 pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32) {
     let n = skeleton.nodes.len();
     if n < 2 {
@@ -259,7 +264,7 @@ pub fn apply_pipe_radius(skeleton: &mut Skeleton, exponent: f32, min_radius: f32
             has_child[p as usize] = true;
         }
     }
-    for node in skeleton.nodes.iter_mut().skip(1) {
+    for node in skeleton.nodes.iter_mut().skip(1).filter(|n| n.kind != NodeKind::Strand) {
         if node.tip_radius > node.base_radius {
             node.tip_radius = node.base_radius * 0.8;
         }
