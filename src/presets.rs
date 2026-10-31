@@ -342,11 +342,11 @@ fn willow() -> TreeParams {
             twist: 10.0,
         },
         branches: BranchParams {
-            start: 0.5,
+            start: 0.4,
             end: 1.0,
             density: 4.0,
             length: 0.7,
-            angle: 50.0,
+            angle: 46.0,
             radius_ratio: 0.2,
             taper: 0.85,
             phyllotaxis_angle: 137.5,
@@ -359,7 +359,7 @@ fn willow() -> TreeParams {
             sub_branch_position_bias: 0.3,
             apical_dominance: 0.2,
             flatness: 0.2,
-            angle_curve: -0.4,
+            angle_curve: -0.1,
             crown_angle_variation: -0.3,
             twist: 15.0,
             gravity_strength: 2.5,
@@ -370,6 +370,7 @@ fn willow() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.003,
+            strands: StrandParams { density: 1.6, start: 0.1, length: 0.7, spread: 10.0, clearance: 0.2 },
         },
         split: SplitParams {
             enabled: false,
@@ -388,9 +389,9 @@ fn willow() -> TreeParams {
             style: LeafStyle::SingleQuad,
             placement: FoliagePlacement::AllBranches,
             orientation: LeafOrientation::FollowBranch,
-            density: 10.0,
+            density: 6.5,
             cluster_size: 4,
-            leaf_size: 0.26,
+            leaf_size: 0.34,
             leaf_size_variation: 0.25,
             radius_threshold: 0.15,
             height_falloff: 0.4,
@@ -738,6 +739,7 @@ fn bonsai() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.0025,
+            strands: StrandParams::default(),
         },
         split: SplitParams {
             enabled: true,
@@ -1297,6 +1299,7 @@ fn japanese_maple() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.0025,
+            strands: StrandParams::default(),
         },
         split: SplitParams {
             enabled: true,
@@ -1390,6 +1393,7 @@ fn cherry() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.003,
+            strands: StrandParams::default(),
         },
         split: SplitParams { enabled: true, probability: 0.5, angle: 28.0, position: 0.45, radius_threshold: 0.06 },
         mesh: MeshParams { collar_enabled: true, collar_length: 1.4, ..Default::default() },
@@ -1474,6 +1478,7 @@ fn apple() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.003,
+            strands: StrandParams::default(),
         },
         split: SplitParams { enabled: false, probability: 0.0, angle: 30.0, position: 0.45, radius_threshold: 0.06 },
         mesh: MeshParams { collar_enabled: true, collar_length: 1.4, ..Default::default() },
@@ -1733,6 +1738,7 @@ fn shrub() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.003,
+            strands: StrandParams::default(),
         },
         split: SplitParams::default(),
         mesh: MeshParams::default(),
@@ -1820,6 +1826,7 @@ fn juniper() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.003,
+            strands: StrandParams::default(),
         },
         split: SplitParams::default(),
         mesh: MeshParams::default(),
@@ -1905,6 +1912,7 @@ fn fern() -> TreeParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.002,
+            strands: StrandParams::default(),
         },
         split: SplitParams::default(),
         mesh: MeshParams::default(),
@@ -2010,6 +2018,32 @@ mod tests {
         );
         let hanging = leaves.iter().filter(|l| l.direction.y < -0.5).count();
         assert!(hanging * 10 >= leaves.len() * 6, "{hanging} of {} leaves hang", leaves.len());
+    }
+
+    #[test]
+    fn willow_curtains_hang_to_the_ground() {
+        // D-052: the crown was a low mound on a bare post. Its strands now hang down to a hand's
+        // breadth above the grass: the lowest leaf vertex is under 30% of the tree's height, and the
+        // crown still reaches 90% as far out in its bottom third as in its middle (strands hang
+        // plumb, so a curtain is as wide at the ground as at its widest; a mound narrows to it).
+        let params = TreePreset::Willow.params();
+        for seed in [42, 1, 2] {
+            let params = TreeParams { seed, ..params.clone() };
+            let tree = crate::pipeline::build_tree(&params, f32::INFINITY);
+            let height = params.trunk.height;
+            let leaves = &tree.foliage.positions;
+            let lowest = leaves.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+            assert!(lowest < 0.3 * height, "seed {seed}: the lowest leaf is at {lowest} m of {height} m");
+            let reach = |lo: f32, hi: f32| {
+                leaves
+                    .iter()
+                    .filter(|p| (lo * height..hi * height).contains(&p.y))
+                    .map(|p| p.x.hypot(p.z))
+                    .fold(0.0, f32::max)
+            };
+            let (bottom, middle) = (reach(0.0, 1.0 / 3.0), reach(1.0 / 3.0, 2.0 / 3.0));
+            assert!(bottom >= 0.9 * middle, "seed {seed}: the crown reaches {bottom} m in its bottom third and {middle} m in its middle");
+        }
     }
 
     #[test]
