@@ -487,7 +487,7 @@ pub use pool::{
     build_pool, build_pool_with_deadfall,
 };
 pub use recolor::{FromPool, RecolorTree};
-pub use presets::TreePreset;
+pub use presets::{TreePreset, UnknownPreset};
 pub use rng::SeededRng;
 pub use scatter::{Scatter, ScatterPoint, poisson_disc};
 pub use see_through::SeeThroughTrees;

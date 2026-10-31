@@ -33,8 +33,9 @@ A change of `TreeCondition` can be drawn as a decline over seconds (`docs/resear
   (`docs/research/preset-names.md`). `TreePreset::from_name("dragon_tree")` and `"dragon_tree".parse::<TreePreset>()`
   are the inverse of `TreePreset::name` (exact, snake_case: `"Oak"`, `"oak "` and the `serde` spelling
   `"DragonTree"` are not presets) and `Display` prints it, so the two round-trip. `parse`'s error,
-  `UnknownPreset`, is a `std::error::Error` whose message names what was asked for and lists every preset, a
-  sentence a command line or an editor can show as it is. bevy_emerge's tree editor wrote
+  `UnknownPreset` (exported from the crate root; `input()` is the string asked for), is a `std::error::Error`
+  whose message names what was asked for and lists every preset, a sentence a command line or an editor can
+  show as it is. bevy_emerge's tree editor wrote
   `TreePreset::ALL.iter().find(|t| t.name() == name)` twice and this crate's examples six times; a downstream
   crate cannot add `FromStr` to a type it does not own.
 - **`TreeParams::mature_at()`: the age at which a tree is fully grown**, in the tree's own growth units (an oak

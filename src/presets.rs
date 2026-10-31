@@ -171,7 +171,7 @@ impl std::str::FromStr for TreePreset {
     /// The preset [`TreePreset::from_name`] finds, or [`UnknownPreset`] naming what was asked and
     /// what the presets are.
     fn from_str(name: &str) -> Result<Self, UnknownPreset> {
-        TreePreset::from_name(name).ok_or_else(|| UnknownPreset(name.to_owned()))
+        TreePreset::from_name(name).ok_or_else(|| UnknownPreset { input: name.to_owned() })
     }
 }
 
@@ -181,14 +181,20 @@ impl std::str::FromStr for TreePreset {
 /// Its `Display` is a sentence an editor can show as it is: the name that was asked for and every
 /// preset the crate has, in [`TreePreset::ALL`] order.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnknownPreset(
+pub struct UnknownPreset {
+    input: String,
+}
+
+impl UnknownPreset {
     /// The string that was asked for.
-    pub String,
-);
+    pub fn input(&self) -> &str {
+        &self.input
+    }
+}
 
 impl std::fmt::Display for UnknownPreset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "`{}` is not a preset; the presets are ", self.0)?;
+        write!(f, "`{}` is not a preset; the presets are ", self.input)?;
         for (i, preset) in TreePreset::ALL.iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
@@ -2278,7 +2284,7 @@ mod tests {
         // The match is exact: a near miss is not a different preset.
         for not_a_name in ["", "o", "oa", "oak ", " oak", "Oak", "OAK", "oak\n", "DragonTree", "dragon-tree", "dragon tree"] {
             assert_eq!(TreePreset::from_name(not_a_name), None, "{not_a_name:?}");
-            assert_eq!(not_a_name.parse::<TreePreset>(), Err(UnknownPreset(not_a_name.to_owned())));
+            assert_eq!(not_a_name.parse::<TreePreset>().unwrap_err().input(), not_a_name);
         }
     }
 
