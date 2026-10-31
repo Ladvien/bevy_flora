@@ -50,6 +50,20 @@ be swaying with the wind a lot, but the big trees aren't even a little. This sho
   when they cross: every branch gets `max_radial_segments` sides, never fewer than 3. Bounds in
   order build the same trees as before. New gallery scenario `extreme_crossed_sides` (492
   scenarios).
+- `FloraIndex::nearest`, `within`, `obstacles_within` and `cast_ray` never returned for an unbounded
+  bound (`f32::INFINITY` or `f32::MAX`): each walked every grid cell the bound covers (2^64 of them),
+  and a ray that missed every trunk walked on forever (issue #92). A query's walk is now cut to the
+  box of cells the index fills and, where that box is mostly empty, only the occupied cells are
+  walked, in the same order as before; a ray stops where its track leaves the box. Queries with a
+  finite bound return the same trees in the same order. An infinite bound means "wherever it is".
+- The forest benchmark's `cpu ... ms/frame` had a resolution of 1 s on Linux (`ps -o cputime` prints
+  whole seconds there), up to 1.7 ms/frame of rounding over 600 frames (issue #93). It reads
+  `utime + stime` from `/proc/self/stat` there (10 ms); macOS keeps `ps`.
+
+### Docs
+
+- `AGENTS.md`'s release checklist re-records all eleven README clips, not five, with the capture and
+  `ffmpeg` lines for `fire`, `push`, `chop`, `harvest`, `playground` and `isometric` (issue #94).
 
 ### Known issues
 
