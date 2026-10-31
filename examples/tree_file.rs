@@ -55,9 +55,12 @@ fn main() {
             "--screenshot" => screenshot = Some(PathBuf::from(value())),
             "--export" => {
                 let name = value();
-                let Some(preset) = TreePreset::ALL.into_iter().find(|p| p.name().eq_ignore_ascii_case(&name)) else {
-                    eprintln!("unknown preset {name}");
-                    usage();
+                let preset = match name.to_ascii_lowercase().parse::<TreePreset>() {
+                    Ok(preset) => preset,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        usage();
+                    }
                 };
                 print!("{}", preset.params().to_ron());
                 return;

@@ -391,10 +391,7 @@ fn parse_args() -> Args {
             }
             "--preset" => {
                 let name = it.next().unwrap_or_else(|| usage());
-                args.preset = TreePreset::ALL
-                    .into_iter()
-                    .find(|p| p.name() == name)
-                    .unwrap_or_else(|| usage());
+                args.preset = TreePreset::from_name(&name).unwrap_or_else(|| usage());
             }
             "--style" => {
                 args.style = match it.next().as_deref() {
@@ -466,7 +463,7 @@ fn parse_args() -> Args {
                     .split(',')
                     .map(|item| {
                         let (name, weight) = item.split_once(':').unwrap_or((item, "1"));
-                        let preset = TreePreset::ALL.into_iter().find(|p| p.name() == name).unwrap_or_else(|| usage());
+                        let preset = TreePreset::from_name(name).unwrap_or_else(|| usage());
                         (preset, weight.parse::<f32>().unwrap_or_else(|_| usage()))
                     })
                     .collect();
@@ -486,7 +483,7 @@ fn parse_args() -> Args {
             "--undergrowth" => {
                 let item = it.next().unwrap_or_else(|| usage());
                 let (name, spacing) = item.split_once(':').unwrap_or((&item, "2.5"));
-                let preset = TreePreset::ALL.into_iter().find(|p| p.name() == name).unwrap_or_else(|| usage());
+                let preset = TreePreset::from_name(name).unwrap_or_else(|| usage());
                 args.undergrowth = Some((preset, spacing.parse::<f32>().unwrap_or_else(|_| usage())));
             }
             "--terrain" => args.terrain = Some(value(&mut it)),

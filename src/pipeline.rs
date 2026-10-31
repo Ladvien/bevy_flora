@@ -115,6 +115,43 @@ mod tests {
         }
     }
 
+    /// The largest distance between two meshes' vertices in metres, or `None` when they are not
+    /// the same triangles.
+    fn largest_gap(a: &MeshData, b: &MeshData) -> Option<f32> {
+        if a.indices != b.indices || a.positions.len() != b.positions.len() {
+            return None;
+        }
+        Some(a.positions.iter().zip(&b.positions).map(|(p, q)| p.distance(*q)).fold(0.0, f32::max))
+    }
+
+    #[test]
+    fn mature_at_is_the_age_a_tree_stops_changing() {
+        for preset in TreePreset::ALL {
+            for seed in [1, 42, 7777] {
+                let mut params = preset.params();
+                params.seed = seed;
+                let what = format!("{} seed {seed}", preset.name());
+                let mature = params.mature_at();
+                assert!(mature.is_finite() && mature > 0.0, "{what}: {mature}");
+
+                let full = build_tree(&params, f32::INFINITY);
+                assert_eq!(mature, full.mature_at, "{what}: not the number build_tree reports");
+
+                // At that age the tree is the full-grown one, wood and leaves, to float rounding
+                // (a node's last sliver of thickening is `(birth + d) - birth` over `d`).
+                let at = build_tree(&params, mature);
+                for (part, a, b) in [("wood", &at.trunk, &full.trunk), ("leaves", &at.foliage, &full.foliage)] {
+                    let gap = largest_gap(a, b).unwrap_or(f32::INFINITY);
+                    assert!(gap < 1e-6, "{what}: the {part} at its mature age differ from the full-grown by {gap} m");
+                }
+
+                // Well short of it the tree is a different one.
+                let young = build_tree(&params, 0.5 * mature);
+                assert_ne!(young.trunk, full.trunk, "{what}: half its mature age is already full-grown");
+            }
+        }
+    }
+
     #[test]
     fn pipe_radius_path_builds() {
         let mut params = TreePreset::Oak.params();

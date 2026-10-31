@@ -44,6 +44,15 @@ what it rests on; this file only says what exists. Newest additions last in each
 - `10.14214_sf.a8529`: "A functional model of tree growth and tree architecture" (1997; added 2026-10-30).
 - `The Computational Beauty of Nature -- Anna's Archive`: Flake, "The Computational Beauty of Nature"
   (a general text on fractals and growth models; found in `catalog_recent` 2026-10-31, not read).
+- `10.1145_378456.378505`: de Reffye, Edelin, Francon, Jaeger and Puech 1988, "Plant Models Faithful to
+  Botanical Structure and Development" (SIGGRAPH '88; the architectural models of Halle, Oldeman and
+  Tomlinson as a quantitative simulation of meristems: growth, ramification and mortality over a
+  per-plant time unit; was in the catalog, listed 2026-10-31).
+- `10.1145_3306346.3323039`: Makowski et al. 2019, "Synthetic silviculture" (SIGGRAPH 2019;
+  ecosystems of up to 500K plants, a per-type maturity age; was in the catalog, listed 2026-10-31).
+- Web, not indexed: Epic Games, "Procedural Vegetation Editor in Unreal Engine" (UE 5.8, the Grower's
+  Cycles ("not equivalent to years") and Save Grower Preset),
+  <https://dev.epicgames.com/documentation/unreal-engine/procedural-vegetation-editor-in-unreal-engine>.
 
 ## Phenology (leaf colour, leaf fall, blossom)
 
