@@ -210,8 +210,9 @@ fn write_tints(tints: &GlideTints, buffer: Option<&FloraWindBuffer>, buffers: Op
 /// while one does (its first is 1 while a look glides). The vertex stages read a mesh's tag only
 /// while one of the two is set, so a forest of healthy trees that glides nowhere reads none: the
 /// tag is per instance, the header one address for every vertex.
+#[allow(clippy::type_complexity)]
 pub(crate) fn sync_condition_flag(
-    trees: Query<(), With<TreeCondition>>,
+    trees: Query<(), Or<(With<TreeCondition>, With<crate::condition::ConditionShown>)>>,
     mut tints: ResMut<GlideTints>,
     buffer: Option<Res<FloraWindBuffer>>,
     mut buffers: Option<ResMut<Assets<ShaderBuffer>>>,
