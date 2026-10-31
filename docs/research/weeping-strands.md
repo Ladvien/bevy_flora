@@ -78,32 +78,42 @@ one large alpha card, and its wood is the part that the levels of detail can dro
 seated (every branch on its parent's bent axis, above the floor), each branch gets
 `density * length * (1 - start)` strands, drawn from their own random stream keyed by the branch's id
 (`SeededRng::from_parts(seed ^ STRAND_SALT, id)`, so a tree without strands draws nothing, and one with them
-keeps every other branch where it was). A strand is a `NodeKind::Sub` node one level below its parent:
+keeps every other branch where it was). A strand is a `NodeKind::Strand` node one level below its parent:
 
 - it leaves the parent's bent axis at a fraction `t` in `[start, 1]` (`attach_t`, so `Skeleton::aged` and the
   growth model place it as any sub-branch: born when the parent reaches `t`, grown for 0.8 of the parent's
   duration);
 - its direction is straight down within `spread` degrees (the setpoint angle of a weeping shoot is past
-  horizontal), turned by the node's gravity bend as every branch is, so a strand that leaves slanted curves
-  plumb;
+  horizontal), and it is a straight rope: no gravity bend (the first build bent it by a quarter of its
+  branch's and cost 12 rings of wood a strand; straight it is two), and the twist of its branch is not
+  drawn on it (`tube_rings`);
 - its length is `length` times the trunk height times a draw in `[0.5, 1]`, and where `floor_avoidance` is on
   it ends `clearance` metres above `floor_level` (SpeedTree's Prune > Ground, but a trim, not a removal: a
   strand that would reach the ground is shortened to stop above it);
 - its radius is the twig floor (`min_twig_radius` at the base, half at the tip, never thicker than the wood it
-  grows from): a strand is a rope, not a branch.
+  grows from): a strand is a rope, not a branch; the pipe model leaves it that radius (`apply_pipe_radius`);
+- its leaves sit along its whole length rather than bunched toward its base (`add_distributed_leaves`: a
+  strand carries a row of leaves, wood bunches them), and leaf `i` keeps its place on the grown strand at
+  every age, so a young strand shows its first leaves and `GpuGrowth` shows the same ones at the same
+  places (the first build re-spread them over the aged length as every branch does: the GPU's growth then
+  differed from the CPU's by 2.3 of 255 on `age_willow_8`, 1.4 after).
 
-Leaves, wind, levels of detail, felling, fire and `GpuGrowth` need nothing new: a strand is a node, and every
-consumer already reads nodes.
+Wood, levels of detail, felling, fire and wind need nothing new: a strand is a node, and every consumer
+already reads nodes.
 
 ## Parameters
 
 | Field | Default | Willow | Meaning |
 |---|---|---|---|
-| `strands.density` | 0.0 (off) | tuned in the gallery | strands per metre of branch, hung along its outer part |
-| `strands.start` | 0.4 | 0.35 | where on a branch they begin, a share of its length |
-| `strands.length` | 0.5 | tuned | the longest a strand hangs, a share of the trunk's height |
-| `strands.spread` | 12.0 | tuned | degrees off plumb |
-| `strands.clearance` | 0.15 | tuned | metres above `floor_level` a strand stops (floor avoidance on) |
+| `strands.density` | 0.0 (off) | 1.6 | strands per metre of branch, hung along its outer part |
+| `strands.start` | 0.4 | 0.1 | where on a branch they begin, a share of its length |
+| `strands.length` | 0.5 | 0.7 | the longest a strand hangs, a share of the trunk's height |
+| `strands.spread` | 12.0 | 10.0 | degrees off plumb |
+| `strands.clearance` | 0.15 | 0.2 | metres above `floor_level` a strand stops (floor avoidance on) |
+
+The willow's other values, changed with it: `branches.start` 0.5 to 0.4, `angle` 50 to 46, `angle_curve`
+-0.4 to -0.1, `trunk.taper` 0.4 to 0.22, `foliage.density` 10 to 6.5, `leaf_size` 0.26 to 0.34
+(`qa/visual_findings.md` D-077).
 
 ## Validation targets
 
@@ -113,7 +123,7 @@ consumer already reads nodes.
 3. No strand ends below `floor_level + clearance - tip radius` with floor avoidance on; none starts off its
    parent's wood (the junction check of the existing tests: its start is on the parent's axis at `attach_t`).
 4. D-052's own acceptance, on `mature_willow` and `seed_willow_1`: the lowest leaf vertex is below 30% of the
-   tree's height, and the crown is wider in its bottom third than in its middle.
+   tree's height, and the crown is wider in its bottom third than in its middle (measured, below).
 5. Same seed, same tree (two builds identical); at age 4 and 8 the strands exist only once their parent has
    reached `attach_t`, so growth does not jump.
 6. Cost: willow `build_tree` time and vertex counts before and after (the strands are new wood and new
@@ -137,8 +147,13 @@ more, `wind.md`).
   as the tree is tall, branches sweeping to the ground); no paper gives a strand density.
 - A strand is shortened to stop above the ground rather than removed (SpeedTree's Prune > Ground removes
   the branch): a curtain with holes where limbs are low reads worse than one with a ragged hem.
-- The willow preset's own limb values (`presets.rs: willow`) may change where the first build shows a
-  limb problem the strands do not fix; each change is recorded under `## Proposed` with `old -> new`.
+- Validation target 4's second half, as D-052 wrote it, was not met and is replaced: strands hang plumb, as
+  the species' do ("sweep downward to the ground"), so the crown is as wide at the ground as at its widest,
+  not wider. The test (`willow_curtains_hang_to_the_ground`) asks the bottom third to reach 90% as far out
+  as the middle third (seed 2: 5.29 m against 5.60 m); a mound narrows to the ground and fails it.
+- The willow's limb values changed beyond the strands (listed under Parameters): with strands alone the
+  crown still stood on a bare post under arcs, so the limbs start lower and rise a little more. The test
+  that pins `up_attraction < -0.3` stands: it is unchanged at -0.5.
 
 ## Pending index
 

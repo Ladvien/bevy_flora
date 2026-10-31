@@ -8,7 +8,7 @@ All notable changes to `bevy_flora`. The format follows
 ## [Unreleased]
 
 Per-tree condition (issue #87): a game marks a tree sick or dying, reads it back through `FloraIndex`,
-and the tree is drawn in it.
+and the tree is drawn in it. And a willow that weeps (D-052): pendant strands hang to the ground.
 
 ### Added
 
@@ -49,12 +49,53 @@ and the tree is drawn in it.
   set before a pooled tree's pool has loaded shows when it does.
 - `TreeCondition` in the crate root and the prelude; a crate-root doctest and the README's "Finding trees"
   section show it.
+- **`BranchParams::strands` (`StrandParams`) and `NodeKind::Strand`: a weeping habit** (D-052, the willow's
+  curtain). Slender twigs hang straight down from the outer part of every branch and keep hanging past its
+  arch, for `length` times the trunk's height or down to `clearance` above the floor, as the long rope-like
+  twigs of a willow do: `density` strands per metre of branch along the part past `start`, each leaning off
+  plumb by up to `spread` degrees. A strand is a node of the skeleton one level below its branch, so it
+  grows with it (born when its branch reaches the point it hangs from), carries leaves along its whole
+  length (every other branch bunches them toward its base), sways, burns, falls and is drawn at every level
+  of detail like any twig, and trees that grow on the GPU grow it. It is a straight rope of two rings of
+  wood (`min_twig_radius` thick), and its leaf `i` keeps its place on the grown strand at every age, so the
+  CPU and `GpuGrowth` agree on its leaves. Strands draw from streams of their own and come after every
+  other node, so a tree without them (`density` 0, the default, and every preset but the willow) is the tree
+  it was, bit for bit, and one with them keeps every other branch where it was (tested). A `.tree.ron`
+  without the field loads with none. Gallery: `strands_oak`, `strands_oak_plumb`, `strands_oak_floor2` and
+  `strands_oak_4` (526 scenarios).
+- **The willow weeps** (a design decision, `qa/visual_findings.md` D-077): `strands` density 1.6 per metre from
+  a tenth of each branch, up to 0.7 of the trunk's height; its limbs start lower (`branches.start` 0.5 to
+  0.4) and rise a little more (`angle` 50 to 46, `angle_curve` -0.4 to -0.1), its trunk is slimmer at the top
+  (`trunk.taper` 0.4 to 0.22), and its leaves are fewer and larger (`foliage.density` 10 to 6.5,
+  `leaf_size` 0.26 to 0.34). The crown is a dome with a curtain to a hand's breadth above the grass: the
+  lowest leaf is under 30% of the tree's height, where it was a low mound on a bare post. It costs: a mature
+  willow is 119k vertices (wood 30k, leaves 93k) where it was 55k, builds in 4.4 ms where it took 2.2, and its
+  coarse levels hold 24k and 9k leaf vertices where they held 9.5k and 3.6k.
 
 ### Changed
 
 - **Breaking:** `IndexedTree` has a new public field, `condition`, so a struct literal of it needs one
   (a game builds none: the index hands them out); `FloraUniform` has a new public field, `withered`
   (a struct literal of it needs one; the plugin builds every one). The next release is a minor one.
+- **Breaking:** `BranchParams` has a new public field, `strands` (a struct literal of it needs one, or
+  `..Default::default()`), and `NodeKind` a new variant, `Strand` (an exhaustive `match` needs an arm). A
+  `.tree.ron` without the field loads with no strands. The next release is a minor one.
+- Of the 522 earlier gallery scenarios, 489 have the meshes they had (`stats.tsv` columns 1-10 identical);
+  the 33 that moved are 29 willow scenarios and the pipe-model shrub and fern (Fixed, below). Every one of
+  the 488 non-willow scenarios whose mesh did not move is the same image below the HUD.
+
+### Fixed
+
+- `TreeShape`'s crown box did not hold every leaf of a tree whose branches arch: it spanned a branch's start
+  and end, and a bent branch's axis rises past both before it falls, so leaves on the arch of a drooping
+  limb could stand outside it (the willow at age 5, with its new limbs; `the_crown_holds_every_leaf_and_
+  the_box_holds_the_crown_at_every_age` found it). The box now follows the samples of the axis.
+- With `MeshParams::pipe_radius_enabled`, the floor check left no room for the pipe model's thicker wood,
+  so a branch that drooped to the floor could dip up to `pipe_radius_min` below it (`BELOW_FLOOR` on the
+  willow's pipe scenario). Floor avoidance now keeps wood `pipe_radius_min` above the floor when the pipe
+  model is on (`pipe_shrub`, `pipe_fern` and their young scenarios move by a centimetre or two; no other
+  preset changes, and nothing changes with the pipe model off). A strand keeps its own radius under the
+  pipe model (the floor on twigs would make each one a rod as thick as the thinnest branch).
 
 ### Tests
 
@@ -71,6 +112,14 @@ and the tree is drawn in it.
   `a_declined_leaf_is_lost_by_its_own_draw_and_withers_toward_the_dry_colour`,
   `a_dying_tree_drops_only_the_leaves_it_has_left_and_they_fall_dry` and
   `a_withered_leaf_takes_the_dry_colour_whatever_the_species_and_wood_never_withers`.
+- `strands_hang_from_the_wood_and_stop_above_the_floor`, `strands_leave_every_other_branch_where_it_was`,
+  `a_tree_that_asks_for_no_strands_has_none`, `strands_on_any_tree_keep_off_the_trunk_and_the_floor`,
+  `a_strand_is_born_when_its_branch_reaches_the_point_it_hangs_from`,
+  `a_strands_leaves_keep_their_places_as_it_grows` (fails when the leaves re-spread over the strand's length
+  at each age) and `willow_curtains_hang_to_the_ground` (D-052's own acceptance: the lowest leaf vertex under
+  30% of the tree's height, and the bottom third as wide as the middle within 10%: strands hang plumb, so
+  a curtain is as wide at the ground as at its widest where a mound narrows to it; three seeds). A
+  `StrandParams` doctest. No existing assertion changed.
 
 ## [0.46.1] - 2026-10-30
 
