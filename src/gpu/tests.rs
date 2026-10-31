@@ -349,7 +349,7 @@ fn all_branches_leaves_appear_as_the_branch_lengthens() {
             ordinals.entry(tag.node).or_default().push(tag.ordinal);
         }
     }
-    let mut checked = 0;
+    let (mut checked, mut easing) = (0, 0);
     for age in [1.5, 3.0, 4.5, 6.0, 8.0, f32::INFINITY] {
         let aged = aged_skeleton(&full, &params, age);
         let mut state = GrowthState::default();
@@ -367,9 +367,16 @@ fn all_branches_leaves_appear_as_the_branch_lengthens() {
             });
             assert_eq!(shown, points.len(), "age {age}: node {}", node.id);
             checked += points.len();
+            // a leaf that is not yet at its node's leaf size is easing in, as the CPU's is
+            for &o in ordinals.get(&node.id).into_iter().flatten() {
+                let tag = data.leaf_tags.iter().find(|t| t.node == node.id && t.ordinal == o).unwrap();
+                let scale = super::frame::placement(tag, &state).scale;
+                easing += usize::from(scale > 0.0 && scale < state.nodes[tag.node as usize].leaf_scale * 0.999);
+            }
         }
     }
     assert!(checked > 500, "checked only {checked} leaves");
+    assert!(easing >= 10, "only {easing} leaves easing in");
 }
 
 #[test]
