@@ -1071,3 +1071,110 @@ at the lowest (the full `--gpu` galleries, the packaged build and the debug test
 target directory's dependency builds (71 GB, older than this pass). Leftovers of earlier passes: none found (no
 `f*_base` in `~` or `/tmp`, `git worktree list` shows only the clone); the branches `loop/iter-1` to `-10` remain on
 origin, not deleted.
+
+## Iteration 11 — 2026-10-31 — A preset parses from its name and a tree says when it is grown (`TreePreset::from_name`, `TreeParams::mature_at`)
+
+Pass on `loop/iter-11` from `main` `66c650a`, Apple M5 (Metal; no `gpu-tenant` on this Mac). Home-still at the start:
+`system_status` healthy (distill `rc.389` on CUDA and idle, two scribe instances healthy, 18 670 documents, 18 073
+embedded, 761 conversions queued), `catalog_recent` read (200 rows; its tree-relevant ones were already in
+`corpus.md`). `distill_search` worked and found two catalog documents the note uses that `corpus.md` did not list
+(de Reffye 1988, Makowski 2019); they were added.
+
+**Triage.** `gh issue list` on this repository: 0 open (the last closed, #87, #89-#94 on Oct 31). bevy_emerge's F6
+(`#102`) is closed (slices 1 to 6 on its `main`); its open family issues are F0 and F7. No `wiggum/parked-*` branch
+and no `parked` commit. `git log origin/main..HEAD` empty. So no bug and no issue to take; section 4's first
+fallback applies ("what the crate's consumers hand-roll"). Release not taken: v0.47.0 (04:23) was 3 h 51 m old at the
+merge, the 6-hour rule; 0.47.1 is for the next pass after 10:23.
+
+**What changed and why it ranked first.** Read the consumers: bevy_emerge's `ops_tree.rs:89` and `forest_view.rs:68`
+each write `TreePreset::ALL.iter().find(|t| t.name() == name)` (the first adds an error message joining all 20
+names), this crate's own examples write it six times (`capture_growth`, `forest` x3, `inspect`, `tree_file`), and
+Sanctuary's `prototype/trees.rs:179` builds a whole mature tree (`build_tree(&params, f32::INFINITY).mature_at`)
+once per kind to read one number. A downstream crate cannot add `FromStr` to `TreePreset` (the orphan rule), so
+the lookup could only ever be re-written. Added, no behaviour changed:
+
+- `TreePreset::from_name(&str) -> Option<TreePreset>`, `impl FromStr` (error `UnknownPreset`: `input()` and a
+  `Display` that lists all 20 names, exported from the crate root) and `impl Display` (prints `name()`): exact,
+  snake_case, the inverse of `name()`; `"Oak"`, `"oak "`, `"dragon-tree"` and the serde spelling `"DragonTree"` are
+  refused. The six example call sites use it (`tree_file --export` still lower-cases first).
+- `TreeParams::mature_at() -> f32` (named as `TreeMeshes::mature_at`, `TreeRender::mature_at`,
+  `Skeleton::mature_at`; `mature_age` would have sat beside `GrowthParams::maturity_age`, a different number, now
+  documented as such): the age a tree stops changing, `generate_skeleton(self).mature_at(&self.growth)`; `capture_growth`
+  uses it in place of `build_tree(..).mature_at` (the same number, so the clips are not touched). `TreeAge`'s and
+  `GrowthParams::maturity_age`'s docs point at it; README (Quickstart, a compiled snippet), ARCHITECTURE and CHANGELOG
+  `[Unreleased]` say it.
+
+Runner-up: a glide with no per-tree cost (backlog 3 of iteration 10), real but invisible to a game that leaves
+`ConditionGlide` at 0. Why this one: three repositories carry the same lines today, the change is additive (a
+patch release), and with no open issue a consumer's hand-rolled code is what section 4 says to take first.
+Not built, on purpose: a date-to-`FloraSeason` helper (bevy_emerge's `forest_season.rs` writes "year counts from 1
+March, or 1 September in the south"): the calendar is the caller's, `FloraSeason::of_year` is already the hook.
+
+**Sources.** Botanical/model: de Reffye et al. 1988, "Plant Models Faithful to Botanical Structure and Development"
+(`10.1145_378456.378505`: "the unit of discretized time is the time taken by the growth of a growth unit, this
+length of time being supposed constant for the axes a given order of a given plant"), Makowski et al. 2019,
+"Synthetic silviculture" (`10.1145_3306346.3323039`: "We use a flowering age parameter to indicate when in the
+simulation a plant type reaches maturity"). Shipping game: Epic's Procedural Vegetation Editor documentation
+(UE 5.8, web: the Grower's Cycles "is not equivalent to years", "Save Grower Preset ... a good way to expand a
+preset library"). Technical: Rust API Guidelines C-COMMON-TRAITS and `std::str::FromStr` (web). Note:
+`docs/research/preset-names.md`; both stems added to `corpus.md`. Pending index: the three web pages; no source
+measures years-to-maturity of a species against a preset's `maturity_age`.
+
+**Numbers** (`/tmp/f11`, removed with the scratch).
+
+- Tests: `cargo test --all-features`: 357 lib (354 + `a_preset_is_found_by_its_name_and_by_nothing_else`,
+  `the_error_says_what_was_asked_for_and_what_there_is`, `mature_at_is_the_age_a_tree_stops_changing`) and 72 doc
+  tests (69 + `from_name`'s, `mature_at`'s and the README snippet). `mature_at_is_the_age_a_tree_stops_changing`:
+  every preset x seeds 1, 42, 7777: the number `build_tree` reports, wood and leaves at that age within 1e-6 m of the
+  full-grown (rounding; the one gap I saw was 1.5e-8 m), the wood at half of it different. Clippy
+  `--all-targets --all-features -D warnings` clean, `cargo doc -D warnings` clean (one `redundant_explicit_links`
+  fixed), `cargo check` default, `--features serde`, `--examples` clean, `cargo package --locked` (131 files).
+- Cost of `mature_at()` (throwaway `examples/zz_probe.rs`, release, median of 30, deleted): all 20 presets 2.4 ms
+  against 18.7 ms for `build_tree(INF)`, 7.8x; oak 187 us vs 885 us, willow 677 us vs 4 940 us, maple 249 vs 1 142,
+  poplar 39 vs 1 112 (28x), fern 2 vs 120 (48x), baobab 57 vs 210 (3.6x, the least).
+- Forest bench, 3 rounds each, medians, ms/frame (cpu), base -> new: pool 10 000 4.91 (12.62) -> 5.01 (13.82)
+  +2.0% (+9.5%); naive 1 000 35.57 (19.65) -> 35.41 (19.30) -0.4% (-1.8%); gpu-live 1 000, 200 frames 195.74
+  (259.45) -> 178.56 (246.10) (noise, -8.8% / -5.1%). The pool cpu figure is the known bimodal one (base alone ran
+  14.07, 12.33, 12.62 in a row); interleaved b n n b b n n b, medians of four: 5.035 (14.32) -> 5.045 (14.73)
+  +0.2% (+2.9%), the base runs themselves spanning 13.88-14.80. No hot path was touched (the binaries differ in
+  argument parsing and added methods).
+- Gallery, the 7 scenarios of CI's GPU job, base and new, CPU and `--gpu`: 7 PNG = 7 rows each, none under 100 KB,
+  flags `-` x 7, no BLANK_CAPTURE or CAPTURE_TIMEOUT, only the known `WARN`s (asset watcher path of the copied
+  binary, winit `Destroyed`); every PNG byte for byte the main binary's (CPU and GPU) and run 2 equals run 1;
+  `stats.tsv` columns 1-10 identical in all five runs; `compare_gallery` 0.218 mean of means, worst 0.922, as base.
+  The full 526 was not run: no tree-building code changed.
+- Smoke: `forest --preset dragon_tree`, `--scatter oak:2,birch:1 --undergrowth fern:2.5` run; `--preset Dragon_Tree`,
+  `--scatter oak:2,sequoia:1` and `inspect --preset sequoia` print usage.
+- Gate gaps, said plainly: `cargo build` and `cargo build --release` with default features were `cargo check` (a
+  3-4 GB Bevy variant on a 14 GB disk); `cargo test --all-features` ran in full (examples are not test targets, so
+  iteration 10's note "ran as --lib and --doc" was how it runs, not a gap).
+
+**Critique and verdict** (`/tmp/f11/critique.md`): **GREAT** for what it promises. Flaws found, none stopping a
+ship: exact-only parsing (a caller lower-cases or reads the error's list); two spellings of a preset (`name()` and the
+serde form) kept for saved files; `mature_at()` builds a skeleton per call (documented: ask once per kind); at the
+very age it returns the wood is a float's rounding short; neither consumer has adopted it (their pins are
+`25e956b` and `1e4c379`, older than this commit); the gallery was the 7 CI scenarios, not 526; it is not a visible
+improvement and no clip changed.
+
+**Commits** (`loop/iter-11`): `e7c6ce1` Research: preset names, `86405c5` Research: corpus, `ebc68c3` the
+implementation, its tests and the examples, `c7e5727` docs, `7d3f41d` the private `UnknownPreset` field, its crate-root
+export and the cost sentence. Sibling repositories: none touched.
+
+### Ranked backlog after iteration 11
+
+1. **Release 0.47.1** (a patch: types and methods added, nothing removed) from 10:23 local on: it carries
+   iterations 9, 10 and 11; re-record the eleven clips (`growth.gif` changes by iteration 9's leaf ease),
+   `cargo semver-checks` if it fits the disk; `[Unreleased]` is written.
+2. **A glide with no per-tree cost**: a leaf marker so only leaf meshes are tagged (about half the writes), or a
+   shared slot in the buffer for trees that began together; and the leaves a glide loses falling (`LeafBurst`)
+   instead of vanishing.
+3. **The hull crown by leaf size**: `crown_hull` takes positions only, so a `CrownStyle::Hull` tree growing on the
+   CPU still pops its hull when a leaf is born.
+4. **Finish the willow (D-052)**: leaf ribbons, strands kept as lines at level 1, limbs whose leaves reach their
+   tips, a greener strand colour, a forked trunk; D-074 / D-075 on big; `RadialOutward` facing on a growing branch;
+   a CPU mirror of `wind_bend`.
+5. **What an editor still hand-rolls around `TreeParams`**: bevy_emerge's `.tree.ron` dotted-path edit (`set_path`
+   over `serde_json`) and a panel's need for each field's kind, unit and range; look at it once bevy_emerge has
+   moved its pin to this commit and says what it still writes. Also Sanctuary's rain-and-fire rule (`douse_forest`
+   writes `fire.spread.speed` from a wetness each frame): `FireSpread` is writable and the policy is the game's, so
+   only a hook if two consumers want the same rule.
