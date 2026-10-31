@@ -131,13 +131,14 @@ pub fn leaf_points_for_node(
         leaf_scale,
     };
 
+    let mut slots = None;
     match foliage.placement {
         FoliagePlacement::TerminalBranches => {
             if skeleton.is_terminal(i) {
                 add_terminal_leaves(points, &ctx, foliage, &mut rng);
             }
         }
-        FoliagePlacement::AllBranches => add_distributed_leaves(points, &ctx, foliage, &mut rng),
+        FoliagePlacement::AllBranches => slots = Some(add_distributed_leaves(points, &ctx, foliage, &mut rng)),
         FoliagePlacement::TipClusters => {
             if skeleton.is_terminal(i) {
                 add_cluster_leaves(points, &ctx, foliage, &mut rng);
@@ -145,17 +146,12 @@ pub fn leaf_points_for_node(
         }
     }
 
-    // Tints come from their own stream, drawn in leaf order, so a node's
-    // leaves keep their tints as the tree ages.
+    // Tints and hues come from their own streams, drawn in leaf order (in slot order, for a branch
+    // whose leaves are some of its slots), so a node's leaves keep theirs as the tree ages.
     let mut tint_rng = SeededRng::from_parts(seed ^ LEAF_TINT_SALT, node.id);
-    for p in &mut points[first..] {
-        p.tint = tint_rng.range(-1.0, 1.0);
-    }
-
+    draw_per_leaf(&mut points[first..], slots.as_ref(), &mut tint_rng, |p, v| p.tint = v);
     let mut hue_rng = SeededRng::from_parts(seed ^ LEAF_HUE_SALT, node.id);
-    for p in &mut points[first..] {
-        p.hue = hue_rng.range(-1.0, 1.0);
-    }
+    draw_per_leaf(&mut points[first..], slots.as_ref(), &mut hue_rng, |p, v| p.hue = v);
 
     // The leaves of a node shade with the rest of the primary branch (leader or split) it hangs
     // from, whatever the age: ids are the full skeleton's.
@@ -223,40 +219,90 @@ fn add_terminal_leaves(
     }
 }
 
+/// Which of a branch's leaf slots hold a leaf now (`add_distributed_leaves`).
+struct LeafSlots {
+    /// Slots of the grown branch, counted from its base.
+    total: usize,
+    /// The slots that hold a leaf, in order: as many as the branch's length allows now.
+    kept: Vec<u32>,
+}
+
+/// The order in which the `total` leaves of a grown branch appear as it lengthens:
+/// `ranks[slot]` is the rank of the leaf in slot `slot` (slots count from the branch's base). The
+/// leaf nearest the tip comes first, then leaves that bisect the branch again and again (van der
+/// Corput order counted from the tip), so a branch that shows its first `n` leaves has them spread
+/// over its whole length at every `n`, tip included.
+pub(crate) fn leaf_ranks(total: usize) -> Vec<u32> {
+    let mut ranks = vec![0; total];
+    if total < 2 {
+        return ranks;
+    }
+    let bits = usize::BITS - (total - 1).leading_zeros();
+    let mut from_tip: Vec<u32> = (0..total as u32).collect();
+    from_tip.sort_by_key(|&m| m.reverse_bits() >> (32 - bits));
+    for (rank, &m) in from_tip.iter().enumerate() {
+        ranks[total - 1 - m as usize] = rank as u32;
+    }
+    ranks
+}
+
 fn add_distributed_leaves(
     points: &mut Vec<LeafPoint>,
     node: &NodeCtx,
     foliage: &FoliageParams,
     rng: &mut SeededRng,
-) {
-    let count = distributed_leaf_count(foliage, node.length, node.height_ratio);
+) -> LeafSlots {
+    let count = distributed_leaf_count(foliage, node.length, node.height_ratio) as usize;
     let strand = node.wood.kind == NodeKind::Strand;
-    // A strand's leaves keep their places as it grows: leaf `i` sits where it does on the grown
-    // strand, and the young strand shows its first ones, in order from the base (the draws are the
-    // same at every age, and `GpuGrowth` shows the same leaves at the same places). Every other
-    // branch spreads as many leaves as it has now over its length.
-    let spread = if strand && node.wood.progress > 0.0 {
-        distributed_leaf_count(foliage, node.length / node.wood.progress, node.height_ratio).max(count)
-    } else {
-        count
-    };
-    for i in 0..count {
-        let t = (i as f32 + rng.range(0.0, 1.0)) / spread as f32;
-        // A strand carries its leaves along its whole length; other wood bunches them toward its base.
-        let along = if strand { 0.1 + t * 0.9 } else { 0.3 + t * t * 0.7 };
-        let position = node.wood.point_at(along);
+    // A leaf keeps its place on its branch as the branch grows (docs/research/leaf-places.md): the
+    // grown branch has `total` slots, slot `j` at `(j + u_j) / total` of the way, with draws of its
+    // own (the same at every age), and a branch that is `count` leaves long shows the `count`
+    // slots that appear first (`leaf_ranks`), as `GpuGrowth` shows them. Spreading the leaves it
+    // has now over the branch would move every one of them each time it gains a leaf.
+    let total = (distributed_leaf_count(foliage, node.wood.full_length, node.height_ratio) as usize).max(count);
+    let ranks = leaf_ranks(total);
+    let mut kept = Vec::with_capacity(count);
+    for (slot, &rank) in ranks.iter().enumerate() {
+        let t = (slot as f32 + rng.range(0.0, 1.0)) / total as f32;
         let size = foliage.leaf_size
             * (1.0 + rng.range(-foliage.leaf_size_variation, foliage.leaf_size_variation));
         let direction = leaf_direction(node, foliage, rng);
+        let rotation = rng.range(0.0, TAU) * foliage.rotation_variation;
+        if rank as usize >= count {
+            continue;
+        }
+        // A strand carries its leaves along its whole length; other wood bunches them toward its base.
+        let along = if strand { 0.1 + t * 0.9 } else { 0.3 + t * t * 0.7 };
         points.push(LeafPoint {
-            position,
+            position: node.wood.point_at(along),
             direction,
             size,
-            rotation: rng.range(0.0, TAU) * foliage.rotation_variation,
+            rotation,
             tint: 0.0,
             hue: 0.0,
             clump: 0,
         });
+        kept.push(slot as u32);
+    }
+    LeafSlots { total, kept }
+}
+
+/// Give each leaf of a node the draw of its slot from `rng` (one draw per slot, in slot order; one
+/// per leaf when the node's leaves are not slots of a grown branch).
+fn draw_per_leaf(points: &mut [LeafPoint], slots: Option<&LeafSlots>, rng: &mut SeededRng, set: impl Fn(&mut LeafPoint, f32)) {
+    let Some(slots) = slots else {
+        for p in points {
+            set(p, rng.range(-1.0, 1.0));
+        }
+        return;
+    };
+    let mut next = 0;
+    for slot in 0..slots.total as u32 {
+        let v = rng.range(-1.0, 1.0);
+        if slots.kept.get(next) == Some(&slot) {
+            set(&mut points[next], v);
+            next += 1;
+        }
     }
 }
 
@@ -1775,34 +1821,76 @@ mod tests {
     }
 
     #[test]
-    fn a_strands_leaves_keep_their_places_as_it_grows() {
-        // The leaf cards of a young strand are the first of the grown strand's, at the same
-        // fractions of its length (every other branch re-spreads its leaves at each age): the draws
-        // do not depend on the age, and the GPU's growth shows the same leaves at the same places.
-        let params = TreePreset::Willow.params();
-        let full = generate_skeleton(&params);
-        let along = |skeleton: &crate::skeleton::Skeleton, id: u32| -> Vec<f32> {
-            let i = skeleton.nodes.iter().position(|n| n.id == id).expect("the strand exists");
-            let node = &skeleton.nodes[i];
-            let mut points = Vec::new();
-            leaf_points_for_node(skeleton, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
-            points.iter().map(|p| (p.position - node.start).dot(node.direction) / node.length).collect()
-        };
-        let (mut compared, mut fewer) = (0, 0);
-        for age in [5.0, 6.0, 8.0] {
-            let aged = full.aged(age, &params.growth);
-            for node in aged.nodes.iter().filter(|n| n.kind == NodeKind::Strand && n.progress > 0.55 && n.progress < 1.0) {
-                let young = along(&aged, node.id);
-                let grown = along(&full, node.id);
-                assert!(!young.is_empty() && young.len() <= grown.len(), "strand {}: {} leaves young, {} grown", node.id, young.len(), grown.len());
-                for (k, (a, b)) in young.iter().zip(&grown).enumerate() {
-                    assert!((a - b).abs() < 1e-3, "strand {} age {age}: leaf {k} sits at {a} of the strand, {b} when grown", node.id);
+    fn every_branchs_leaves_keep_their_places_as_it_grows() {
+        // A leaf has one place on its branch whatever the age: a young branch shows the leaves of the
+        // grown branch that appear first (`leaf_ranks`), at the same fractions of its length and
+        // with the same tint, hue and turn, in every `AllBranches` preset and on the willow's strands.
+        // Spreading the leaves a branch has now over it moved every one of them each time it gained
+        // one (an oak leaf hopped 15 cm per 0.1 year, and sat up to 92 cm from where `GpuGrowth`
+        // puts it).
+        let (mut presets, mut strands) = (0, 0);
+        for preset in TreePreset::ALL {
+            let params = preset.params();
+            if params.foliage.placement != FoliagePlacement::AllBranches {
+                continue;
+            }
+            presets += 1;
+            let full = generate_skeleton(&params);
+            let mature_at = full.mature_at(&params.growth);
+            let leaves = |skeleton: &crate::skeleton::Skeleton, id: u32| -> Vec<(f32, LeafPoint)> {
+                let i = skeleton.nodes.iter().position(|n| n.id == id).expect("the branch exists");
+                let node = &skeleton.nodes[i];
+                let mut points = Vec::new();
+                leaf_points_for_node(skeleton, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
+                points.into_iter().map(|p| ((p.position - node.start).dot(node.direction) / node.length, p)).collect()
+            };
+            let (mut compared, mut fewer) = (0, 0);
+            for share in [0.4, 0.6, 0.8] {
+                let aged = full.aged(mature_at * share, &params.growth);
+                for node in aged.nodes.iter().filter(|n| n.kind != NodeKind::Trunk && n.progress > 0.3 && n.progress < 1.0) {
+                    let young = leaves(&aged, node.id);
+                    let grown = leaves(&full, node.id);
+                    assert!(young.len() <= grown.len(), "{} branch {}: {} leaves young, {} grown", preset.name(), node.id, young.len(), grown.len());
+                    let ranks = leaf_ranks(grown.len());
+                    let shown: Vec<_> = (0..grown.len()).filter(|&slot| (ranks[slot] as usize) < young.len()).collect();
+                    assert_eq!(shown.len(), young.len(), "{} branch {}: the leaves that appear first", preset.name(), node.id);
+                    for (&slot, (a, young)) in shown.iter().zip(&young) {
+                        let (b, grown) = &grown[slot];
+                        let what = format!("{} branch {} at {share} of maturity: slot {slot}", preset.name(), node.id);
+                        assert!((a - b).abs() < 1e-3, "{what} sits at {a} of the branch, {b} when grown");
+                        assert_eq!((young.tint, young.hue, young.rotation), (grown.tint, grown.hue, grown.rotation), "{what}: its draws");
+                    }
+                    compared += usize::from(!young.is_empty());
+                    fewer += usize::from(young.len() < grown.len());
+                    strands += usize::from(node.kind == NodeKind::Strand && !young.is_empty());
                 }
-                compared += 1;
-                fewer += usize::from(young.len() < grown.len());
+            }
+            assert!(compared >= 3, "{}: only {compared} growing branches with leaves compared", preset.name());
+            assert!(fewer >= 1, "{}: no young branch shows fewer leaves than when grown", preset.name());
+        }
+        assert!(presets > 0, "no preset places leaves on every branch");
+        assert!(strands >= 10, "only {strands} young strands with leaves compared");
+    }
+
+    #[test]
+    fn a_young_branch_shows_leaves_over_its_whole_length() {
+        // Tip first, then the base, then the middles: the first `n` leaves of a branch are spread over
+        // it at every `n` (a young limb is not bare at its tip, and leaves are not bunched at its base).
+        for total in [2, 3, 5, 8, 13, 40] {
+            let ranks = leaf_ranks(total);
+            let mut sorted = ranks.clone();
+            sorted.sort_unstable();
+            assert_eq!(sorted, (0..total as u32).collect::<Vec<_>>(), "ranks of {total} slots are a permutation");
+            assert_eq!(ranks[total - 1], 0, "{total} slots: the tip leaf appears first");
+            for shown in 2..=total {
+                let mut at: Vec<usize> = (0..total).filter(|&slot| (ranks[slot] as usize) < shown).collect();
+                at.sort_unstable();
+                // the biggest gap between the leaves shown
+                let gap = at.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+                assert!(gap <= 2 * total.div_ceil(shown), "{total} slots, {shown} shown: a gap of {gap} slots");
             }
         }
-        assert!(compared >= 10, "only {compared} growing strands compared");
-        assert!(fewer >= 3, "only {fewer} of {compared} young strands show fewer leaves than when grown");
+        assert_eq!(leaf_ranks(0), Vec::<u32>::new());
+        assert_eq!(leaf_ranks(1), vec![0]);
     }
 }

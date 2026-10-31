@@ -5,10 +5,10 @@ use bevy::math::Vec3;
 use super::frame::{Class, Tag, position, wood_radius};
 use super::mesh::{GrowthData, build_growth_data};
 use super::state::{CONE, GrowthState, TOP_CAP};
-use crate::foliage::{foliage_meshes, leaf_points_for_node};
+use crate::foliage::{foliage_meshes, leaf_points_for_node, leaf_ranks};
 use crate::mesh::branch::{WoodPiece, WoodSpan, skeleton_mesh_with};
 use crate::mesh::trunk::{trunk_pieces, trunk_ring_count};
-use crate::params::{FoliagePlacement, TreeParams, TrunkTermination};
+use crate::params::{FoliagePlacement, LeafOrientation, TreeParams, TrunkTermination};
 use crate::pipeline::aged_skeleton;
 use crate::presets::TreePreset;
 use crate::skeleton::{Skeleton, generate_skeleton};
@@ -380,8 +380,14 @@ fn grown_leaves_and_flowers_match_the_cpu_meshers() {
     for preset in TreePreset::ALL {
         let mut params = preset.params();
         params.mesh.smooth_iterations = 0;
-        if params.foliage.placement == FoliagePlacement::AllBranches || !params.foliage.enabled {
+        if !params.foliage.enabled {
             continue;
+        }
+        // Leaves that face out from their branch's tip face out from the tip it has now on the CPU
+        // and from the mature tip on the GPU (a documented difference, and one of orientation, not
+        // of place): every `AllBranches` preset is compared with its leaves along their branches.
+        if params.foliage.placement == FoliagePlacement::AllBranches && params.foliage.orientation == LeafOrientation::RadialOutward {
+            params.foliage.orientation = LeafOrientation::FollowBranch;
         }
         // Every compared tree flowers, so each flower is held to its leaf's growth too.
         params.foliage.blossom = Some(bevy::color::Color::WHITE);
@@ -402,11 +408,18 @@ fn grown_leaves_and_flowers_match_the_cpu_meshers() {
         let mature = aged_skeleton(&full, &params, f32::INFINITY);
         let mut mature_points = Vec::new();
         let mut mature_direction = HashMap::new();
+        // Under `AllBranches` the GPU's ordinal of a leaf is its rank: when it appears as the branch
+        // lengthens (`leaf_ranks`); the leaf of slot `slot` of a branch with `total` of them.
+        let all_branches = params.foliage.placement == FoliagePlacement::AllBranches;
+        let ordinal = |slot: usize, total: usize| if all_branches { leaf_ranks(total)[slot] } else { slot as u32 };
+        let mut mature_total = HashMap::new();
         for i in 0..mature.nodes.len() {
             let before = mature_points.len();
             leaf_points_for_node(&mature, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut mature_points);
-            for (ordinal, point) in mature_points[before..].iter().enumerate() {
-                mature_direction.insert((mature.nodes[i].id, ordinal as u32), point.direction);
+            let total = mature_points.len() - before;
+            mature_total.insert(mature.nodes[i].id, total);
+            for (slot, point) in mature_points[before..].iter().enumerate() {
+                mature_direction.insert((mature.nodes[i].id, ordinal(slot, total)), point.direction);
             }
         }
         for age in AGES {
@@ -418,7 +431,18 @@ fn grown_leaves_and_flowers_match_the_cpu_meshers() {
             for i in 0..aged.nodes.len() {
                 let before = points.len();
                 leaf_points_for_node(&aged, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
-                owners.extend((before..points.len()).map(|p| (aged.nodes[i].id, (p - before) as u32)));
+                let id = aged.nodes[i].id;
+                // The slots of the grown branch that have a leaf now, in order: the branch's leaves.
+                let total = mature_total.get(&id).copied().unwrap_or(0);
+                let shown = points.len() - before;
+                let slots: Vec<usize> = if all_branches {
+                    let ranks = leaf_ranks(total);
+                    (0..total).filter(|&slot| (ranks[slot] as usize) < shown).collect()
+                } else {
+                    (0..shown).collect()
+                };
+                assert_eq!(slots.len(), shown, "{} age {age}: node {id}'s leaves", preset.name());
+                owners.extend(slots.into_iter().map(|slot| (id, ordinal(slot, total))));
             }
             let cpu = foliage_meshes(&points, &params.foliage, params.style);
             let built = [(&cpu.leaves, &cpu.firsts[0]), (&cpu.flowers, &cpu.firsts[1])];
