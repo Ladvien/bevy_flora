@@ -141,6 +141,18 @@ smoothstep; `FoliageParams::density` and `height_falloff` set it as they set the
 - No new mesh flag (a leaf of 3% of its size is not a degenerate triangle); forest bench and build probe within
   5% (the change scales a leaf: the same number of vertices plus at most one leaf per branch).
 
+## Measured (iteration 9)
+
+Same probe, same sweep, after the change (0.05 year steps; 0.01 in brackets): share of mature size at first
+sight, mean 0.00 to 0.05 (0.00) for every preset, none above half (was 9% to 43% of the leaves), the
+largest 0.07 on the oak, 0.47 on the willow's strands and 0.37 on the fern, whose nodes grow fast ([0.03
+and under for all]); the largest step in one leaf 0.25 to 0.33 on the oak, maple, spruce, pine, cherry,
+apple and juniper, 0.80 on the willow, 0.52 shrub, 0.59 fern ([0.18 at most, the willow's strands]; it
+was 1.00 at 0.05). Mature trees: `stats.tsv` columns 1-10 identical for every scenario at maturity;
+CPU against `--gpu` 0.029 mean of 255 / 1.16 worst over the 526 (0.030 / 1.19), the seven CI scenarios
+0.218 / 0.922 (0.221 / 0.920); forest bench within 0.5% in all three modes; a CPU build at maturity within
+1%, at age 4 up to +7% (the part-grown leaf per branch: +4% to +11% leaf vertices).
+
 ## What great looks like
 
 A growth clip in which the crown thickens like a flush of leaves and not like static: at the edge of a young
