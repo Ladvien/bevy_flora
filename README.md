@@ -73,6 +73,18 @@ fn setup(mut commands: Commands) {
 
 The plugin keeps two child entities on each tree (wood and leaves) and rebuilds their meshes whenever `ProceduralTree` or `TreeAge` changes. It sends a `TreeGenerated` message after each rebuild.
 
+A preset has a name for a command line, an editor or a data file: `"oak".parse::<TreePreset>()` (or `TreePreset::from_name`) is the inverse of `TreePreset::name`, exact and snake_case, and its error lists the presets there are. A tree has an age at which it is fully grown, in its own growth units (an oak and a palm take different numbers): `TreeParams::mature_at()` is the age `Growing` runs it to and above which `TreeAge` changes nothing. It reads the tree's skeleton and builds no mesh (about 8 times cheaper than `build_tree` over the 20 presets).
+
+```rust
+use bevy_flora::{TreeAge, TreePreset};
+
+let preset: TreePreset = "dragon_tree".parse().expect("a preset's name");
+let params = preset.params();
+// A tree half way through its growing time, whatever the species:
+let age = TreeAge(0.5 * params.mature_at());
+assert!(age.0 > 0.0 && age.0.is_finite());
+```
+
 ### Trees from files: `ProceduralTreeAsset` and `.tree.ron`
 
 `TreeParams` is an asset. Spawn `ProceduralTreeAsset(handle)` in place of `ProceduralTree(params)` and the plugin gives the entity its `ProceduralTree` once the asset has loaded, and replaces it whenever the asset changes, so every tree that shares the handle follows an edit, made in code (`Assets<TreeParams>::get_mut`), in an inspector (the asset is registered for reflection) or in a file. With the `ron` feature the plugin loads `.tree.ron` files, and with Bevy's `file_watcher` (this crate's `file_watcher` feature turns it on) saving one rebuilds its trees while the game runs, a few tenths of a second after the save: tune a tree without recompiling. `TreeParams::to_ron` writes any tree as a file to start from (`cargo run --example tree_file --features ron -- --export oak`). A file may leave fields out, which keep their defaults; a misspelt field is an error that gives the line and the fields that exist; and a file that fails to load keeps the last good tree.

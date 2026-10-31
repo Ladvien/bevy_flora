@@ -267,7 +267,7 @@ fn parse_args() -> Args {
             }
             "--preset" => {
                 let name = it.next().unwrap_or_else(|| usage());
-                args.preset = TreePreset::ALL.into_iter().find(|p| p.name() == name).unwrap_or_else(|| usage());
+                args.preset = TreePreset::from_name(&name).unwrap_or_else(|| usage());
             }
             "--mode" => {
                 args.mode = match it.next().as_deref() {
