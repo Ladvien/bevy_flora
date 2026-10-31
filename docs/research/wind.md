@@ -64,14 +64,22 @@ object so a meadow is "one draw call".
 
 ## Model adopted
 
-`wind_bend` (`src/shading/common.wesl`), after the merge:
+`wind_bend` (`src/shading/common.wesl`), since iteration 4 (issue #90):
 
 ```
 rel   = world - origin                       // the vertex from the plant's root, world units
-lean  = MAIN_BEND * sway * scale_y * |rel|   // MAIN_BEND = 0.04, sway = TreeParams::wind.sway
+lean  = MAIN_BEND * sway * |rel|             // MAIN_BEND = 0.04, sway = TreeParams::wind.sway
 moved = rel + push * lean * FloraWind::bend + shake * lean
 out   = origin + moved * |rel| / |moved|     // bend, do not stretch (Crysis' rescale)
 ```
+
+`|rel|` is a distance between two world-space positions, so it already carries the tree's
+`Transform` scale and `FloraUnits`: the lean is a share of the plant's own drawn height whatever
+scale it is drawn at. Iteration 1's merge of 0.46.1 had `MAIN_BEND * sway * scale_y * |rel|`, which
+counted the scale twice (D-073, below); `wind_bend` takes no `scale_y` any more. This is the
+elastic-similarity statement quoted under Craft principle: the deflection angle is "independent of
+branch length", so it must be independent of the length's units and of the scale a game draws the
+tree at.
 
 The 0.46.0 term was `MAIN_BEND * sway * (scale_y * trunk.height) * (local_y / trunk.height)²`: the
 same value at the top of a mature, unscaled plant, a square of the trunk-normalised height below it,
@@ -97,7 +105,8 @@ a pine: the old 0.2-1.5 spread decided who moved.
    most 2x the least (`a_shrub_and_a_pine_sway_by_near_the_same_share_of_their_own_height`).
 3. A plant drawn at `Transform` scale `s` leans the same share of its own (scaled) height as at
    scale 1 (elastic similarity across sizes; a foot world scales every tree by 3.28 and must not lean
-   3.28 times as far). **Not met on the branch**: see Deviations.
+   3.28 times as far). Probe: the crown top's shift over the tree's height, one mature pine at scale 1
+   and one at scale 3, steady wind, side view, ratio within 5% of 1.
 4. No CPU cost: shader-only, the forest bench within 5% per mode.
 5. No geometry moves: the gallery (wind off) is identical, GPU growth parity unchanged.
 
@@ -111,18 +120,27 @@ a world unit sways like a bigger tree of its kind, not like a rubber one.
 
 ## Deviations
 
-- **D-073 (bug, blocked):** `lean` multiplies `scale_y` into a length (`|rel|`) that is already in
-  world units, so the share of its own height a plant leans grows with its `Transform` scale: a
-  `Scatter` forest (scale 0.85-1.15 by default) leans 0.85-1.15 times the share, a foot world
-  (`FloraUnits` 3.28, trees scaled by 3.28) 3.28 times, a centimetre world 100 times (the bend's
-  rescale then lays the tree nearly flat). 0.46.0 did not have this (its term used the trunk's
-  height in the mesh's own units). Measured (two mature pines, steady wind, side view, crown top
-  shift over height): 0.46.0 3.14% at scale 1 and 3.10% at scale 3; 0.46.1 3.43% and 10.34%.
-  The fix is `lean = MAIN_BEND * sway * |rel|` (and dropping the `scale_y` argument), but the test
-  `the_lean_comes_from_the_vertexs_own_distance_from_the_root` finds the lean line by
-  `contains("scale_y")` and fails without it; the loop may not edit a test, so this waits for the
-  owner (issue #90).
-- Validation target 3 is therefore not met in 0.46.1.
+- **D-073 (bug, fixed in iteration 4, issue #90):** 0.46.1's `lean` multiplied `scale_y` into a
+  length (`|rel|`) that is already in world units, so the share of its own height a plant leans grew
+  with its `Transform` scale: a `Scatter` forest (scale 0.85-1.15 by default) leaned 0.85-1.15 times
+  the share, a foot world (`FloraUnits` 3.28, trees scaled by 3.28) 3.28 times, a centimetre world
+  100 times (the bend's rescale then lays the tree nearly flat). 0.46.0 did not have this (its term
+  used the trunk's height in the mesh's own units). Measured in the issue (two mature pines, steady
+  wind, side view, crown top shift over height): 0.46.0 3.14% at scale 1 and 3.10% at scale 3;
+  0.46.1 3.43% and 10.34%. The fix is `lean = MAIN_BEND * sway * |rel|` and dropping the `scale_y`
+  argument from `wind_bend` and its six callers. Validation target 3 holds from iteration 4.
+- **Assumed decision (owner may override): the stale test locator.**
+  `the_lean_comes_from_the_vertexs_own_distance_from_the_root` finds the lean line with
+  `contains("let lean = MAIN_BEND") && contains("scale_y")`, which pins the bug. The loop may not edit
+  or loosen a test (and iteration 2 stopped there). Options: (1) change the locator to drop the
+  `scale_y` conjunct, as the issue proposes (a loosening, needs the owner); (2) leave the test as it
+  is and keep a trailing comment on the lean line that names `scale_y` (why it is absent), so the
+  locator still finds the line and all three assertions hold unchanged (picked: reversible, touches
+  no check); (3) leave `scale_y` in the formula (wrong). A new test,
+  `wind_bend_takes_no_scale_and_the_lean_has_no_scale_factor`, is added beside it: it strips comments
+  and requires that neither `wind_bend`'s signature nor its lean expression mentions `scale_y`,
+  which fails on 0.46.1. The owner may delete the old locator's `scale_y` conjunct and the comment
+  together.
 - The profile below the top changed from quadratic in the trunk-normalised height to linear in the
   distance from the root (Crysis' bend factor is linear at the root too, `2h + ...`). Approved with
   D-071.
