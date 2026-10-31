@@ -1027,8 +1027,11 @@ Which tree did the axe hit, which one is nearest the woodcutter, which ones stan
 - `nearest(at, max)`: the tree whose bark at the foot is nearest a point (world x and z), within `max` metres (`f32::INFINITY`: wherever it is, which looks at every tree); of two as near, the first in `within`'s order.
 - `within(at, radius)`: every tree whose bark at the foot is within `radius` metres, in an order set only by where the trees stand (cell by cell, by position within a cell), so a replay or a world streamed in another order sees the same answers.
 - `cast_ray(ray, max)`: the first trunk a ray meets, as `TreeHit { tree, point, normal, distance }`: the player's look, an arrow, a falling branch (`max` may be `f32::INFINITY`: the walk stops where the ray leaves the cells the trees fill). Crowns and leaves do not stop it.
-- `get(entity)`, `iter()`, `len()`: each tree as an `IndexedTree { entity, base, axis, height, base_radius, top_radius, undergrowth }`. `undergrowth` is the plant's `TreeParams::undergrowth` (the shrub, juniper and fern presets): filter on it where only trees count, an axe's or a wall's.
+- `get(entity)`, `iter()`, `len()`: each tree as an `IndexedTree { entity, base, axis, height, base_radius, top_radius, undergrowth, condition }`. `undergrowth` is the plant's `TreeParams::undergrowth` (the shrub, juniper and fern presets): filter on it where only trees count, an axe's or a wall's. `condition` is the tree's `TreeCondition`, below.
+- `condition_of(entity)`: how well a tree is, `Some(TreeCondition)` for a tree the index holds and `None` for one it does not (a felled tree, a despawned one, a pooled tree whose pool has not loaded).
 - `obstacles_within(at, radius)`, `obstacles()`: the lying wood a walker bumps into, which the queries above (standing trees) do not hold: every stump (felled or pooled, its `TreeStump::capsule` from its foot to its cut), bucked log (`TreeLog::capsule`) and the trunk and limbs above the cut of a tree lying on the ground (a felled tree at rest that has a `TreeShape`, and a pooled deadfall's lying tree), as `Obstacle { entity, kind, capsule }` in world space; `Obstacle::distance_to(at)` measures across the ground. A falling tree joins once it lies still, and anything goes with its entity.
+
+**Sick and dying trees.** A tree has a `TreeCondition`, `Healthy`, `Sick` or `Dying` (ordered, so `condition >= TreeCondition::Sick` is "not healthy"), a component on the tree's own entity that a game sets by inserting it: `commands.entity(tree).insert(TreeCondition::Sick)`. A tree with none is healthy, so a forest of a hundred thousand pays nothing for the trees that are well, and inserting `Healthy` or removing the component clears it. The index shows a change from the next frame, on every tree a query returns. The condition is the *tree's*, not its pool's: a pooled tree keeps it through a change of variant, a reload of its pool and being taken off its pool and put back, and one set before its pool has loaded shows when it does; a felled tree leaves the index and keeps the component as it was when it was cut. It is state, not looks: the crate draws a sick tree as it draws a healthy one, so a game that wants it to look different recolours it (`RecolorTree`, or a `PooledLook` of the pool's own looks).
 
 ```rust,no_run
 use bevy::prelude::*;
@@ -1056,6 +1059,16 @@ fn in_the_blast(index: &FloraIndex, at: Vec2) -> Vec<Entity> {
 // A walker half a metre wide: can it step to `to`, or is a stump, a log or a fallen trunk there?
 fn free_to_step(index: &FloraIndex, to: Vec2) -> bool {
     index.obstacles_within(to, 0.25).next().is_none() && index.within(to, 0.25).next().is_none()
+}
+
+// A blight takes the trees near a point, and counts the sick and dying ones it holds there.
+fn blight(mut commands: Commands, index: Res<FloraIndex>) {
+    let centre = Vec2::new(10.0, -4.0);
+    for tree in index.within(centre, 12.0).filter(|tree| !tree.undergrowth) {
+        commands.entity(tree.entity).insert(TreeCondition::Sick);
+    }
+    let ill = index.within(centre, 12.0).filter(|tree| tree.condition >= TreeCondition::Sick).count();
+    info!("{ill} trees near the blight are sick or dying");
 }
 ```
 
@@ -1140,7 +1153,7 @@ assert!(tree.skeleton.nodes.len() > 1);
 - **Seeing the player.** `SeeThroughTrees` on the camera dithers out the trees between it and the player, prepasses included, while shadows keep the whole trees; a cone under a perspective camera, a cylinder under an orthographic one, shaped by a share kept, a feather, a near limit and a floor to match a game's own fade; nothing is compiled in while no camera has it.
 - **Orthographic cameras.** Under an isometric or top-down orthographic camera the levels of detail and impostors follow the zoom, not the distance (`LodScale` scales them by hand too); a pool's impostors can be pictures taken from the camera's pitch and cast shadows, so a far forest reads like the near one.
 - **Gameplay shapes.** `TreeShape`: capsules for the trunk and limbs and a box around the crown, kept up to date as a tree grows (CPU or GPU) and filled on pooled trees, ready to become colliders in any physics engine; `TreeMature` announces the moment a growing tree is done.
-- **Finding trees.** `FloraIndex` holds every standing tree, pooled ones included, by where its trunk stands: the nearest tree to a point, the trees within a radius and the trunk a ray meets, in microseconds among 100 000 trees, kept up to date as trees are planted, grow, move, fall or go.
+- **Finding trees.** `FloraIndex` holds every standing tree, pooled ones included, by where its trunk stands: the nearest tree to a point, the trees within a radius and the trunk a ray meets, in microseconds among 100 000 trees, kept up to date as trees are planted, grow, move, fall or go, and says which are sick or dying (`TreeCondition`, set by inserting it on a tree).
 - **Saving and loading.** A felled tree comes back lying where it fell (`FellTree::lying`), picked fruit stays picked (`TreeFruit::with_picked`), and a fire's grid is restored as it was, still burning (`FloraFire::restore`).
 - **Trees that react.** `TreeShakes` swings the trees near a hit, a passing character or a blast and rustles their leaves, on every way a tree is drawn, for one small buffer write and nothing per tree while nothing shakes. Hits knock leaves off and felled trees shed them as they land: they tumble down, drift with the wind and lie on the ground a while, moved on the GPU; `DropLeaves` drops them from any tree.
 - **Picking fruit.** `TreeFruit` lists a fruiting tree's fruit, finds the one nearest a hand and picks it off the tree until the next blossom; shakes knock fruit loose to fall, bounce and lie on the ground as `FallenFruit` entities for the game to pick up.
