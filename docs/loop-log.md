@@ -905,3 +905,151 @@ test binaries, the release example binaries, `package/bevy_flora-0.47.0*`); `df 
 11 GB at the lowest, 19 GB after. Kept: the target directory's dependency builds (older than this pass).
 Leftovers of earlier passes: none found (no `f*_base` in `~` or `/tmp`, `git worktree list` shows only the clone);
 the branches `loop/iter-1` to `-9` remain on origin, not deleted.
+
+## Iteration 10 — 2026-10-31 — A tree falls ill over seconds, not in one frame: `ConditionGlide` (D-080)
+
+Host: this Mac (Apple M5, Metal), not big. Disk 19 GB free at the start, 9 GB at the lowest (the shared
+`CARGO_TARGET_DIR` is 80 GB); one build or one render at a time. HomeStill: `hs status` ok (18 670 documents,
+488 845 chunks, 780 queued; both scribes and distill up), `distill_search` and `catalog_recent` answered.
+Corpus re-scan of `catalog_recent` (200): the three documents it holds that touch the crate (`10.3832_ifor0538-003`,
+`sig2024_Interactive_Invigoration_...`, `10.5194_bg-2015-619`) were already in `corpus.md`; the rest was
+psychology and medicine, so no re-scan commit. The note's three botanical sources were found with
+`distill_search` and added in one `Research: corpus` commit (`c29df23`; its first text named the wrong authors
+of `10.1051_forest:2006042`, corrected in the docs commit: Bréda, Huc, Granier and Dreyer, 2006).
+
+**State found.** No open issue on `bevy_flora` (`gh` answered, the list empty), no `consumer` label, no parked
+branch (`git branch --list 'wiggum/parked-*'` empty), a clean `main` at `8e6e423`. bevy_emerge's family issue #102
+(F6) is closed; its `ops_tree.rs` and `forest_view.rs` still hand-roll `TreePreset::ALL.iter().find(|t| t.name() ==
+name)` (backlog 2). Sanctuary uses presets as constants only. v0.47.0 is 1 h 30 m old at the start (tag `04:23`), so the
+6-hour rule gives no release before 10:23 and none this pass.
+
+**Pick.** The backlog's "a gradual decline" (iteration 6's #2, kept through iterations 7 to 9): a `TreeCondition`
+change was drawn the frame after it was set, a sick oak losing 35% of its leaves and a dying one 80% at once, up to
+a thousand leaves and the whole colour in one frame; a game can fake it with two class changes and not smoothly,
+and #87's own ask was "a copse that dies in one season and not the next". Ranked: (1) this (the largest pop left in
+a state change of a shipped feature, in the brief's "growth never jumps"; it needs per-tree draw state a game cannot
+supply); (2) `TreePreset::from_name` / `FromStr` for editors (API friction by the brief's order, ten lines; taken
+next); (3) the hull crown by leaf size; (4) finish the willow (D-052); (5) D-074 / D-075, which do not reproduce
+here (full galleries and filtered runs agree byte for byte per binary on this Mac, 40 scenarios twice each).
+No bug and no consumer issue outranked it.
+
+**What changed** (`docs/research/condition-glide.md`, committed first as `2e8c232`; implementation `7181947`).
+
+- `ConditionGlide { seconds }`, a resource, 0 by default (a change is drawn at once, as every caller has had it).
+  Above 0 a change of `TreeCondition` is drawn as a decline: a level 0 / 0.5 / 1 (healthy / sick / dying) rises
+  along a smoothstep, the lost share (0, 0.35, 0.8) and the withering (0, 0.5, 1) are functions of it through the
+  classes' own values, so a settled tree is drawn exactly as before. A change half way starts at the level on
+  screen (continuous); `Healthy` or a removed component recovers it, the leaves coming back; a tree that appears
+  with its condition (its `Children` were added the frame the condition changed, or later) shows it at once;
+  `FloraIndex` and `condition_of` answer the class at once. The time is the app's `Time`.
+- The level rides in the mesh tag above the class (bit 10 "gliding", bits 11-18 the level in 254 steps); the
+  shaders read `condition_level` / `level_defoliation` / `level_withering` (`common.wesl`, `impostor.wesl`) in
+  place of the class functions, in every leaf stage including the GPU-growth twins. `ConditionShown` rides on every
+  tree with a condition, `ConditionGliding` (sparse-set storage) on a tree for the length of its glide, so only
+  gliding trees are visited each frame; `tag_for` and the falling leaves' `decline_of` take the level, so a pooled
+  tree's new look keeps its glide and a leaf that falls is as dry as those on the tree.
+- Each tree steps its level at its own moments (its level in steps plus a per-entity fraction of a step, rounded
+  down, never against the way it goes): found by measurement, below.
+- `inspect --decline <seconds>[,<after>[,<every>]]` photographs a glide (the tree starts healthy, the condition is
+  set once it is ready; the clock is fixed, so runs repeat).
+- Assumed decision (owner may override): (1) default `seconds` 0 over 4 s or a per-tree component, because a default
+  above 0 changes the tag every existing condition test asserts and every caller's picture (a protected check may only
+  grow), and the resource is one line; (2) a glide only for a tree already standing, so a save loaded with a thousand
+  dying trees does not spend a minute dying; (3) the smoothstep and 254 steps are design defaults (the beech papers
+  give a sequence and yearly grades, not a curve).
+- Tests: 8 new in `condition.rs` and 1 in `falling.rs` (listed in the CHANGELOG), the existing condition tests pass
+  unchanged (no protected check touched; the mutation check of the in-phase test fails with all 120 trees stepping in
+  one frame). 354 lib and 69 doc tests (the README snippet and the type's example are two of them).
+- Docs: CHANGELOG `[Unreleased]`, the README's condition section and its `inspect` row, ARCHITECTURE's condition
+  glide bullet, `lib.rs`'s crate docs, D-080 and the `loop-10` line of `qa/visual_findings.md`.
+- No public API removed or changed, one type added: the next release is a patch, 0.47.1.
+
+**Sources.** Botanical: "From the comfort zone to crown dieback: Sequence of physiological stress thresholds in
+mature European beech trees" (`10.1016_j.scitotenv.2020.141792`: "important responses ... to progressive drought,
+such as reduced transpiration rate, early defoliation, native embolism and crown dieback"; "mean crown dieback in
+the year after the drought exceeded 20%"), "European beech dieback after premature leaf senescence during the 2018
+drought in northern Switzerland" (`10.1111_plb.13467`: "mortality increased monotonously over time"), Bréda et al.
+2006 (`10.1051_forest:2006042`: "premature leaf shedding during August. The fallen leaves were still green").
+Shipping game: Unreal Engine 5.7's Procedural Vegetation Editor documentation ("adjust the Offset parameter to make
+the plant overall healthier"), Whatley's Far Cry vegetation as Real-Time Rendering quotes it (stem
+`book_real_time_rendering_4th_akenine`, p. 879: a dissolve "experienced as much more continuous than the discrete
+geometry LOD method, and so avoids popping"), Timberborn's dry/dead models (second hand, as iteration 5). Technical:
+Luebke et al. (`book_level_of_detail_3d_graphics_luebke`, pp. 140-141: "a noticeable and distracting popping during
+the transition between LODs"), Bevy's `MeshTag`, this crate's `glide.rs`. Pending index: Whatley's chapter itself; a
+per-week curve of one tree's defoliation; a shipped game that animates tree health at runtime.
+
+**Numbers** (`/tmp/f10`, removed with the scratch).
+
+- Gallery, 526 scenarios, CPU and `--gpu`: 526 PNG = 526 rows each, none under 100 KB, no flag in any (`-` x 526,
+  before and after), no BLANK_CAPTURE or CAPTURE_TIMEOUT, no `ERROR` or `panicked` (CPU: the two asset-watcher
+  `WARN`s; `--gpu`: those and the known hull-crown note). Against main's binary: 522 images byte for byte, on the
+  CPU and under `--gpu`; 4 (`painterly_oak`, `painterly_maple`, `toon_oak`, `toon_maple`) differ in ONE pixel of
+  1 228 800 each (`magick compare -metric AE` 1; (306,688) for the oaks, (349,696) for the maples). Not noise: two
+  runs of the 40 `painterly_`/`toon_` scenarios agree byte for byte for each binary (base1 = base2, new1 = new2);
+  painterly in the filtered run is equal base to new, so the pixel moved in the full run only and in the toon pair
+  in both; I read it as instruction order after the `common.wesl` edit (not proved). The full run's ffmpeg
+  `signalstats` first made these look like 1.2 to 8.1 of 255; `magick compare` says one pixel. `stats.tsv` columns
+  1-10: identical for all 526, CPU against `--gpu` and against main's.
+- GPU parity (`compare_gallery`), all 526: mean of means **0.029**, worst **1.162** (iteration 9: 0.029, 1.162); the
+  seven CI scenarios **0.218 and 0.922** (0.218 and 0.922); with the 30 `condition_*` scenarios added, 37 images
+  0.044 / 0.922 for the main binary and the new one alike. A GPU-grown oak (`GpuGrowth`, a throwaway `inspect`
+  insert, removed) against the CPU oak at the nine levels of an 8 s decline: mean 4e-5 of 255, one pixel.
+- Forest bench, interleaved base / new (b n n b b n n b), medians of four, ms/frame (cpu): pool 10 000 4.97 (13.84)
+  -> 5.00 (13.84) +0.4% (0.0%); naive 1 000 34.88 (18.71) -> 34.89 (18.77) +0.1% (+0.3%); gpu-live 1 000, 200 frames
+  178.51 (243.40) -> 180.11 (245.55) +0.9% (+0.9%). A second, shorter interleave of the final binary ran while the
+  host was slow (naive 154 ms against 35, other loops on the machine): base and final agreed within 1% and it is not
+  quoted. No tree-building file was touched, so no build probe.
+- **What a glide costs** (the one finding that shaped the code): 10 000 pooled oaks, all declining at once from the
+  start of the measured window (a throwaway `FOREST_DECLINE` hack in `forest`, removed), against a run without,
+  interleaved. Without per-tree fractions of a step, every tree wrote its tags in the same frames: 6 s glide 5.0 ->
+  6.4-6.5 ms, p95 5.4 -> 10.8-11.1, cpu 14.7 -> 18.8. With them: 6 s 5.0 -> 6.5 (p95 10.5, cpu 18.9), 30 s 5.0 -> 5.6
+  (p95 6.1, cpu 16.8); the in-phase spikes of a longer glide are gone (a test fails without the fractions) but the
+  total is the number of tags that change. Headless, the systems alone, 10 000 trees: 0.377 ms healthy, 0.395 settled
+  sick, 0.50-0.52 while all glide over 30 s (worst frame 0.73; 1.4 when they all arrive in one frame), the frame all
+  10 000 begin a glide 1.95 ms (the at-once path 4.9). A stand of a few hundred trees: under 0.05 ms (linear
+  extrapolation, not measured).
+- Looked at: `/tmp/f10/glide/oak2_strip.png` (nine frames of an 8 s decline, `--decline 8,0,1`): a green crown
+  thinning and drying with no frame that jumps; frame 0 is the healthy oak and frame 8 the `--condition dying` oak
+  byte for byte; frame 4 (level 0.5) is 0.46 of 255 from `--condition sick`, healthy and dying are 4.0 and 5.2 from
+  it. `/tmp/f10/glide/imp_strip.png` (`--mode pool --level 3`, the impostor): its patches thin and dry the same way
+  to the same end. Not looked at: a mid-glide frame next to the autumn (the two compose by the shader's own
+  products); no clip or still was added to the README (the eleven clips are re-recorded by the release).
+- Gate: `cargo test --all-features --lib` (354) and `--doc` (69), `cargo clippy --all-targets --all-features -D
+  warnings` (two `type_complexity` fixed with the crate's `#[allow]`), `cargo doc -D warnings`, `cargo check`,
+  `--features serde`, `cargo package --locked` (131 files, verification build passed), the release examples with
+  `--all-features` built and run. Gate gaps, said plainly: `cargo build`, `cargo build --release` and `cargo build
+  --examples` with default features were `cargo check`, and `cargo test --all-features` ran as `--lib` and `--doc`,
+  each of the others being a 3 to 4 GB Bevy build on a disk down to 9 GB.
+
+**Critique and verdict** (`/tmp/f10/critique.md`): condition glide: **GREAT** for what it promises (monotone,
+arrives as the class's own tag bit for bit, continuous across a change, a tree appearing with its condition shows it at
+once, the index answers at once, settled forests cost what they cost, the strips read as one tree thinning). Flaws
+found, none stopping a ship: (1) off by default, so a game still gets the pop until it sets the resource (assumed
+decision above; one number to change); (2) a leaf vanishes whole between steps (6-10 of 3 000 on an oak) and does
+not fall or shrink (a game adds `DropLeaves`); (3) the cost while many trees glide scales with the tags that change:
+all 10 000 at once cost +1.5 ms over 6 s, +0.6 over 30 s; (4) wood meshes are tagged though their vertex stage never
+reads the level, so about half the writes are wasted (nothing marks leaf meshes); (5) the "already standing" rule is
+a heuristic on `Children`'s added tick (tested for a save loaded with its conditions, not for a rebuild in the
+frame of a change); (6) no gallery scenario shows a level between classes (a still has no clock), so the levels in
+between rest on `inspect --decline`, the CPU and impostor strips and the throwaway GPU run; (7) the four
+one-pixel differences, unexplained beyond instruction order; (8) the clips are not re-recorded (no release yet).
+
+**Commits** (`loop/iter-10`): `2e8c232` Research: condition glide, `7181947` the implementation and its tests,
+`c29df23` Research: corpus, `10408d1` and `df894f1` the docs and numbers.
+
+### Ranked backlog after iteration 10
+
+1. **Release 0.47.1** (a patch: one public type added, nothing removed) once v0.47.0 is 6 hours old (10:23 local, Oct
+   31): it carries iterations 9 and 10; re-record the eleven clips (`growth.gif` changes by iteration 9's leaf
+   ease), `cargo semver-checks` if it fits the disk; `[Unreleased]` is written.
+2. **`TreePreset::from_name` / `FromStr`** for editors: bevy_emerge's `ops_tree.rs` and `forest_view.rs` hand-roll
+   `TreePreset::ALL.iter().find(|t| t.name() == name)`; the `.tree.ron` dotted-path editor (`set_path` over
+   `serde_json`) is its own code too.
+3. **A glide with no per-tree cost**: a leaf marker so only leaf meshes are tagged (about half the writes), or a
+   shared slot in the buffer for trees that began together (no per-tree write at all, a layout change in eight
+   shaders' constants); and the leaves a glide loses falling (`LeafBurst`) instead of vanishing.
+4. **The hull crown by leaf size**: `crown_hull` takes positions only, so a `CrownStyle::Hull` tree growing on the
+   CPU still pops its hull when a leaf is born.
+5. **Finish the willow (D-052)**: leaf ribbons, strands kept as lines at level 1, limbs whose leaves reach their tips,
+   a greener strand colour, a forked trunk; D-074 / D-075 on big; `RadialOutward` facing on a growing branch; a CPU
+   mirror of `wind_bend`.
