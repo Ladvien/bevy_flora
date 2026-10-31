@@ -10,8 +10,6 @@ Every example in the crate, and the first-person sandbox that puts the gameplay 
 
 *`cargo run --release --example playground -- --demo`; without `--demo` it is yours to play: `W` `A` `S` `D` walk, right mouse look, left click axe, `F` shake, `E` pick, `B` buck, `G` fire, `R` rain, `Y` a month on, `F5` save, `F9` load.*
 
-## Examples
-
 | example | what it shows |
 |---|---|
 | `showcase` | An interactive growing tree. Right-drag / wheel orbits, `[` `]` cycle presets, `N` reseeds, `Space` toggles growth, `R` restarts, `M` jumps to mature, `G` rebuilds, `U` switches between growing in the vertex shader (`GpuGrowth`) and rebuilding on the CPU, `C` draws the gameplay shape, `Y` runs the year (`FloraSeason::of_year`, 40 s a year), `H` hits the tree (`TreeShakes`; leaves fall), `X` strikes it with an axe (`TreeNotch`, deeper with each blow; the fourth fells it), `F` fells it (`FellTree`) and then `B` bucks it into logs (`BuckTree`); any other key brings a new one. |

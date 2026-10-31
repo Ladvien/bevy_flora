@@ -10,10 +10,6 @@
 
 *`cargo run --release --example capture_growth`: the maple preset from age 0 to maturity, in a light wind.*
 
-![A mature maple in front of a bare sky: its trunk flaring into roots, its forking limbs, its scanned bark and its leaf cards cut to real maple outlines](docs/media/still.png)
-
-*The maple preset at maturity: `cargo run --release --example inspect -- --preset maple --mode tree --distance 15 --yaw 20 --eye 4`.*
-
 **Status:** usable · Bevy 0.20 · MSRV 1.97.1
 
 **Why this instead of a hand-modelled or billboard forest:** a tree here is a value, not an asset, so it can be a different tree every run, grow from a seedling while the player watches, and be felled, burnt, picked or scattered by the game at a hundred thousand trees a frame.
@@ -69,6 +65,10 @@ cargo run --release --example showcase
 Right-drag and the wheel orbit, `[` `]` cycle the 20 presets, `Space` grows the tree, `X` notches it with an axe and the fourth blow fells it.
 
 ## What you can do
+
+![A mature maple in front of a bare sky: its trunk flaring into roots, its forking limbs, its scanned bark and its leaf cards cut to real maple outlines](docs/media/still.png)
+
+*The maple preset at maturity: `cargo run --release --example inspect -- --preset maple --mode tree --distance 15 --yaw 20 --eye 4`.*
 
 - **Grow a tree over any age**, from a seedling to a mature crown, on the CPU or in the vertex shader: [`GpuGrowth`](docs/guide/growing.md#growing-many-trees-gpugrowth) draws 200 growing oaks at 0.81 ms a frame where the CPU rebuild costs 17.6 ms.
 - **Build a forest** of a hundred thousand trees from a pool of a few seed variants, with three levels of detail and a baked impostor for the far field: [pools](docs/guide/forests.md#drawing-a-forest-treepool), [looks](docs/guide/forests.md#one-forest-many-looks-poolcolors), [scattering](docs/guide/forests.md#planting-a-forest-scatter) and [terrain](docs/guide/forests.md#on-terrain-floraground).
