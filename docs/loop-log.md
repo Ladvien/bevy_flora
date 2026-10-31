@@ -188,3 +188,17 @@ release. #87 skipped (enhancement, not reached).
 5. **D-052 willow curtains**, then **owner clean-up of #90's locator** (drop `scale_y` from the old
    test's locator and the comment together) and a CPU-side behavioural mirror of `wind_bend` held to
    the shader as `growth_common.wesl` is held to `frame.rs`.
+
+**Release and clean-up (iteration 4).** Merge `63439ab` on `main` (pushed, tree identical to
+`loop/iter-4`, so the gate stood), `cargo publish` **bevy_flora 0.46.1**, tag `v0.46.1`, GitHub
+release: https://crates.io/crates/bevy_flora/0.46.1 (`cargo info bevy_flora@0.46.1` resolves).
+#89, #90, #91, #92, #93 and #94 are closed (#90 carries the `assumed-decision` label); #87 is open.
+Removed, mine: the worktree `~/f4_base` and `~/f4_base_bin`, the release-profile example binaries and
+incremental caches and the debug example binaries and incremental caches in `CARGO_TARGET_DIR`
+(`/Users/ladvien/target/flora-loop`), `/tmp/f4` and its findings and critique files. Kept: that
+target directory's dependency builds, release ones included (about 12 GB added by this pass: the
+release profile did not exist there before, and the debug default-feature variant is new). The disk
+was 16 GB free when the pass began and is 3.7 GB now (`df -h /`, 100% by Apple's rounding): the next
+pass on this Mac should free space first (`cargo build --examples` alone needs 2 to 4 GB). Leftovers
+of earlier passes: none found (`git worktree list` shows only the clone; no `f*` directories in `~`
+or `/tmp`); the branches `loop/iter-1`, `-2`, `-3` and `-4` remain on origin and are not deleted.
