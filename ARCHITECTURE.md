@@ -30,6 +30,20 @@ and scale to full size. Each node draws leaf randomness from its own RNG stream
 (`TerminalBranches`, `TipClusters`) pick the same branches at every age and a
 leaf never disappears as the tree grows.
 
+Under `AllBranches` a leaf has one place on its branch, whatever the age
+(`add_distributed_leaves`, `docs/research/leaf-places.md`). A grown branch has `N` leaf
+slots (`distributed_leaf_count` of `Node::full_length`, the exact grown length: `length /
+progress` is it only to a rounding error): slot `j` sits at `0.3 + 0.7 t^2` of the branch
+(`0.1 + 0.9 t` on a strand), `t = (j + u_j) / N`, with the draws of its own (`u_j`, size,
+direction, turn, tint, hue; `draw_per_leaf`). A branch `n = distributed_leaf_count(length)`
+leaves long shows the `n` slots that appear first (`leaf_ranks`: the tip, then bisecting, so
+the leaves are spread over the whole branch at every `n`). A branch that gains a leaf moves
+none of the others, and the CPU tree and `GpuGrowth` put every leaf in the same place: the GPU
+tags a leaf with its rank (`gpu/mesh.rs`), `state.rs` writes `n`, and the shader shows the
+leaves whose rank is under it, at `start + length * c`. `gpu::tests` compares every leaf's
+vertices with the CPU mesher's at seven ages (`grown_leaves_and_flowers_match_the_cpu_meshers`).
+A grown branch shows every slot, in slot order, so a mature tree is what it always was.
+
 ## Leaf look (baked into the mesh)
 
 The mesh carries what the leaf shader reads (see Leaf shading and wind): leaf-shaped

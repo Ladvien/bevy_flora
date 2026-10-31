@@ -86,61 +86,78 @@ and a vertex shader shows a younger tree from per-node state.
 
 ## Model adopted
 
-A branch's leaf `i` has one place, `along_i = 0.3 + 0.7 * t_i^2` with `t_i = (i + u_i) / N`, where `u_i` is the
-leaf's draw (the same at every age: the node's stream is `SeededRng::from_parts(seed, node.id)` and the
-draws per leaf do not depend on the count) and `N` is the leaf count of the **grown** branch
-(`distributed_leaf_count` of `length / progress`). A young branch shows its first
-`distributed_leaf_count(length)` leaves at those places, so its leaves are the inner part of the grown
-branch's and the new ones appear toward the tip as it lengthens. For a grown branch `N = n`, so a mature tree,
-and every tree at an age where every branch is grown, is unchanged bit for bit. This is the rule a strand
-already has (`StrandParams`, iteration 7), and the one `GpuGrowth` shows today: `state.rs` writes
-`leaf_count = distributed_leaf_count(young length)` and the shader shows the first `leaf_count` leaves at
-`start + length * c`, `c` measured once on the mature mesh. Nothing in `src/gpu/` or the shaders changes.
+A grown branch has `N` leaf **slots** (`N` = `distributed_leaf_count` of its `full_length`, the exact grown
+length that `Node::full_length` now carries: `length / progress` is it only to a rounding error, and a count
+that lands on a whole number, such as 4 leaves a metre on 2.5 m, fell to 9 instead of 10 at some ages
+and moved every leaf of the branch). Slot `j` (counted from the base) sits at
+`along_j = 0.3 + 0.7 * t_j^2` with `t_j = (j + u_j) / N`, and has draws of its own (`u_j`, size, direction,
+turn, tint and hue: the node's stream is `SeededRng::from_parts(seed, node.id)`, drawn in slot order, so slot
+`j`'s are the same at every age). A branch that is `n = distributed_leaf_count(length)` leaves long now shows
+`n` of the `N` slots: the `n` that **appear first**, in the order of `leaf_ranks(N)`. That order puts the
+tip slot first, then bisects: counted from the tip, slot `m` ranks by the bit-reversal of `m` (van der Corput
+order). So the first `n` leaves are spread over the whole branch at every `n` and a young limb is not bare at
+its tip; a leaf that appears fills a gap, and none of those already shown moves. Tints and hues are drawn per
+slot (`draw_per_leaf`), so a leaf keeps its colour too.
 
-`along` is a fraction of the branch, as `frame.rs` places a leaf (`start + length * tag.axis`), so while a
-branch lengthens its leaves move outward with its wood, in proportion to their place on it. That is growth,
-and it is continuous: a leaf moves by `along * (change of length)`, centimetres per step, never by a
-re-spread.
+For a grown branch `n = N` and every slot shows, in slot order with the same draws: a mature tree, and every
+tree at an age where every branch is grown, is unchanged bit for bit (the first, prefix-order version of the
+rule changed nothing there either, but left young limbs bare at the tip: the oak and apple gallery
+scenarios at ages 4 to 8 showed thin sticks past the last leaf, and it was dropped for the ranks).
+
+`GpuGrowth` shows the same leaves with no change to its shaders or buffers: `state.rs` writes
+`leaf_count = distributed_leaf_count(young length)`, `gpu/mesh.rs` tags a leaf's vertices with its
+**rank** as the ordinal, and the shader shows the leaves whose ordinal is under `leaf_count`, at
+`start + length * c`, `c` measured once on the mature mesh.
+
+`along` is a fraction of the branch, as `frame.rs` places a leaf, so while a branch lengthens its leaves move
+outward with its wood in proportion to their place on it. That is growth, and it is continuous: a leaf moves
+by `along * (change of length)`, never by a re-spread.
 
 ## Parameters
 
 None added. `FoliageParams::density`, `use_crown_density`, `height_falloff` and `leaf_size` set `N` and the
-leaf as before; `GrowthParams::leaf_threshold` still decides when a node shows leaves at all.
+leaf as before; `GrowthParams::leaf_threshold` still decides when a node shows leaves at all. `Node` gains
+`full_length` (public, set by `generate_skeleton`).
 
 ## Validation targets
 
-- A young branch's leaves are the first ones of the grown branch, at the same fractions of its length
-  (`<= 1e-3`), for every `AllBranches` preset, at several ages (a test that fails before: an oak leaf sits up to
-  92 cm from the place it has on the grown branch).
+- A young branch's leaves are slots of the grown branch, the ones that appear first, at the same fractions of
+  its length (`<= 1e-3`) and with the same tint, hue and turn, for every `AllBranches` preset and the
+  willow's strands, over a fine sweep of ages (a test that fails before: an oak leaf sits up to 92 cm from
+  the place it has on the grown branch).
+- A count that lands on a whole number keeps its leaves in place at every progress (a test that fails with
+  `length / progress`).
 - Mature trees: `stats.tsv` columns 1-10 identical for every scenario whose branches are all grown; the young
-  ones change only in the bounding box (leaf positions), never in a vertex or triangle count.
-- CPU leaf against GPU leaf, as the probe above measures it: p95 under 1 cm and max under 1 cm (float
-  noise), every `AllBranches` preset, and `grown_leaves_and_flowers_match_the_cpu_meshers` runs over
-  `AllBranches` presets (it skips them today).
-- CPU leaf moves per growth step: p95 under 5 cm per 0.1 year (the branch's own elongation), against 15 to 17.
+  ones change only in the bounding box and, for the apple, in the number of leaves that carry a fruit (a
+  leaf's fruit is its slot's, and a young apple shows other slots than it did).
+- CPU leaf against GPU leaf, as the probe measures it: 0 (`<= 2e-4 m`, `grown_leaves_and_flowers_match_the_cpu_meshers`
+  runs over the `AllBranches` presets and it skips them today), against p95 21 to 58 cm.
 - `compare_gallery` on the seven CI scenarios (`grow_oak_4`, `grow_oak_6`, `age_spruce_6`, `smoothyoung_spruce_4`,
-  `age_willow_6`, `smoothyoung_oak_4`, `pipeyoung_pine_5`): no worse than 0.581 mean / 1.205 worst before
-  the weeping strands, 0.694 / 1.452 on `main`; expected better.
+  `age_willow_6`, `smoothyoung_oak_4`, `pipeyoung_pine_5`): better than 0.694 mean / 1.452 worst on `main`;
+  the full gallery's mean of means better than 0.080 and its worst better than 2.109.
 - No new mesh flag; forest bench and build probe within 5% (the change moves where leaves go, not how many).
 
 ## What great looks like
 
 A tree grown on the CPU at ages 3, 4, 5, 6 in a row and the same four ages on the GPU are the same picture;
-a limb gaining a leaf does not shuffle the leaves it already has; in a growth clip a crown fills in from the
-inside out as the tips reach further and each new leaf opens at the end of the leaf-bearing part of a limb.
-The young crown must not read worse than today's: leaves sit on their wood (C5 detached or embedded leaves
-in `bevy-flora-visual-qa`), the silhouette is still the species' (C8), no bare limb ends look cut off.
+a limb gaining a leaf does not shuffle the leaves it already has; in a growth clip a young limb carries leaves
+along its whole length (a terminal leaf first, then the gaps filled) as it did, and the crown thickens
+without a leaf hopping along its wood. The young crown must not read worse than it did: leaves sit on their
+wood (C5 detached or embedded leaves in `bevy-flora-visual-qa`), the silhouette is still the species' (C8),
+no limb ends bare in a stick.
 
 ## Deviations
 
 - A leaf's place is a fraction of its branch, not an absolute distance from the base ("In place" timing, as a
   sub-branch has: `attach_t / parent.progress` in `growth.rs`). Placing leaves in place would put the
-  anchor at `a_i / progress` of the young node, which `frame.rs` cannot do (it has `start`, `length` and the
-  mature offset, not the axis's direction and bend): a design choice, taken so the CPU tree equals the GPU one
-  with no change to the shaders or the node buffer. The cost is that a growing branch's leaves move outward
-  with its wood while its sub-branches hold their attach points; both are continuous.
-- A young branch's tip is bare of leaves until it has grown them (the GPU path already shows it so; the CPU
-  path used to spread the young leaves to the tip).
+  anchor at `a_j / progress` of the young node, and `frame.rs` cannot find that point: a bent branch's axis is
+  a polyline whose ring count is chosen from its curvature (`Node::axis_points`), with no closed form for the
+  shader, which has `start`, `length` and the mature offset only. A design choice, taken so the CPU tree equals
+  the GPU one with no change to the shaders or the node buffer. The cost is that a growing branch's leaves move
+  outward with its wood while its sub-branches hold their attach points; both are continuous.
+- Leaves appear tip first and then in the gaps, not acropetally from the base (which the botanical sources
+  describe, and which the first version of this change did): at every `n` the leaves are spread over the
+  limb, as the look before this change had them. A design default.
 - No default changes.
 
 ## Pending index

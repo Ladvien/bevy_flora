@@ -45,8 +45,12 @@ pub struct Node {
     pub start: Vec3,
     /// Unit direction the segment points in, before gravity bend.
     pub direction: Vec3,
-    /// Full segment length in metres.
+    /// Segment length in metres: [`Node::full_length`] times `progress`.
     pub length: f32,
+    /// Length of the segment once grown, in metres: what `length` is in the skeleton
+    /// [`Skeleton::aged`] ages, and stays through every age (`length / progress` is this only to a
+    /// rounding error, which a leaf count that lands on a whole number cannot take).
+    pub full_length: f32,
     /// Downward bend of the wood toward the tip (`gravity_strength × (1 −
     /// stiffness)`; 0 = straight, always 0 for the trunk). See [`Node::axis`].
     pub bend: f32,
@@ -369,6 +373,7 @@ pub fn generate_skeleton(params: &TreeParams) -> Skeleton {
             start: Vec3::ZERO,
             direction: Vec3::Y,
             length: trunk.height,
+            full_length: trunk.height,
             bend: 0.0,
             base_radius: trunk.radius * trunk.flare,
             tip_radius: trunk.radius * trunk.taper,
@@ -435,6 +440,9 @@ pub fn generate_skeleton(params: &TreeParams) -> Skeleton {
     let floor = params.branches.floor_level + if params.mesh.pipe_radius_enabled { params.mesh.pipe_radius_min } else { 0.0 };
     skeleton.seat_on_parents(&params.branches, floor, &params.trunk, params.seed);
     hang_strands(&mut skeleton, params);
+    for node in &mut skeleton.nodes {
+        node.full_length = node.length;
+    }
     crate::growth::assign_birth_times(&mut skeleton, &params.growth);
     skeleton
 }
@@ -526,6 +534,7 @@ fn blank_node() -> Node {
         start: Vec3::ZERO,
         direction: Vec3::Y,
         length: 0.0,
+        full_length: 0.0,
         bend: 0.0,
         base_radius: 0.0,
         tip_radius: 0.0,
