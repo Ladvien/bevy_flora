@@ -1053,3 +1053,21 @@ one-pixel differences, unexplained beyond instruction order; (8) the clips are n
 5. **Finish the willow (D-052)**: leaf ribbons, strands kept as lines at level 1, limbs whose leaves reach their tips,
    a greener strand colour, a forked trunk; D-074 / D-075 on big; `RadialOutward` facing on a growing branch; a CPU
    mirror of `wind_bend`.
+
+**Clean-up (iteration 10).** Merge `24b7463` on `main` (pushed; tree identical to `loop/iter-10`, so the gate stood,
+and re-run on the merged tree: 354 lib tests, clippy `--all-targets --all-features -D warnings`). No release:
+v0.47.0 (tag `04:23`) was 3 h 19 m old at the push, the 6-hour rule; the next release is 0.47.1 from 10:23 local on,
+and carries iterations 9 and 10 (the CHANGELOG's `[Unreleased]` is written; the README's claims about the glide are
+true of the code, and no clip shows it). No issue referenced or closed (none was open). Baseline kept as copies of
+main's release binaries under `/tmp/f10/base` (no second worktree or target directory: `git worktree list` shows only
+the clone). Removed, mine: `/tmp/f10` (4.7 GB: binaries, the before, after, final and `--gpu` galleries, parity and
+re-run renders, glide strips, bench output, findings, critique, the throwaway probe, `forest` and `inspect` copies),
+the throwaway `tests/zz_probe.rs` (copied to the scratch and deleted before the first commit), the `FOREST_DECLINE`
+edit of `examples/forest.rs` and the `INSPECT_GPU` edit of `examples/inspect.rs` (both restored from copies before
+their commits and never committed), and in `CARGO_TARGET_DIR` every file this pass wrote (modified after 05:50 today,
+12 240 files, 4.0 GB: the release and debug incremental caches of `bevy_flora` and its examples, the debug test
+binaries, the release example binaries, `doc`, `package/bevy_flora-0.47.0*`); `df -h /` 19 GB free at the start, 9 GB
+at the lowest (the full `--gpu` galleries, the packaged build and the debug test binaries), 20 GB after. Kept: the
+target directory's dependency builds (71 GB, older than this pass). Leftovers of earlier passes: none found (no
+`f*_base` in `~` or `/tmp`, `git worktree list` shows only the clone); the branches `loop/iter-1` to `-10` remain on
+origin, not deleted.
