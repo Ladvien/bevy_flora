@@ -752,3 +752,141 @@ lowest (the clips' frames), 19 GB after. Kept: the target directory's dependency
 pass). Leftovers of earlier passes: none of this loop's (no `f*_base` in `~` or `/tmp`); `~/i62base`,
 `~/bevy_emerge-baseline*.txt` belong to another project and were not touched; the branches `loop/iter-1` to `-8`
 remain on origin, not deleted.
+
+## Iteration 9 — 2026-10-31 — A leaf that appears grows from nothing: the last pop in a growing crown (D-079)
+
+Host: this Mac (Apple M5, Metal, macOS 26.6.2), not big. Disk 19 GB free at the start, 11 GB at the lowest (the
+shared `CARGO_TARGET_DIR` is 79 GB); one build or one render at a time. HomeStill: `hs status` ok (18 670
+documents, 488 845 chunks; scribe and distill up, 788 queued), `distill_search` and the CLI answered. Corpus
+re-scan of `catalog_recent` (200): the SIGGRAPH 2015-2025 "Advances in Real-Time Rendering" notes were indexed
+the day before and hold one vegetation slide (a season colour LUT and a with-and-without-leaves alpha channel,
+`s2025-advances-materials-3`), so one `Research: corpus` commit (`5636e6d`); the rest was psychology and
+medicine.
+
+**State found.** No open issue on `bevy_flora` (`gh` answered; the 30 newest are all closed), no `consumer`
+label, no parked branch (`git branch --list 'wiggum/parked-*'` empty), a clean `main` at `ab5a349`. bevy_emerge's
+family issue #102 (F6) is closed after slice 6 (`forest_view`: a scattered tree is a `PooledTree`, a placed one a
+`ProceduralTree` with `TreeAge`, the crate's own components) and owes a clip only. Read in `bevy_emerge`'s
+`ops_tree.rs` and `forest_view.rs`: two hand-rolled lookups of a preset by name
+(`TreePreset::ALL.iter().find(|t| t.name() == name)`), and a dotted-path field editor over `serde_json`: neither
+is a defect, the preset lookup is a candidate (backlog 4). Sanctuary's open notes about trees are game-side
+(stacking logs, a woodstock). v0.47.0 is 1 h old at the start (tag `04:23`), so the 6-hour rule gives no
+release before 10:23.
+
+**Pick.** Iteration 8's backlog item 2, in the brief's "growth never jumps": under `AllBranches` (11 of the 20
+presets) the leaf a branch gains appears at its node's whole leaf size. Measured with a throwaway probe
+(`tests/zz_probe.rs`, deleted; each leaf keyed by node id and tint draw, `TreeAge` 0 to maturity in 0.05-year
+steps, the README clip's pace): a leaf was on average 0.27 to 0.43 of its mature size at first sight, one in
+four above half of it (spruce 43%), the largest at full size; an oak pops 1.5 leaves a frame, a willow 16.
+Ranked: (1) this (a visible fault in the crate's headline, growth, in both growth paths, self-contained and
+bit-identical at maturity); (2) a gradual decline for `TreeCondition` (a class change pops; a game can fake it
+with two class changes); (3) finish the willow (D-052); (4) `TreePreset::from_name` for the editor; (5)
+D-074/D-075 on big. No bug and no consumer issue outranked it.
+
+**What changed** (`docs/research/leaf-ease-in.md`, committed first as `bf1b583`; implementation `21c831f`, `2e56bdf`).
+
+- A branch carries a real number of leaves, `distributed_leaf_amount` (`density * length * height_mod`, at
+  least 1; `distributed_leaf_count` is its truncation, unchanged). The leaf of rank `r` has flushed
+  `clamp(amount - r, 0, 1)` and is drawn at `smoothstep` of it times its size (`leaf_flush_scale`): born at
+  nothing when its turn comes, whole a leaf-spacing of branch growth later. The leaves before it are whole, so
+  a grown branch (every flush 1, exactly) is byte for byte what it was; the rank order, places and draws of
+  iteration 8 are untouched.
+- `GpuGrowth` carries the real `amount` in `leaf_count` (`gpu/state.rs`; it was truncated) and scales the leaf in
+  `piece_scale` (`growth_common.wesl`) by `smoothstep(clamp(leaf_count - ordinal, 0, 1))`; `gpu/frame.rs` mirrors
+  it through the same `leaf_flush_scale`. No new buffer, no tag change.
+- Tests: `a_leaf_that_appears_grows_from_nothing` (all 11 presets, 0.01-year steps: at first sight under a tenth
+  of its size, no step over 0.3; with the pop restored by a mutation it fails: an oak leaf appears at 0.365),
+  `a_leaf_is_born_at_nothing_and_reaches_its_size_over_the_next_leafs_growth` (the curve), and
+  `all_branches_leaves_appear_as_the_branch_lengthens` now also asserts leaves easing in on the GPU side (0
+  with the pop restored). Existing leaf tests pass unchanged (`every_branchs_leaves_keep_their_places...`,
+  `a_count_that_lands_on_a_whole_number...`, `grown_leaves_and_flowers_match_the_cpu_meshers`: no protected
+  check was touched). 345 lib and 67 doc tests.
+- Docs: CHANGELOG `[Unreleased]`, ARCHITECTURE's leaf paragraph, `AllBranches`' rustdoc, the README's GPU
+  parity line and growth bullet, D-079 and the `loop-09` line of `qa/visual_findings.md`.
+- No public API change (everything is `pub(crate)` or a shader), so the next release is a patch: 0.47.1.
+
+**Sources.** Botanical: "Tree Growth Modelling Constrained by Growth Equations" (`10.1111_cgf.13263`: the
+logistic growth law, "growth with variational speeds equal to a nonlinear speed curve"), "A phenological
+timetable of oak growth under experimental drought and air warming" (`10.1371_journal.pone.0089724`), the
+leaf-development methods of `10.1093_treephys_tpy041`. Shipping game: the SpeedTree Modeler manual, Leaf mesh
+generator, Growth ("Size: This curve controls how the size increases over the course of the leaf's growth
+time", "ease in and out of the growth animation by using an S curve"), `s2025-advances-materials-3`. Technical:
+`book_real_time_rendering_4th_akenine` (alpha LODs avoid popping), this crate's `gpu/frame.rs`. Pending index:
+a leaf-area-against-days curve for broadleaf trees (the corpus has timetables and the logistic law, not the
+curve); SpeedTree's real-time modelers have no growth.
+
+**Numbers** (`/tmp/f9`, removed with the scratch).
+
+- Gallery, 526 scenarios, CPU and `--gpu`: 526 PNG = 526 rows each, none under 100 KB, no flag in any, no
+  BLANK_CAPTURE or CAPTURE_TIMEOUT, no `ERROR` or `panicked` (CPU: the two asset-watcher `WARN`s of a binary
+  run outside the repo; `--gpu`: those and the known hull-crown note). Against main's binary: 462 images
+  byte for byte, 64 changed (young trees of the 11 presets, `hull_*` among them), mean of means 0.012 of 255,
+  the changed ones about 0.1, worst `hull_spruce_2` 1.61, `hull_spruce_5` 0.92, `hull_fir_5` 0.27, the rest
+  0.25 and under. `stats.tsv` columns 1-10: no scenario at maturity moved; 60 young scenarios gained leaf
+  vertices and triangles (median +13%, the Japanese maple at age 4 200 to 320 vertices: five leaves to
+  eight), 4 bounding boxes moved, trunk columns identical; CPU and `--gpu` columns 1-10 identical for all
+  526. A second filtered run of the seven CI scenarios: PNGs byte for byte the first's and the same columns.
+  The final binary (after `2e56bdf`) gives `age_` and `grow_` (117 scenarios) identical to the measured run.
+- GPU parity (`compare_gallery`), all 526: mean of means **0.029** (0.030 before), worst **1.162**
+  (`grow_willow_7`; 1.186), 83 PNGs byte-identical (83); the seven CI scenarios **0.218 and 0.922** (0.221 and
+  0.920). GPU before against after 0.021 mean on those seven, CPU 0.028: both paths moved alike.
+- Forest bench, interleaved base / new (b n n b b n n b), medians of four, ms/frame (cpu): pool 10 000 4.99
+  (14.69) -> 4.97 (14.70) -0.3% (+0.1%); naive 1 000 34.98 (18.78) -> 34.98 (18.82) 0.0% (+0.2%); gpu-live
+  1 000, 200 frames 176.94 (241.88) -> 176.27 (241.90) -0.4% (0.0%).
+- Build probe (`build_tree`, best of 9, interleaved three times, `/tmp/f9/{before,after}/build_*.txt`):
+  mature within 1% for 20 presets, vertex and triangle counts identical; age 4 +2% to +7% on the leafiest
+  (spruce 0.400 to 0.424 ms with +11% leaf vertices, shrub 0.688 to 0.731, juniper 0.326 to 0.341, maple 0.323
+  to 0.329, fern +3%), identical for the rest. **A logged trade** over the 5% line (shrub, spruce, and the
+  juniper at 4.9%): a young tree has one more part-grown leaf per branch, and those are real vertices.
+- Leaf appearance probe, before -> after, 0.05 year steps: mean share at first sight 0.27 to 0.43 -> 0.00 to
+  0.05; first seen above half 9% to 43% of the leaves -> none; the largest 1.00 -> 0.07 on the oak (0.47
+  willow strands, 0.37 fern, whose nodes grow fast); the largest step in one leaf 1.00 -> 0.25 to 0.33 on
+  oak, maple, spruce, pine, cherry, apple, juniper (0.80 willow, 0.52 shrub, 0.59 fern). At 0.01 year: at
+  first sight 0.03 and under everywhere, the largest step 0.18 (the willow's strands).
+- Looked at: `/tmp/f9/cmp/*` (before | after, front and close-up of grow_oak_6, age_apple_6, age_shrub_4,
+  age_willow_4, age_japanese_maple_4, age_spruce_2, age_maple_6, hull_spruce_2, ...) and `/tmp/f9/ease/m_*.png`
+  (a young maple at ages 4.00 to 4.21 in 0.03 steps, `inspect --mode tree`, before over after): no hole, gap,
+  floating or embedded leaf, shading seam or silhouette change; crowns a touch fuller; a new leaf on the long
+  limb grows over the successive ages in the after row.
+- Gate: `cargo test --all-features --lib` (345) and `--doc` (67), `cargo clippy --all-targets --all-features -D
+  warnings`, `cargo doc -D warnings`, `cargo check`, `--features serde`, `--examples`, `cargo package --locked`
+  (131 files), the release examples with `--all-features` built and run. Gate gaps, said plainly: `cargo
+  build`, `cargo build --release` and `cargo build --examples` with default features were `cargo check` (each
+  would build Bevy in a new feature set, 3 to 4 GB, on an 11 GB disk), and `cargo test --all-features` ran as
+  `--lib` and `--doc` (it would link every debug example binary).
+
+**Critique and verdict** (`/tmp/f9/critique.md`): a leaf that appears grows from nothing: **GREAT** (at 0.01
+year no leaf is above 3% of its size at first sight or moves more than 0.18 a step, CPU = GPU in size and
+place, mature trees bit-identical, forest bench within 0.5%). Flaws found, none stopping a ship: the ease is
+one leaf-spacing of branch growth, so at the README clip's pace (0.05 year a frame) an oak or maple leaf takes
+3 to 4 frames and a willow strand's or a shrub's 1 to 2 (those nodes also grow their whole leaf set fast; a
+game's pace is slower, and a longer window of 2 to 3 spacings was rejected: it would thicken every young crown
+by 15 to 30%); a young tree carries one more part-grown leaf per branch (the trade above); the stylised hull
+crown is built from where the leaves are, whatever their size, so it still pops when a leaf is born and moves
+a little earlier (backlog 3); the WGSL smoothstep is checked by `compare_gallery` (CPU against GPU and GPU
+before against after) and not by a Rust test (the mirror in `frame.rs` shares the CPU's function, so
+`grown_leaves_and_flowers_match_the_cpu_meshers` proves the mirror); a fruit on a part-grown leaf is
+part-grown (its radius follows the leaf, `harvest.rs` reads the bounds), so a CPU-grown tree briefly has a
+tiny pickable apple; the README clips are not re-recorded (no release before 10:23), `growth.gif` still shows
+the old pops until the release and its caption stays true.
+
+**Commits** (`loop/iter-9`): `5636e6d` Research: corpus, `bf1b583` Research: leaf ease-in, `21c831f` the
+implementation and its tests, `bc134dc` the docs, `2e56bdf` the leaf count keeps its `i32` saturation.
+
+### Ranked backlog after iteration 9
+
+1. **Release 0.47.1** (a patch: no public API changed) once v0.47.0 is 6 hours old (10:23 local, Oct 31):
+   re-record the eleven clips (`growth.gif` changes: a young maple's leaves ease in; the others by a leaf per
+   branch at young ages), `cargo semver-checks` if it fits the disk; `[Unreleased]` is written.
+2. **A gradual decline** (iteration 6's #2): a `TreeCondition` class change pops; leaves the new class loses
+   should fall and the colour should glide.
+3. **The hull crown by leaf size**: `crown_hull` takes positions only, so a `CrownStyle::Hull` tree growing
+   on the CPU still pops its hull when a leaf is born (and moves a little earlier now); weight leaves by
+   size (a weighted percentile) so the hull grows continuously.
+4. **`TreePreset::from_name` / `FromStr`** for editors: bevy_emerge's `ops_tree.rs` and `forest_view.rs` both
+   hand-roll `TreePreset::ALL.iter().find(|t| t.name() == name)`; a `.tree.ron` field path editor
+   (`set_path` over `serde_json`) is its own code too.
+5. **Finish the willow (D-052)**: leaf ribbons, strands kept as lines at level 1, limbs whose leaves reach
+   their tips, a greener strand colour, a forked trunk; the fast-growing nodes' pace at a clip's rate (strands
+   grow 2 m a year, 0.8 of a leaf's size in one frame); D-074 / D-075 on big; `RadialOutward` facing on a
+   growing branch; a CPU mirror of `wind_bend`.

@@ -55,8 +55,10 @@ pub enum FoliagePlacement {
     /// its branch as the branch grows: a young branch shows some of the leaves of
     /// the grown one, spread over its whole length, at the same fractions of it,
     /// and gains the rest in the gaps, so no leaf hops along the wood when another
-    /// one appears (and [`GpuGrowth`](crate::GpuGrowth) puts each leaf where the
-    /// CPU does).
+    /// one appears. A leaf that appears grows from nothing to its size over the
+    /// growth of branch the next leaf takes to appear, so none pops in. (And
+    /// [`GpuGrowth`](crate::GpuGrowth) puts each leaf where the CPU does, at the
+    /// same size.)
     AllBranches,
     /// Spherical clusters at the tips of branches without children in the
     /// full-grown tree.
