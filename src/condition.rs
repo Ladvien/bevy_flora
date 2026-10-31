@@ -22,6 +22,7 @@ use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::mesh::{Mesh3d, MeshTag};
 use bevy::reflect::Reflect;
+use bevy::time::Time;
 
 /// The dry leaf colour a sick or dying tree's leaves move toward, whatever their own colour:
 /// `FloraUniform::withered` is its ratio to the species' leaf colour. A design default
@@ -35,6 +36,139 @@ pub(crate) const TAG_SHIFT: u32 = 8;
 
 /// The bits of a [`MeshTag`] that are a pooled look's.
 pub(crate) const TAG_LOOK_MASK: u32 = (1 << TAG_SHIFT) - 1;
+
+/// The tag bit that says a tree's decline is on its way (a [`ConditionGlide`] is running): the shaders then
+/// read the level in the bits above it instead of the class. `common.wesl`'s
+/// `CONDITION_GLIDING_BIT`.
+const GLIDING_BIT: u32 = 1 << (TAG_SHIFT + 2);
+
+/// Where the level of a gliding decline starts in a mesh's tag, 8 bits to 255 (`LEVEL_STEPS` is the
+/// top step in use). `common.wesl`'s `CONDITION_LEVEL_SHIFT` and `CONDITION_STEPS`.
+const LEVEL_SHIFT: u32 = TAG_SHIFT + 3;
+const LEVEL_STEPS: f32 = 254.0;
+
+/// How long a change of a tree's [`TreeCondition`] takes to be drawn, in seconds. A resource
+/// the plugin adds with 0, which draws a change at once: a sick tree has lost its leaves in the frame
+/// after the insert. Above 0 a change is drawn as a **glide** (`docs/research/condition-glide.md`): the
+/// share of the crown's leaves that is lost rises, and the leaves that are left dry, continuously from
+/// what the tree shows now to what the new class shows, along a smoothstep, whatever the tree's own
+/// class was (a change half way through starts where the tree is). A tree that is made healthy
+/// recovers the same way, its leaves returning; so does one whose component is removed.
+///
+/// What a game *reads* does not wait: [`FloraIndex`](crate::FloraIndex) and
+/// [`IndexedTree::condition`](crate::IndexedTree::condition) say the class the game set the moment
+/// it was set; only the picture glides. A tree that appears with its condition (a forest loaded from
+/// a save, a pool whose assets arrive after the trees) shows it at once, and so does any tree
+/// when the glide is 0. The time is the app's [`Time`], so a paused game does not decline.
+///
+/// Read when a change is seen (the frame it is made, in [`PostUpdate`](bevy::app::PostUpdate)), so
+/// the value that counts for a tree is the one the resource has then: a lightning strike that should
+/// take a second sets 1 and inserts [`TreeCondition::Dying`] in the same frame.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_flora::{ConditionGlide, TreeCondition};
+/// # fn set(mut commands: Commands, tree: Entity) {
+/// commands.insert_resource(ConditionGlide { seconds: 40.0 });
+/// commands.entity(tree).insert(TreeCondition::Dying); // thins over 40 seconds, not at once
+/// # }
+/// ```
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Resource)]
+pub struct ConditionGlide {
+    /// Seconds a change takes to be drawn; 0 or less draws it at once.
+    pub seconds: f32,
+}
+
+/// What a tree's meshes show of its [`TreeCondition`]: the class the tag's bits say (the game's
+/// own, the target of a glide), the level on screen, and whether it is on its way there. On a tree
+/// that has a condition, or whose decline is still going out after the component was removed; added
+/// by `sync_condition_tags` when a tree with a condition is first seen drawn.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ConditionShown {
+    /// The class the tag's class bits carry: what the game set (healthy once it removed the component).
+    pub(crate) class: TreeCondition,
+    /// The level on screen, 0 healthy to 1 dying, as the tag says it (the quantised value while gliding).
+    pub(crate) level: f32,
+    /// A glide is running (`ConditionGliding` is on the entity).
+    gliding: bool,
+}
+
+impl ConditionShown {
+    /// Settled on `class`: its anchor level, no glide.
+    fn settled(class: TreeCondition) -> Self {
+        Self { class, level: class.level(), gliding: false }
+    }
+
+    /// The bits of a mesh's tag above the look's that carry this state.
+    pub(crate) fn tag_bits(&self) -> u32 {
+        if self.gliding {
+            self.class.tag_bits() | GLIDING_BIT | (level_step(self.level) << LEVEL_SHIFT)
+        } else {
+            self.class.tag_bits()
+        }
+    }
+}
+
+/// The glide of a tree's decline in flight: where it started, where it is going, how long it has run
+/// and how long it lasts. On the entity only while it runs, in sparse storage, so a forest of
+/// settled trees, ill or well, has nothing to visit each frame.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[component(storage = "SparseSet")]
+pub(crate) struct ConditionGliding {
+    from: f32,
+    to: f32,
+    elapsed: f32,
+    seconds: f32,
+}
+
+impl ConditionGliding {
+    /// The level `elapsed` seconds into the glide, and whether it has arrived: a smoothstep from `from`
+    /// to `to`.
+    fn at(&self) -> (f32, bool) {
+        let t = (self.elapsed / self.seconds).clamp(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        (self.from * (1.0 - eased) + self.to * eased, t >= 1.0)
+    }
+}
+
+/// A level, 0 to 1, as the tag's step (0 to `LEVEL_STEPS`), the nearest.
+fn level_step(level: f32) -> u32 {
+    (level.clamp(0.0, 1.0) * LEVEL_STEPS).round() as u32
+}
+
+/// The step a gliding `tree` shows at `level`: the level in steps plus the tree's own fraction of a step
+/// (a hash of the entity), rounded down, so trees that began a glide together reach each step at
+/// different frames. Within a step of the nearest, and monotone in `level`.
+fn glide_step(level: f32, tree: Entity) -> u32 {
+    let own = (tree.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) as f32 / (1u32 << 24) as f32;
+    ((level.clamp(0.0, 1.0) * LEVEL_STEPS + own).floor() as u32).min(LEVEL_STEPS as u32)
+}
+
+/// A tag's step as the level it stands for (`condition_level` in `common.wesl`).
+fn step_level(step: u32) -> f32 {
+    (step.min(LEVEL_STEPS as u32) as f32) / LEVEL_STEPS
+}
+
+/// The share of a crown's leaves a decline at `level` has lost: through the classes' own shares,
+/// `Healthy` at 0, `Sick` at a half and `Dying` at 1 (`level_defoliation` in `common.wesl`).
+pub(crate) fn defoliation_at(level: f32) -> f32 {
+    let level = level.clamp(0.0, 1.0);
+    let (sick, dying) = (TreeCondition::Sick.defoliation(), TreeCondition::Dying.defoliation());
+    if level <= 0.5 {
+        let t = level * 2.0;
+        0.0 * (1.0 - t) + sick * t
+    } else {
+        let t = level * 2.0 - 1.0;
+        sick * (1.0 - t) + dying * t
+    }
+}
+
+/// How far the leaves that stay have withered on average at `level`: the class values at the
+/// anchors (0, a half, 1), so linear (`level_withering` in `common.wesl`).
+pub(crate) fn withering_at(level: f32) -> f32 {
+    level.clamp(0.0, 1.0)
+}
 
 /// The condition of a tree, in the three classes of a forest-health survey's crown assessment
 /// (`docs/research/tree-condition.md`): a healthy crown, one in decline, one close to death. Ordered
@@ -102,10 +236,20 @@ impl TreeCondition {
         }
     }
 
-    /// The bits of a mesh's [`MeshTag`] that carry this condition (`common.wesl`'s `tree_condition`
+    /// The bits of a mesh's [`MeshTag`] that carry this condition (`common.wesl`'s `condition_level`
     /// reads them back).
     pub(crate) const fn tag_bits(self) -> u32 {
         (self as u32) << TAG_SHIFT
+    }
+
+    /// Where the class sits on the decline's level, 0 to 1: healthy, half way, dying. A decline
+    /// between classes is a level between these ([`defoliation_at`], [`withering_at`]).
+    pub(crate) const fn level(self) -> f32 {
+        match self {
+            Self::Healthy => 0.0,
+            Self::Sick => 0.5,
+            Self::Dying => 1.0,
+        }
     }
 }
 
@@ -117,9 +261,11 @@ pub(crate) fn leaf_decline_moment(phase: f32) -> f32 {
     x - x.floor()
 }
 
-/// A mesh's tag for a pooled look's glide tag `look` and the tree's condition (none: healthy).
-pub(crate) fn tag_for(look: u32, condition: Option<&TreeCondition>) -> u32 {
-    (look & TAG_LOOK_MASK) | condition.map_or(0, |condition| condition.tag_bits())
+/// A mesh's tag for a pooled look's glide tag `look` and the tree's condition (none: healthy), as it is
+/// drawn now if it is (`shown`, which carries the level of a decline on its way).
+pub(crate) fn tag_for(look: u32, condition: Option<&TreeCondition>, shown: Option<&ConditionShown>) -> u32 {
+    let bits = shown.map(ConditionShown::tag_bits).or_else(|| condition.map(|condition| condition.tag_bits()));
+    (look & TAG_LOOK_MASK) | bits.unwrap_or(0)
 }
 
 /// What a tree's condition has done to its leaves, for what the CPU draws from the tree's leaf mesh
@@ -140,6 +286,12 @@ impl Decline {
         Self { lost: if hull { 0.0 } else { condition.defoliation() }, withering: condition.withering() }
     }
 
+    /// For a tree whose crown shows `level` of decline (`ConditionShown::level`). A hull crown loses
+    /// none of its facets.
+    pub(crate) fn at(level: f32, hull: bool) -> Self {
+        Self { lost: if hull { 0.0 } else { defoliation_at(level) }, withering: withering_at(level) }
+    }
+
     /// Whether the leaf with this phase (`sway.w`) is one the tree has lost.
     pub(crate) fn has_lost(&self, phase: f32) -> bool {
         self.lost > 0.0 && leaf_decline_moment(phase) < self.lost
@@ -155,18 +307,62 @@ impl Decline {
     }
 }
 
+/// What a tree's drawing does when its [`TreeCondition`] is seen to be `to`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Begin {
+    /// Nothing: the tree already shows, or is on its way to, `to`.
+    Keep,
+    /// Show `to` at once.
+    Settle,
+    /// Glide from this level to `to`'s.
+    Glide(f32),
+}
+
+/// Decide what `to` does to a tree that shows `shown` (none: not drawn with a condition yet). A tree
+/// seen for the first time glides, from healthy, only if it was `standing` before the condition was
+/// set (a tree that appears with its condition shows it); a glide takes `seconds`, 0 or less is at once.
+fn begin(shown: Option<&ConditionShown>, to: TreeCondition, seconds: f32, standing: bool) -> Begin {
+    match shown {
+        Some(shown) if shown.class == to => Begin::Keep,
+        Some(shown) if seconds > 0.0 => Begin::Glide(shown.level),
+        None if standing && to != TreeCondition::Healthy && seconds > 0.0 => Begin::Glide(0.0),
+        _ => Begin::Settle,
+    }
+}
+
+/// Put `bits` (a condition's, above the look's) on every mesh of a tree, leaving the look's tag as it
+/// is; a mesh with no tag gets one only when there is something to say.
+fn show(commands: &mut Commands, meshes: &mut Query<Option<&mut MeshTag>, With<Mesh3d>>, children: &Children, bits: u32) {
+    for child in children.iter() {
+        match meshes.get_mut(child) {
+            Ok(Some(mut tag)) => {
+                let value = (tag.value & TAG_LOOK_MASK) | bits;
+                if tag.value != value {
+                    tag.value = value;
+                }
+            }
+            Ok(None) if bits != 0 => {
+                commands.entity(child).insert(MeshTag::new(bits));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Put each tree's condition in the [`MeshTag`] of its meshes: when the component is added or
 /// changed, and when the tree's children are (a rebuild, a new level of detail, a pool's spawn).
 /// The bits below the condition are left as they are (a pooled look's glide tag). A tree that
-/// lost the component, or was set healthy, is cleared. Only trees that have the component are
-/// visited, so a forest of healthy trees pays nothing; a tree whose meshes are tagged by what
-/// spawned them ([`tag_for`]) is found already right.
+/// lost the component, or was set healthy, is cleared, or recovers over [`ConditionGlide`]'s seconds.
+/// A change of class begins a glide (`advance_condition_glides` runs it). Only trees that have the
+/// component are visited, so a forest of healthy trees pays nothing; a tree whose meshes are tagged
+/// by what spawned them ([`tag_for`]) is found already right.
 #[allow(clippy::type_complexity)]
 pub(crate) fn sync_condition_tags(
     mut commands: Commands,
-    ill: Query<(&TreeCondition, &Children), Or<(Changed<TreeCondition>, Changed<Children>)>>,
+    settings: Res<ConditionGlide>,
+    ill: Query<(Entity, Ref<TreeCondition>, Ref<Children>, Option<&ConditionShown>), Or<(Changed<TreeCondition>, Changed<Children>)>>,
     mut removed: RemovedComponents<TreeCondition>,
-    standing: Query<&Children>,
+    standing: Query<(&Children, Option<&ConditionShown>)>,
     has: Query<(), With<TreeCondition>>,
     mut meshes: Query<Option<&mut MeshTag>, With<Mesh3d>>,
 ) {
@@ -175,30 +371,94 @@ pub(crate) fn sync_condition_tags(
         if has.contains(tree) {
             continue;
         }
-        let Ok(children) = standing.get(tree) else { continue };
-        for child in children.iter() {
-            if let Ok(Some(mut tag)) = meshes.get_mut(child)
-                && tag.value & !TAG_LOOK_MASK != 0
-            {
-                tag.value &= TAG_LOOK_MASK;
+        let Ok((children, shown)) = standing.get(tree) else {
+            if let Ok(mut entity) = commands.get_entity(tree) {
+                entity.remove::<(ConditionShown, ConditionGliding)>();
+            }
+            continue;
+        };
+        match shown {
+            // Recovering: the leaves come back over the glide.
+            Some(shown) if shown.level > 0.0 && settings.seconds > 0.0 => {
+                let now = ConditionShown { class: TreeCondition::Healthy, level: step_level(level_step(shown.level)), gliding: true };
+                commands
+                    .entity(tree)
+                    .insert((now, ConditionGliding { from: shown.level, to: 0.0, elapsed: 0.0, seconds: settings.seconds }));
+                show(&mut commands, &mut meshes, children, now.tag_bits());
+            }
+            _ => {
+                commands.entity(tree).remove::<(ConditionShown, ConditionGliding)>();
+                show(&mut commands, &mut meshes, children, 0);
             }
         }
     }
-    for (condition, children) in &ill {
-        let bits = condition.tag_bits();
-        for child in children.iter() {
-            match meshes.get_mut(child) {
-                Ok(Some(mut tag)) => {
-                    let value = (tag.value & TAG_LOOK_MASK) | bits;
-                    if tag.value != value {
-                        tag.value = value;
-                    }
-                }
-                Ok(None) if bits != 0 => {
-                    commands.entity(child).insert(MeshTag::new(bits));
-                }
-                _ => {}
+    for (tree, condition, children, shown) in &ill {
+        let to = *condition;
+        let how = if condition.is_changed() || shown.is_none() {
+            // Standing before the condition was set: the tree's meshes were not added this frame.
+            begin(shown, to, settings.seconds, condition.is_changed() && !children.is_added())
+        } else {
+            Begin::Keep
+        };
+        let now = match how {
+            Begin::Keep => shown.copied().unwrap_or_else(|| ConditionShown::settled(to)),
+            Begin::Settle => ConditionShown::settled(to),
+            Begin::Glide(from) => ConditionShown { class: to, level: step_level(level_step(from)), gliding: true },
+        };
+        match how {
+            Begin::Keep => {}
+            Begin::Settle => {
+                commands.entity(tree).insert(now).remove::<ConditionGliding>();
             }
+            Begin::Glide(from) => {
+                commands
+                    .entity(tree)
+                    .insert((now, ConditionGliding { from, to: to.level(), elapsed: 0.0, seconds: settings.seconds }));
+            }
+        }
+        show(&mut commands, &mut meshes, &children, now.tag_bits());
+    }
+}
+
+/// Run the glides that are in flight: the level on screen of every gliding tree moves along its smoothstep
+/// by the frame's time, and a tree's meshes are tagged again when the level moves a step of the
+/// tag's 255 (each tree's steps fall at its own moments, so a forest that began together does not
+/// write every tag in one frame). A glide that has arrived is the class's own tag
+/// again, bit for bit; a recovery whose component is gone leaves the tree untagged. Only trees that
+/// glide are visited.
+pub(crate) fn advance_condition_glides(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut gliding: Query<(Entity, &mut ConditionGliding, &mut ConditionShown, Option<&Children>, Has<TreeCondition>)>,
+    mut meshes: Query<Option<&mut MeshTag>, With<Mesh3d>>,
+) {
+    let delta = time.delta_secs();
+    for (tree, mut glide, mut shown, children, has_condition) in &mut gliding {
+        glide.elapsed += delta;
+        let (level, arrived) = glide.at();
+        let bits = if arrived {
+            if has_condition {
+                *shown = ConditionShown::settled(shown.class);
+                commands.entity(tree).remove::<ConditionGliding>();
+                shown.tag_bits()
+            } else {
+                commands.entity(tree).remove::<(ConditionShown, ConditionGliding)>();
+                0
+            }
+        } else {
+            // Each tree steps at its own moments, and never against the way it is going.
+            let step = glide_step(level, tree);
+            let held = level_step(shown.level);
+            let step = if glide.to >= glide.from { step.max(held) } else { step.min(held) };
+            let level = step_level(step);
+            if level == shown.level {
+                continue;
+            }
+            shown.level = level;
+            shown.tag_bits()
+        };
+        if let Some(children) = children {
+            show(&mut commands, &mut meshes, children, bits);
         }
     }
 }
@@ -576,5 +836,242 @@ mod tests {
         // Each leaf of a sick tree goes its own way: not all alike.
         let spread = phases.iter().map(|&p| sick.withered(p)).fold((1.0f32, 0.0f32), |(lo, hi), t| (lo.min(t), hi.max(t)));
         assert!(spread.1 - spread.0 > 0.6, "{spread:?}");
+    }
+
+    /// The level a mesh's tag carries (its class's if no glide runs) and whether a glide runs.
+    fn tag_level(tag: u32) -> (u32, bool) {
+        if tag & GLIDING_BIT != 0 {
+            ((tag >> LEVEL_SHIFT) & 255, true)
+        } else {
+            (((tag >> TAG_SHIFT) & 3) * 127, false)
+        }
+    }
+
+    /// An app whose glides last `seconds`, with an oak standing and drawn.
+    fn gliding_oak(seconds: f32) -> (App, Entity) {
+        let mut app = app();
+        app.world_mut().insert_resource(ConditionGlide { seconds });
+        let oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeLod::default())).id();
+        settle(&mut app);
+        assert!(tags(&app, oak).len() >= 6, "the oak is drawn");
+        (app, oak)
+    }
+
+    /// The first mesh's tag, and whether all the tree's meshes agree on it.
+    fn tag_of(app: &App, tree: Entity) -> u32 {
+        let found = tags(app, tree);
+        assert!(found.iter().all(|&tag| tag == found[0]), "every mesh of a tree says the same: {found:?}");
+        found[0]
+    }
+
+    #[test]
+    fn the_levels_pass_through_the_classes_values_and_are_monotone_between() {
+        for class in [TreeCondition::Healthy, TreeCondition::Sick, TreeCondition::Dying] {
+            assert_eq!(defoliation_at(class.level()), class.defoliation(), "{class:?}'s share at its own level");
+            assert_eq!(withering_at(class.level()), class.withering(), "{class:?}'s withering at its own level");
+            assert_eq!(step_level(level_step(class.level())), class.level(), "{class:?}'s level survives the tag's steps exactly");
+        }
+        let steps: Vec<(f32, f32)> = (0..=254).map(|k| (defoliation_at(step_level(k)), withering_at(step_level(k)))).collect();
+        assert!(steps.windows(2).all(|w| w[1].0 >= w[0].0 && w[1].1 >= w[0].1), "no step takes leaves back or rehydrates them");
+        // Out-of-range levels are clamped, not extrapolated.
+        assert_eq!((defoliation_at(-1.0), defoliation_at(2.0)), (0.0, TreeCondition::Dying.defoliation()));
+    }
+
+    #[test]
+    fn a_declined_crown_at_a_level_has_lost_the_leaves_a_worse_level_loses_and_more() {
+        let phases: Vec<f32> = (0..2000).map(|i| i as f32 * 0.37 + 0.011).collect();
+        let levels = [0.0, 0.1, 0.25, 0.5, 0.75, 1.0];
+        for pair in levels.windows(2) {
+            let (better, worse) = (Decline::at(pair[0], false), Decline::at(pair[1], false));
+            assert!(phases.iter().all(|&p| !better.has_lost(p) || worse.has_lost(p)), "{pair:?}: a lost leaf stays lost as the level rises");
+        }
+        let share = |level: f32| {
+            let decline = Decline::at(level, false);
+            phases.iter().filter(|&&p| decline.has_lost(p)).count() as f32 / phases.len() as f32
+        };
+        for level in levels {
+            assert!((share(level) - defoliation_at(level)).abs() < 0.03, "{level}: {}", share(level));
+        }
+        assert!(Decline::at(0.7, true).lost == 0.0, "a hull crown keeps its facets at every level");
+    }
+
+    #[test]
+    fn a_change_of_condition_glides_to_its_class_and_arrives_as_the_class_tag() {
+        let (mut app, oak) = gliding_oak(2.0);
+        assert_eq!(tag_of(&app, oak), 0);
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Dying);
+        let mut levels = Vec::new();
+        for frame in 0..90 {
+            app.update();
+            let tag = tag_of(&app, oak);
+            // What a game reads does not wait for the picture.
+            assert_eq!(condition_of(&app, oak), Some(TreeCondition::Dying), "frame {frame}");
+            assert_eq!(tag & !TAG_LOOK_MASK & (3 << TAG_SHIFT), TreeCondition::Dying.tag_bits(), "the class bits say the class at once");
+            levels.push(tag_level(tag));
+        }
+        // Starts where the tree was, rises by smoothstep, never falls, and every step is small.
+        assert!(levels[0].1 && levels[0].0 <= 2, "starts from healthy: {:?}", levels[0]);
+        assert!(levels.windows(2).all(|w| w[1].0 >= w[0].0), "monotone: {levels:?}");
+        assert!(levels.windows(2).all(|w| w[1].0 - w[0].0 <= 12), "no frame moves it by more than a few percent: {levels:?}");
+        // Two seconds at 30 frames a second: half way is half way (smoothstep(0.5) is 0.5).
+        let halfway = levels[30].0;
+        assert!((113..=141).contains(&halfway), "half way through, half way up: {halfway}");
+        // Arrived: exactly what a tree set at once carries, and the glide is gone.
+        assert_eq!(tag_of(&app, oak), TreeCondition::Dying.tag_bits());
+        assert!(app.world().get::<ConditionGliding>(oak).is_none());
+    }
+
+    #[test]
+    fn a_change_in_the_middle_of_a_glide_starts_where_the_tree_is_and_a_recovery_glides_back() {
+        let (mut app, oak) = gliding_oak(3.0);
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Dying);
+        for _ in 0..63 {
+            app.update();
+        }
+        let (before, _) = tag_level(tag_of(&app, oak));
+        assert!(before > 150 && before < 235, "most of the way to dying: {before}");
+        // Changed to Sick (level 0.5, 127) from past it: the leaves come back from where they are, no jump.
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Sick);
+        app.update();
+        let (after, gliding) = tag_level(tag_of(&app, oak));
+        assert!(gliding && after.abs_diff(before) <= 6, "continuous across the change: {before} then {after}");
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(tag_of(&app, oak), TreeCondition::Sick.tag_bits(), "ends settled on the new class");
+
+        // Healthy again: the leaves come back, over the glide, to no bits at all.
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Healthy);
+        let mut levels = Vec::new();
+        for _ in 0..120 {
+            app.update();
+            levels.push(tag_level(tag_of(&app, oak)).0);
+        }
+        assert!(levels[0] >= 120 && levels.windows(2).all(|w| w[1] <= w[0]), "recovering: {levels:?}");
+        assert_eq!(tag_of(&app, oak), 0, "recovered");
+
+        // A removed component recovers the same way and leaves nothing behind.
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Dying);
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(tag_of(&app, oak), TreeCondition::Dying.tag_bits());
+        app.world_mut().entity_mut(oak).remove::<TreeCondition>();
+        app.update();
+        let (start, gliding) = tag_level(tag_of(&app, oak));
+        assert!(gliding && start >= 240, "starts from where it was: {start}");
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(tag_of(&app, oak), 0);
+        assert!(app.world().get::<ConditionShown>(oak).is_none() && app.world().get::<ConditionGliding>(oak).is_none());
+    }
+
+    #[test]
+    fn a_tree_that_appears_with_its_condition_shows_it_at_once_and_so_does_a_glide_of_nothing() {
+        let mut app = app();
+        app.world_mut().insert_resource(ConditionGlide { seconds: 30.0 });
+        let loaded = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), TreeCondition::Dying, TreeLod::default())).id();
+        let handle = pool(&mut app, TreePreset::Pine);
+        let pooled = app.world_mut().spawn((PooledTree { pool: handle, variant: 0 }, TreeCondition::Sick, Transform::from_xyz(20.0, 0.0, 0.0))).id();
+        settle(&mut app);
+        assert_eq!(tag_of(&app, loaded), TreeCondition::Dying.tag_bits(), "a procedural tree that appears dying");
+        assert_eq!(tag_of(&app, pooled) & !TAG_LOOK_MASK, TreeCondition::Sick.tag_bits(), "a pooled one that appears sick");
+        assert!(app.world().get::<ConditionGliding>(loaded).is_none() && app.world().get::<ConditionGliding>(pooled).is_none());
+
+        // A glide of nothing is a change at once, as it has always been.
+        app.world_mut().insert_resource(ConditionGlide { seconds: 0.0 });
+        app.world_mut().entity_mut(loaded).insert(TreeCondition::Healthy);
+        settle(&mut app);
+        assert_eq!(tag_of(&app, loaded), 0);
+    }
+
+    #[test]
+    fn a_pooled_trees_glide_survives_a_look_change_and_a_rebuild_keeps_it() {
+        const RED: PoolColors = PoolColors { wood: Color::srgb(0.3, 0.1, 0.1), leaves: Color::srgb(0.8, 0.1, 0.1), unlit: false };
+        let mut app = app();
+        app.world_mut().insert_resource(ConditionGlide { seconds: 4.0 });
+        let mut built = build_pool(&TreePreset::Pine.params(), 2, f32::INFINITY, &LodSettings::default(), &mut app.world_mut().resource_mut::<Assets<Mesh>>());
+        built.add_look(RED);
+        let handle = app.world_mut().resource_mut::<Assets<TreePool>>().add(built);
+        let tree = app.world_mut().spawn((PooledTree { pool: handle, variant: 0 }, Transform::default())).id();
+        settle(&mut app);
+        app.world_mut().entity_mut(tree).insert(TreeCondition::Dying);
+        for _ in 0..45 {
+            app.update();
+        }
+        let (level, gliding) = tag_level(tag_of(&app, tree));
+        assert!(gliding && level > 20 && level < 235, "gliding: {level}");
+
+        // Another look in the middle of it: the look's tag, the glide's bits.
+        app.world_mut().entity_mut(tree).insert(PooledLook(1));
+        app.update();
+        let tag = tag_of(&app, tree);
+        let (now, gliding) = tag_level(tag);
+        assert!(tag & TAG_LOOK_MASK != 0, "the other look's tag: {tag:#x}");
+        assert!(gliding && now.abs_diff(level) <= 6, "the glide went on through the look change: {level} then {now}");
+        assert_eq!(tag & (3 << TAG_SHIFT), TreeCondition::Dying.tag_bits());
+        for _ in 0..180 {
+            app.update();
+        }
+        assert_eq!(tag_of(&app, tree) & !TAG_LOOK_MASK, TreeCondition::Dying.tag_bits(), "arrived");
+    }
+
+    #[test]
+    fn a_pause_stops_a_glide_and_a_settled_tree_has_none_running() {
+        let (mut app, oak) = gliding_oak(2.0);
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Dying);
+        for _ in 0..20 {
+            app.update();
+        }
+        let (level, _) = tag_level(tag_of(&app, oak));
+        // A paused game does not decline.
+        app.world_mut().resource_mut::<bevy::time::Time<bevy::time::Virtual>>().pause();
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(tag_level(tag_of(&app, oak)).0, level, "paused");
+        app.world_mut().resource_mut::<bevy::time::Time<bevy::time::Virtual>>().unpause();
+        for _ in 0..90 {
+            app.update();
+        }
+        assert_eq!(tag_of(&app, oak), TreeCondition::Dying.tag_bits());
+        // Settled trees are not visited by the glide system at all.
+        let mut visited = app.world_mut().query_filtered::<Entity, With<ConditionGliding>>();
+        assert_eq!(visited.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn trees_that_began_together_do_not_step_together() {
+        let mut app = app();
+        app.world_mut().insert_resource(ConditionGlide { seconds: 60.0 });
+        let handle = pool(&mut app, TreePreset::Pine);
+        let trees: Vec<Entity> = (0..120)
+            .map(|i| app.world_mut().spawn((PooledTree { pool: handle.clone(), variant: i % 2 }, Transform::from_xyz(i as f32 * 5.0, 0.0, 0.0))).id())
+            .collect();
+        settle(&mut app);
+        for &tree in &trees {
+            app.world_mut().entity_mut(tree).insert(TreeCondition::Dying);
+        }
+        // To the steepest part of the 60-second smoothstep (30 s, at 30 frames a second).
+        for _ in 0..900 {
+            app.update();
+        }
+        let levels = |app: &App| -> Vec<f32> { trees.iter().map(|&tree| app.world().get::<ConditionShown>(tree).unwrap().level).collect() };
+        let mut last = levels(&app);
+        let mut per_frame = Vec::new();
+        for _ in 0..200 {
+            app.update();
+            let now = levels(&app);
+            assert!(now.iter().zip(&last).all(|(now, last)| now >= last), "no tree steps back");
+            per_frame.push(now.iter().zip(&last).filter(|(now, last)| now != last).count());
+            last = now;
+        }
+        // The glide is moving every tree (about a fifth of them take a step each frame here), and
+        // never the whole forest in one frame (without the trees' own fractions of a step, a frame in
+        // five moves all of them and the rest none).
+        let (most, total) = (per_frame.iter().copied().max().unwrap(), per_frame.iter().sum::<usize>());
+        assert!(total > 200 * 120 / 10, "the trees are stepping: {total} steps in 200 frames");
+        assert!(most <= 120 / 2, "at most half the trees step in one frame: {most}");
     }
 }

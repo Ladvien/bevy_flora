@@ -365,7 +365,9 @@
 //! keeps the component. The tree is drawn in its condition: a sick crown has lost about a third of
 //! its leaves and what is left is half way to dry, a dying one four fifths of them
 //! ([`TreeCondition::defoliation`], [`TreeCondition::withering`]); wood, fruit and flowers are as
-//! they were.
+//! they were. A change is drawn the frame after it is set; with [`ConditionGlide`] it is a decline of
+//! that many seconds instead (the leaves go and dry continuously, a recovery brings them back, and a
+//! tree that appears with its condition shows it at once), while the index answers the class at once.
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;
@@ -467,7 +469,7 @@ pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
 pub use growth::GrowthParams;
 pub use harvest::{FallenFruit, FallingFruit, Fruit, FruitFell, TreeFruit};
-pub use condition::TreeCondition;
+pub use condition::{ConditionGlide, TreeCondition};
 pub use index::{FloraIndex, IndexedTree, Obstacle, ObstacleKind, TreeHit};
 pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial, ImpostorTint};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
@@ -516,6 +518,7 @@ pub mod prelude {
         LeafBurst, LeafScan, LodDistances, LodScale, LodSettings, PoolColors, PooledLook, PooledTree, ProceduralTree,
         ProceduralTreeAsset, RecolorPool, RecolorTree, RenderStyle, CrownStyle, TrunkStyle,
         Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeCondition, TreeGenerated, TreeLanded, TreeLod, TreeLog,
+        ConditionGlide,
         TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
         WindResponse, WoodCapsule, build_pool,
     };

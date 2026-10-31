@@ -58,7 +58,7 @@ use bevy::shader::{Shader, ShaderDefVal};
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 
-use crate::condition::{Decline, TreeCondition};
+use crate::condition::{ConditionShown, Decline, TreeCondition};
 use crate::felling::{Felled, TreeLanded};
 use crate::fire::{FloraFire, burnt_front};
 use crate::ground::FloraGround;
@@ -729,9 +729,13 @@ struct LeafSource {
 }
 
 /// What a tree in `condition` has done to the leaves that fall from it: the tree's own, as its
-/// shaders draw the leaves left on it ([`Decline`]).
-fn decline_of(condition: Option<&TreeCondition>, leaves: &LeafSource) -> Decline {
-    Decline::new(condition, leaves.hull.is_some())
+/// shaders draw the leaves left on it ([`Decline`]), at the level the tree shows now when it is
+/// `shown` (a decline on its way), else its class's.
+fn decline_of(condition: Option<&TreeCondition>, shown: Option<&ConditionShown>, leaves: &LeafSource) -> Decline {
+    match shown {
+        Some(shown) => Decline::at(shown.level, leaves.hull.is_some()),
+        None => Decline::new(condition, leaves.hull.is_some()),
+    }
 }
 
 /// The leaves of a tree drawn on the CPU with [`FloraMaterial`]s, or from a pool's: `None` for any
@@ -841,6 +845,7 @@ pub(crate) fn drop_leaves(
         Option<&PooledLook>,
         Option<&Felled>,
         Option<&TreeCondition>,
+        Option<&ConditionShown>,
     )>,
     stumps: Query<&GlobalTransform>,
     bursts: Query<&LeafBurst>,
@@ -857,12 +862,12 @@ pub(crate) fn drop_leaves(
         if budget == 0 {
             continue;
         }
-        let Ok((at, render, tree, pooled, look, felled, condition)) = trees.get(drop.tree) else { continue };
+        let Ok((at, render, tree, pooled, look, felled, condition, shown)) = trees.get(drop.tree) else { continue };
         let Some(leaves) = leaf_source(render, tree, pooled, look, pools.as_deref()) else { continue };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let shed = leaves.deciduous.then_some(season.leaf_fall);
         let burnt = burnt_front(fire.as_deref(), at.translation());
-        let decline = decline_of(condition, &leaves);
+        let decline = decline_of(condition, shown, &leaves);
         let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
         let mut cards: Vec<&Card> =
             read.cards.iter().filter(|card| card.on_tree(shed, burnt) && !decline.has_lost(card.phase)).collect();
@@ -930,6 +935,7 @@ pub(crate) fn shed_with_season(
             Option<&PooledTree>,
             Option<&PooledLook>,
             Option<&TreeCondition>,
+            Option<&ConditionShown>,
         ),
         Without<Felled>,
     >,
@@ -986,7 +992,7 @@ pub(crate) fn shed_with_season(
         a.total_cmp(b).then(p.x.total_cmp(&q.x)).then(p.z.total_cmp(&q.z))
     });
     let mut looks: HashMap<AssetId<FloraMaterial>, (Handle<FloraMaterial>, BurstBuilder)> = HashMap::default();
-    for (_, (at, render, tree, pooled, look, condition)) in near {
+    for (_, (at, render, tree, pooled, look, condition, shown)) in near {
         let budget = settings.max_leaves.saturating_sub(live) as usize;
         if budget == 0 {
             break;
@@ -997,7 +1003,7 @@ pub(crate) fn shed_with_season(
         };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let burnt = burnt_front(fire.as_deref(), position);
-        let decline = decline_of(condition, &leaves);
+        let decline = decline_of(condition, shown, &leaves);
         let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
         let falling: Vec<&Card> = read
             .shed_between(from, to)
@@ -1380,6 +1386,45 @@ mod tests {
         // (the burst carries it, its shader the colour), a sick one's half way.
         assert!(withered > 0.85, "{withered:.2} withered on a dying oak's falling leaves");
         assert!((half - TreeCondition::Sick.withering()).abs() < 0.1, "{half:.2} on a sick one's");
+    }
+
+    #[test]
+    fn a_tree_part_way_through_its_decline_drops_the_leaves_it_shows_and_they_fall_as_dry() {
+        let mut app = app();
+        app.world_mut().insert_resource(crate::ConditionGlide { seconds: 4.0 });
+        let oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), Transform::default())).id();
+        app.update();
+        app.update();
+        let all = {
+            let world = app.world();
+            let render = world.get::<TreeRender>(oak).unwrap();
+            let mesh = world.resource::<Assets<Mesh>>().get(&render.foliage.as_ref().unwrap().1).unwrap();
+            leaf_cards(mesh).iter().filter(|card| !card.flower).count()
+        };
+        // Dying over four seconds, a hundred milliseconds a frame: half way, level a half, after 20 frames.
+        app.world_mut().entity_mut(oak).insert(TreeCondition::Dying);
+        for _ in 0..20 {
+            app.update();
+        }
+        let level = app.world().get::<crate::condition::ConditionShown>(oak).unwrap().level;
+        assert!((0.4..0.6).contains(&level), "half way down: {level}");
+        app.world_mut().resource_mut::<FallingLeaves>().max_leaves = 100_000;
+        app.world_mut().resource_mut::<Messages<DropLeaves>>().write(DropLeaves { tree: oak, count: 100_000 });
+        app.update();
+        let world = app.world_mut();
+        let (burst, mesh) = world.query::<(&LeafBurst, &Mesh3d)>().single(world).unwrap();
+        let (leaves, mesh) = (burst.leaves as usize, mesh.0.clone());
+        let Some(VertexAttributeValues::Float32x4(faces)) = world.resource::<Assets<Mesh>>().get(&mesh).unwrap().attribute(ATTRIBUTE_FALL_FACE) else {
+            panic!("the burst keeps its leaves' faces");
+        };
+        let dry = faces.iter().map(|face| face[3]).sum::<f32>() / faces.len() as f32;
+        // What the tree has left at that level (its own, not the class's it is heading for), as dry.
+        let level = app.world().get::<crate::condition::ConditionShown>(oak).unwrap().level;
+        let left = leaves as f32 / all as f32;
+        let want = 1.0 - crate::condition::defoliation_at(level);
+        assert!((left - want).abs() < 0.05, "{leaves} of {all} left on the tree at level {level}: {left:.2}, wanted {want:.2}");
+        assert!(left > 1.0 - TreeCondition::Dying.defoliation() + 0.1, "more than the dying class has left: {left:.2}");
+        assert!((dry - crate::condition::withering_at(level)).abs() < 0.1, "{dry:.2} withered at level {level}");
     }
 
     #[test]

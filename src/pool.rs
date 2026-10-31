@@ -882,7 +882,7 @@ pub(crate) fn spawn_pooled_trees(
     mut textures: TextureLibrary,
     recolors: Res<PoolRecolors>,
     trees: Query<
-        (Entity, &PooledTree, Option<&PooledLook>, Option<&crate::TreeCondition>, Has<NotShadowCaster>),
+        (Entity, &PooledTree, Option<&PooledLook>, Option<&crate::TreeCondition>, Option<&crate::condition::ConditionShown>, Has<NotShadowCaster>),
         Without<PooledTreeSpawned>,
     >,
     units: Res<FloraUnits>,
@@ -895,7 +895,7 @@ pub(crate) fn spawn_pooled_trees(
     // A tree whose pool is not ready yet is skipped, not counted: it must not
     // keep trees of a ready pool from getting their children.
     let mut spawned = 0;
-    for (tree, pooled, look, condition, quiet) in &trees {
+    for (tree, pooled, look, condition, shown, quiet) in &trees {
         let Some(pool) = pools.get(&pooled.pool) else {
             continue;
         };
@@ -947,6 +947,7 @@ pub(crate) fn spawn_pooled_trees(
         let tag = MeshTag::new(crate::condition::tag_for(
             slots.tag(pooled.pool.id(), (look % pool.looks.len().max(1)) as u32),
             condition,
+            shown,
         ));
         // `NoAutoAabb`: the children keep these boxes. Bevy would otherwise recompute every new
         // child's from all of its mesh's vertices (100 000 trees: seconds of loading) and replace
@@ -1306,7 +1307,10 @@ pub(crate) fn sync_pooled_looks(
     pools: Res<Assets<TreePool>>,
     changed: Query<Entity, (With<PooledTreeSpawned>, Changed<PooledLook>)>,
     mut removed: RemovedComponents<PooledLook>,
-    trees: Query<(&PooledTree, Option<&PooledLook>, Option<&crate::TreeCondition>, &Children), With<PooledTreeSpawned>>,
+    trees: Query<
+        (&PooledTree, Option<&PooledLook>, Option<&crate::TreeCondition>, Option<&crate::condition::ConditionShown>, &Children),
+        With<PooledTreeSpawned>,
+    >,
     flora: Query<&MeshMaterial3d<FloraMaterial>>,
     standard: Query<&MeshMaterial3d<StandardMaterial>>,
     impostors: Query<&MeshMaterial3d<ImpostorMaterial>>,
@@ -1314,7 +1318,7 @@ pub(crate) fn sync_pooled_looks(
 ) {
     let touched: Vec<Entity> = changed.iter().chain(removed.read()).collect();
     for tree in touched {
-        let Ok((pooled, look, condition, children)) = trees.get(tree) else { continue };
+        let Ok((pooled, look, condition, shown, children)) = trees.get(tree) else { continue };
         let Some(pool) = pools.get(&pooled.pool) else { continue };
         let look = look.map_or(0, |look| look.0 as usize);
         let Some(now) = pool.materials.get(look % pool.materials.len().max(1)) else { continue };
@@ -1323,6 +1327,7 @@ pub(crate) fn sync_pooled_looks(
         let tag = MeshTag::new(crate::condition::tag_for(
             slots.tag(pooled.pool.id(), (look % pool.looks.len().max(1)) as u32),
             condition,
+            shown,
         ));
         for child in children.iter() {
             commands.entity(child).insert(tag.clone());

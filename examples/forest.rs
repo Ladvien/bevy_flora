@@ -1127,6 +1127,7 @@ fn drive(
     time: Res<Time>,
     mut shakes: ResMut<TreeShakes>,
     mut knocks: Local<u32>,
+    every_tree: Query<Entity, With<ForestTree>>,
 ) {
     let bench = &mut *bench;
     if bench.args.wind_animate && bench.phase != Phase::Loading {
@@ -1219,6 +1220,12 @@ fn drive(
                 bench.phase = Phase::Capturing;
             } else {
                 bench.phase = Phase::Measuring;
+                if let Ok(secs) = std::env::var("FOREST_DECLINE") {
+                    commands.insert_resource(bevy_flora::ConditionGlide { seconds: secs.parse().unwrap() });
+                    for tree in &every_tree {
+                        commands.entity(tree).insert(TreeCondition::Dying);
+                    }
+                }
                 bench.cpu_start = cpu_seconds();
             }
         }
