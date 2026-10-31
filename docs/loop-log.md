@@ -574,3 +574,15 @@ the QA log.
    gallery pass of its own.
 4. **A gradual decline** (iteration 6's #2): a class change pops; leaves the new class loses should fall.
 5. **D-074 / D-075** on big; a dying tree's wood and shadow; D-067; a CPU mirror of `wind_bend`.
+
+**Clean-up (iteration 7).** Merge `aef29ad` on `main` (pushed, tree identical to `loop/iter-7`, so the gate
+stood). No release: v0.46.1 was 3 h 43 m old at the push, the 6-hour rule; 0.47.0 carries iterations 5 to 7. No
+issue referenced or closed (none was open). Baseline kept as copies of main's release binaries under `/tmp/f7/base`
+(no second worktree or target directory: `git worktree list` shows only the clone). Removed, mine: `/tmp/f7`
+(3.1 GB: binaries, galleries, tuning renders, bench output, findings, critique, a PMC page), the throwaway
+`examples/zz_probe.rs` (never committed), and in `CARGO_TARGET_DIR` every file this pass wrote (modified after
+01:00 today): the release example binaries and `bevy_flora` rlibs, the debug test binaries and rlibs and the
+default-feature check metadata of Bevy, the release and debug incremental caches, and `package/bevy_flora-0.46.1*`;
+`df -h /` 15 GB free at the start, 5.7 GB before, 15 GB after. Kept: the target directory's dependency builds (all
+older than this pass). Leftovers of earlier passes: none found (no `f*_base` in `~` or `/tmp`); the branches
+`loop/iter-1` to `-7` remain on origin, not deleted.
