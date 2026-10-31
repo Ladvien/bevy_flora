@@ -53,7 +53,7 @@ cargo run --release --example tree_file --features ron,file_watcher [-- --export
 - `examples/playground.rs`: a first-person sandbox where the gameplay APIs meet (axe, buck, shake, pick, fire, rain, year, save and load), every action read from a `Controls` resource so `--demo` plays a script through the same systems and records `docs/media/playground.gif`
 - `examples/isometric.rs`: an orthographic isometric camera over a pooled forest, following a walker with `SeeThroughTrees` (cylinder, share kept, `in_front`, `floor`) and zooming while the levels of detail follow (`LodScale`); `--demo` records `docs/media/isometric.gif`
 - `src/textures/` (bundled CC0 bark scans and leaf atlases, `CREDITS.md`, the generated outline table `leaves.rs`; compiled in by the default `textures` feature) and `tools/prepare_textures.py` (downloads and processes them and generates `leaves.rs`; repo only, not packaged)
-- Publishing: `Cargo.toml` `include` keeps `qa/`, `slop/`, `docs/`, `tools/` out of the package; README media use absolute GitHub URLs
+- Publishing: `Cargo.toml` `include` keeps `qa/`, `slop/`, `docs/`, `tools/` out of the package; README media use a relative path (`docs/media/<name>.gif`), which crates.io rewrites to the repository
 - Releasing: follow `AGENTS.md`. Every release, patch releases included, re-records the README clips (`docs/media/growth.gif`, `grove`, `seasons`, `shake`, `fell`, `fire`, `push`, `chop` and `harvest`) with `capture_growth`, `docs/media/playground.gif` with `playground --demo` and `docs/media/isometric.gif` with `isometric --demo`; the clips are not updated automatically
 - `qa/visual_findings.md`: visual QA defect log (open / fixed / proposed / iterations)
 
