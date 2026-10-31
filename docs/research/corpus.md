@@ -53,6 +53,8 @@ what it rests on; this file only says what exists. Newest additions last in each
   canopies".
 - `10.1038_s41467-026-68989-x`: "Pantropical moist forests are converging towards a middle leaf
   longevity".
+- `10.5194_bg-2015-619`: "Climate seasonality limits leaf carbon assimilation and wood productivity
+  in tropical forests" (added 2026-10-31).
 
 ## Tree condition and mortality (issue #87)
 
@@ -65,6 +67,26 @@ what it rests on; this file only says what exists. Newest additions last in each
 - `10.1038_s41467-020-20455-y`: "Cross-scale interaction of host tree size and climatic water
   deficit governs bark beetle-induced tree mortality".
 - `10.1038_s41467-019-12380-6`: "Tree height explains mortality risk during an intense drought".
+- `10.3390_f8040137`: "Traditional and Novel Indicators of Climate Change Impacts on European Forest
+  Trees" (Forests 2017; crown defoliation as the visual vitality indicator; added 2026-10-31).
+- `10.1007_s10342-005-0085-3`: "Tree growth as indicator of tree vitality and of tree reaction to
+  environmental stress: a review" (transparency and defoliation classes; mortality against
+  transparency; added 2026-10-31).
+- `10.3389_fpls.2026.1809811`: "Divergent climate-growth responses in radial growth of Chinese pine
+  forests" (stands graded by crown dieback, about 10, 30, 50 and 80 per cent; added 2026-10-31).
+- `10.1038_s41598-022-24833-y`: "Canopy dieback and recovery in Australian native forests following
+  extreme drought" (a canopy health score per tree; added 2026-10-31).
+
+## Game objects and entity state (`TreeCondition`, `FloraIndex`)
+
+- `Game Engine Architecture, Third Edition` (Gregory; home-still doc id begins with that title): chapter
+  16, the game object as attributes (state) and behaviours; component-based object models.
+- `10.1145_3748522.3779910`: Tasnim and Zhao, "The Essence of Entity Component System" (components
+  added to and removed from entities; archetype ECS semantics; added 2026-10-31).
+- `10.1145_3763050`: Redmond et al., "Exploring the Theory and Practice of Concurrency in the
+  Entity-Component-System Pattern" (added 2026-10-31).
+- Web, not indexed: Timberborn's plant states (alive, dying, dead), as one mod's notes on the decompiled
+  game record them, <https://github.com/timbermods/dam-good-maps/pull/742>.
 
 ## Wildfire
 
