@@ -242,6 +242,8 @@ impl bevy::app::Plugin for FloraPlugin {
             .init_resource::<PushSlots>()
             .register_type::<FloraUnits>()
             .register_type::<crate::condition::TreeCondition>()
+            .init_resource::<crate::condition::ConditionGlide>()
+            .register_type::<crate::condition::ConditionGlide>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
@@ -336,8 +338,10 @@ impl bevy::app::Plugin for FloraPlugin {
                     // The far trees quieted, then every mesh of a tree told.
                     crate::shadows::cut_far_shadows.after(crate::index::index_obstacles),
                     sync_shadow_casting.after(crate::shadows::cut_far_shadows),
-                    // The class of every tree's condition in the tag of its meshes, for the shaders.
+                    // The class of every tree's condition in the tag of its meshes, for the shaders, and
+                    // the declines on their way (`ConditionGlide`) one frame further.
                     crate::condition::sync_condition_tags,
+                    crate::condition::advance_condition_glides.after(crate::condition::sync_condition_tags),
                     // And whether any tree has one, so the vertex stages read no tag while none does.
                     crate::glide::sync_condition_flag,
                 )
@@ -386,7 +390,9 @@ impl bevy::app::Plugin for FloraPlugin {
                     expire_bursts.run_if(any_with_component::<LeafBurst>),
                 )
                     .after(bevy::transform::TransformSystems::Propagate)
-                    .after(bevy::asset::AssetEventSystems),
+                    .after(bevy::asset::AssetEventSystems)
+                    // They read the level a tree shows (`ConditionShown`), as this frame's glide left it.
+                    .after(crate::condition::advance_condition_glides),
             );
         // Before `gpu`: its shaders import the flora library.
         crate::shading::build(app);

@@ -1035,6 +1035,21 @@ Which tree did the axe hit, which one is nearest the woodcutter, which ones stan
 
 The tree is drawn in its condition. A `Sick` crown has lost about a third of its leaves (`TreeCondition::defoliation`, 0.35) and the leaves that are left have withered half way to a dry ochre-brown (`TreeCondition::withering`), each its own way, so the crown is thin and mottled; a `Dying` one has lost four fifths and what is left is dry. The wood, the fruit and the flowers are as they were, and the leaves are lost in the shadow maps too, so a thin crown lets the light through. Every level of detail, the impostors and trees that grow on the GPU show the same condition, a leaf a shake or the season knocks off a sick tree is one it still has (and falls as dry as those on it), and it composes with `FloraSeason` and `RecolorTree`. The class travels in the `MeshTag` of the tree's meshes, above a pooled look's glide tag, so trees of one mesh and material still draw in one batch whatever their conditions; a device without flora materials (no vertex-stage storage buffers, WebGL2) shows the state and not the look. `inspect --condition sick|dying` and `forest --sick <share> --dying <share>` show it, and the gallery has 30 `condition_*` scenarios.
 
+**A change of condition can glide.** By default a class is drawn the frame after it is set: a sick oak has lost a third of its leaves at once. `ConditionGlide { seconds }` (a resource, 0 by default) draws a change as a decline over that many seconds instead: the share of the crown's leaves that is lost rises, and the leaves that are left dry, continuously from what the tree shows now to what the new class shows, along a smoothstep, so the lost leaves are the ones the class loses and a leaf, once lost, stays lost until the tree recovers. Making a tree `Healthy` (or removing the component) recovers it the same way, the leaves coming back; a change half way through starts from the level on screen, so the picture never jumps whatever the game does. The index answers the class the game set at once (`condition_of` does not wait for the picture), and a tree that appears with its condition (a forest loaded from a save, a pool whose assets arrive after its trees) shows it at once, as does any tree when the resource is 0. The time is the app's `Time`, so a paused game does not decline, and the value that counts is the one the resource has the frame the change is made: a lightning strike that should take a second sets `ConditionGlide { seconds: 1.0 }` and inserts `TreeCondition::Dying` in the same frame. Impostors and trees that grow on the GPU glide with the others. `inspect --condition dying --decline 8,0,1 --frames 9` photographs eight seconds of it, a frame a second.
+
+```rust,no_run
+use bevy::prelude::*;
+use bevy_flora::prelude::*;
+
+// A blight that takes a minute to show: every tree near `centre` is dying by the time it is over.
+fn blight(mut commands: Commands, index: Res<FloraIndex>) {
+    commands.insert_resource(ConditionGlide { seconds: 60.0 });
+    for tree in index.within(Vec2::new(10.0, -4.0), 12.0).filter(|tree| !tree.undergrowth) {
+        commands.entity(tree.entity).insert(TreeCondition::Dying);
+    }
+}
+```
+
 ```rust,no_run
 use bevy::prelude::*;
 use bevy::shape::Ray3d;
