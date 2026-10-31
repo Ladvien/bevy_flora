@@ -18,11 +18,11 @@
 //!
 //! `--demo` plays eight scripted seconds instead (an apple tree shaken and picked, an oak notched,
 //! felled and bucked in the rain) and writes them as 192 frames to `target/capture/playground`
-//! (`--out` for another directory), at a fixed 1/24 s a frame, for `docs/playground.gif` (16 fps
+//! (`--out` for another directory), at a fixed 1/24 s a frame, for `docs/media/playground.gif` (16 fps
 //! and 64 colours: a first-person camera changes every pixel of every frame):
 //!
 //! ```text
-//! ffmpeg -framerate 24 -i target/capture/playground/frame_%04d.png -vf "fps=16,scale=560:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" docs/playground.gif
+//! ffmpeg -framerate 24 -i target/capture/playground/frame_%04d.png -vf "fps=16,scale=560:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" docs/media/playground.gif
 //! ```
 
 use std::f32::consts::{FRAC_PI_2, TAU};

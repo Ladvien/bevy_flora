@@ -37,6 +37,12 @@ jobs:
       - name: Test
         run: cargo test --all-features
 
+      # `cargo test` already runs the doctests, README included (the README is
+      # `include_str!`d into a doctest in `src/lib.rs`); this step says so in the
+      # log, so a README example that stops compiling is visible as itself.
+      - name: Doc-tests
+        run: cargo test --all-features --doc
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 

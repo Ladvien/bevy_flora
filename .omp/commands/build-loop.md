@@ -16,6 +16,11 @@ They override the choice of item in section 4, not the gates.
 State lives in `docs/loop-log.md`; rules and traps live in `CLAUDE.md`. Follow them; do not
 re-derive them.
 
+README and docs follow https://github.com/bevy-coven/.github/blob/main/DOCUMENTATION.md; a feature is
+not done until its README line and, if visible, its GIF exist. `README.md` stays at or under 250 lines;
+detail goes in `docs/guide/`, pictures in `docs/gallery.md`, and every media file is listed in
+`docs/media/README.md`.
+
 ## Your work is saved even if you are killed — read this before you start
 
 **The driver saves whatever you leave uncommitted, without touching your branch.** Every ten minutes
@@ -361,7 +366,7 @@ Start only after section 7 passes. Then release (the "Release" block at the end 
 1. Document: rustdoc for every changed public item, the README for user-visible changes, the research
    note's `Deviations` and `Pending index`, and an entry under `## [Unreleased]` in `CHANGELOG.md`
    (`Added`, `Changed`, `Fixed`, `Removed`).
-2. Regenerate the README clip (`docs/*.gif`, recipe in `AGENTS.md`, from `capture_growth`, `playground --demo`
+2. Regenerate the README clip (`docs/media/*.gif`, recipe in `AGENTS.md`, from `capture_growth`, `playground --demo`
    or `isometric --demo`) when the behaviour it shows has moved. A release follows `AGENTS.md`'s checklist
    for what it updates (CHANGELOG, README compatibility table, frame times, every README clip re-recorded and
    checked); it publishes through the "Release" block below, locally, not through `AGENTS.md`'s PR-and-CI

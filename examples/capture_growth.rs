@@ -1,20 +1,20 @@
 //! Records the README clips, rendered offscreen to numbered PNG frames: one tree growing from a
-//! seedling to maturity while the camera orbits it (`docs/growth.gif`), or, with `--grove`, a
-//! grove of mixed species growing in turn while a gust front crosses it (`docs/grove.gif`).
+//! seedling to maturity while the camera orbits it (`docs/media/growth.gif`), or, with `--grove`, a
+//! grove of mixed species growing in turn while a gust front crosses it (`docs/media/grove.gif`).
 //!
 //! ```text
 //! cargo run --release --example capture_growth -- [--out <dir>] [--preset <name>] [--gpu]
 //! ffmpeg -y -framerate 24 -i <dir>/frame_%04d.png -vf \
 //!   "fps=24,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" \
-//!   docs/growth.gif
+//!   docs/media/growth.gif
 //!
 //! cargo run --release --example capture_growth -- --grove [--out <dir>] [--gpu]
 //! ffmpeg -y -framerate 24 -i <dir>/frame_%04d.png -vf \
 //!   "fps=20,scale=560:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" \
-//!   docs/grove.gif
+//!   docs/media/grove.gif
 //! ```
 //!
-//! `--seasons` records the grove fully grown through a year (`docs/seasons.gif`): the deciduous
+//! `--seasons` records the grove fully grown through a year (`docs/media/seasons.gif`): the deciduous
 //! trees turn their autumn colours and shed their leaves, snow settles on every tree and melts,
 //! the cherry blossoms on bare branches, and the leaves come out again, while the pine and the
 //! cypress stay green. The year is a time-lapse, so its leaves are shed where they hang: falling
@@ -34,32 +34,32 @@
 //!   "[0]crop=16:5:0:0[a];[1]crop=16:1:0:0[b];[a][b]vstack,pad=16:16:0:0:black" -update 1 palette.png
 //! ffmpeg -y -framerate 24 -i <dir>/frame_%04d.png -i palette.png -filter_complex \
 //!   "[0]fps=20,scale=560:-1:flags=lanczos[x];[x][1]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" \
-//!   docs/seasons.gif
+//!   docs/media/seasons.gif
 //! ```
 //!
 //! `--shake` records it fully grown from a still camera, knocked with `TreeShakes`
-//! (`docs/shake.gif`, encoded like the grove): an axe on the oak, one on the birch, then a blast
+//! (`docs/media/shake.gif`, encoded like the grove): an axe on the oak, one on the birch, then a blast
 //! that swings every tree, each hit knocking leaves off (`FallingLeaves`). `--fell` records a few
 //! grown trees from a still camera while the oak in front is notched by four blows of an axe
 //! (`TreeNotch`), felled at the notch (`FellTree`), crashes to the ground, sheds leaves and
-//! leaves its stump (`docs/fell.gif`, encoded like the grove). `--fire`
+//! leaves its stump (`docs/media/fell.gif`, encoded like the grove). `--fire`
 //! records the grove at dusk from a still camera while a fire (`FloraFire`) lit on its upwind edge
 //! runs through it, the leaves scorching and burning away and the wood charring, its embers
-//! glowing and then cooling (`docs/fire.gif`, encoded like the grove). Its fire is sped up like
+//! glowing and then cooling (`docs/media/fire.gif`, encoded like the grove). Its fire is sped up like
 //! the rest of a clip (`FireSpread` 3.5 m/s, each spot burnt through in two seconds), its
 //! ground scorches by the fire's char, as a game's own ground would read it, and six point
 //! lights over the fire's hottest 4 m squares (`FloraFire::hottest`) light the ground and the
 //! trunks around it. `--push` records a
 //! patch of shrubs from a still camera while a red stand-in for a character walks through it
 //! (`FoliagePusher`): the leaves and stems give way around it and close up behind it
-//! (`docs/push.gif`, encoded like the grove). `--chop` records a row of four trees from a still
+//! (`docs/media/push.gif`, encoded like the grove). `--chop` records a row of four trees from a still
 //! camera while a lumberjack asks `FloraIndex` for the nearest standing tree, walks to its bark
 //! (a yellow ring marks the tree it is after), notches it, walks round it and fells it toward the
-//! notch, then the next: a felled tree leaves the index at once (`docs/chop.gif`, encoded like the
+//! notch, then the next: a felled tree leaves the index at once (`docs/media/chop.gif`, encoded like the
 //! grove). `--harvest` records two apple trees from a still camera: the left one is shaken and
 //! its apples fall, bounce and lie in the grass (`FallingFruit`), then a picker beyond the right
 //! one takes the apples nearest its hand off the tree one by one (`TreeFruit::nearest`,
-//! `TreeFruit::pick`; a yellow line marks each) into a basket (`docs/harvest.gif`, encoded like
+//! `TreeFruit::pick`; a yellow line marks each) into a basket (`docs/media/harvest.gif`, encoded like
 //! the grove).
 //!
 //! Each clip is rendered as 192 frames, eight seconds at 24 fps; the grove's GIF keeps 160 of

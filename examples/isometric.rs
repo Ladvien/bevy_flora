@@ -16,13 +16,13 @@
 //! `--demo` plays eight scripted seconds instead (the walker crosses the view along the path on a
 //! still day, and the camera zooms out until the forest is impostors and back in) and writes them
 //! as 192 frames to `target/capture/isometric` (`--out` for another directory), at a fixed 1/24 s
-//! a frame, for `docs/isometric.gif` (16 fps and 64 colours, the palette made with a swatch of the
+//! a frame, for `docs/media/isometric.gif` (16 fps and 64 colours, the palette made with a swatch of the
 //! walker's red, which covers too few pixels to be kept otherwise):
 //!
 //! ```text
 //! ffmpeg -f lavfi -i color=c=0xC81C12:s=560x315 -frames:v 1 red.png
 //! ffmpeg -framerate 24 -i target/capture/isometric/frame_%04d.png -i red.png -filter_complex "[0]fps=16,scale=560:-1:flags=lanczos[a];[1]loop=loop=8:size=1[r];[a][r]concat=n=2:v=1,palettegen=max_colors=64:stats_mode=full" palette.png
-//! ffmpeg -framerate 24 -i target/capture/isometric/frame_%04d.png -i palette.png -lavfi "fps=16,scale=560:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" docs/isometric.gif
+//! ffmpeg -framerate 24 -i target/capture/isometric/frame_%04d.png -i palette.png -lavfi "fps=16,scale=560:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" docs/media/isometric.gif
 //! ```
 
 use std::f32::consts::FRAC_PI_4;
