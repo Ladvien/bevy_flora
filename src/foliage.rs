@@ -232,8 +232,9 @@ fn add_distributed_leaves(
     let count = distributed_leaf_count(foliage, node.length, node.height_ratio);
     for i in 0..count {
         let t = (i as f32 + rng.range(0.0, 1.0)) / count as f32;
-        let biased_t = t * t;
-        let position = node.wood.point_at(0.3 + biased_t * 0.7);
+        // A strand carries its leaves along its whole length; other wood bunches them toward its base.
+        let along = if node.wood.kind == NodeKind::Strand { 0.1 + t * 0.9 } else { 0.3 + t * t * 0.7 };
+        let position = node.wood.point_at(along);
         let size = foliage.leaf_size
             * (1.0 + rng.range(-foliage.leaf_size_variation, foliage.leaf_size_variation));
         let direction = leaf_direction(node, foliage, rng);

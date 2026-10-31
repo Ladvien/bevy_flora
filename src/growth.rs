@@ -59,7 +59,7 @@ pub fn assign_birth_times(skeleton: &mut Skeleton, growth: &GrowthParams) {
                 (parent.duration * skeleton.nodes[i].attach_t, branch_duration)
             }
             NodeKind::Split => (parent.birth + parent.duration, branch_duration),
-            NodeKind::Sub => (
+            NodeKind::Sub | NodeKind::Strand => (
                 parent.birth + parent.duration * skeleton.nodes[i].attach_t,
                 parent.duration * growth.child_duration_scale,
             ),

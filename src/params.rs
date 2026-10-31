@@ -198,6 +198,40 @@ pub struct BranchParams {
     /// large tree read as twigs instead of hairlines; `0` leaves every radius
     /// as the ratios and tapers give it.
     pub min_twig_radius: f32,
+    /// Pendant strands hung from the outer part of every branch: a weeping habit. Off by default
+    /// (every preset but the willow); see [`StrandParams`].
+    pub strands: StrandParams,
+}
+
+/// Pendant strands: slender twigs that hang straight down from the outer part of a branch and keep
+/// hanging for a set length, the long, rope-like twigs of a weeping willow. A strand is a node of the
+/// skeleton one level below the branch it hangs from, so it grows with it, carries leaves, sways and
+/// burns like any twig; `density` zero (the default) makes none, and a tree without strands is the
+/// tree it was before this field existed.
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
+pub struct StrandParams {
+    /// Strands per metre of branch, hung along the part of it past `start`. `0` makes none; the
+    /// count a branch gets is this times its length times `1 - start`, rounded at random.
+    pub density: f32,
+    /// Where along a branch strands begin, as a share of its length (0 = from its base, 0.5 = on its
+    /// outer half).
+    pub start: f32,
+    /// The longest a strand hangs, as a share of the trunk's height; each strand is between half of
+    /// this and all of it.
+    pub length: f32,
+    /// How far a strand may lean off plumb where it leaves its branch, in degrees; the branch's
+    /// gravity bend then turns it plumb along its length.
+    pub spread: f32,
+    /// With floor avoidance on, how far above `floor_level` a strand stops, in metres (a strand that
+    /// would reach lower is shortened, not removed).
+    pub clearance: f32,
+}
+
+impl Default for StrandParams {
+    fn default() -> Self {
+        Self { density: 0.0, start: 0.4, length: 0.5, spread: 12.0, clearance: 0.15 }
+    }
 }
 
 impl Default for BranchParams {
@@ -231,6 +265,7 @@ impl Default for BranchParams {
             floor_avoidance: true,
             floor_level: 0.0,
             min_twig_radius: 0.005,
+            strands: StrandParams::default(),
         }
     }
 }

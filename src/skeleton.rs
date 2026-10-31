@@ -21,6 +21,9 @@ pub enum NodeKind {
     Split,
     /// Recursive sub-branch.
     Sub,
+    /// A pendant strand hung from a branch ([`StrandParams`](crate::StrandParams)): one level below
+    /// its branch, grown like a sub-branch, its leaves spread along its whole length.
+    Strand,
 }
 
 /// One straight segment of the skeleton.
@@ -428,8 +431,89 @@ pub fn generate_skeleton(params: &TreeParams) -> Skeleton {
         }
     }
     skeleton.seat_on_parents(&params.branches, &params.trunk, params.seed);
+    hang_strands(&mut skeleton, params);
     crate::growth::assign_birth_times(&mut skeleton, &params.growth);
     skeleton
+}
+
+/// Separate random stream for strands, so a tree without them draws nothing and one with them keeps
+/// every other branch where it was.
+const STRAND_SALT: i32 = 0x57A4_D5E7;
+
+/// The shortest a strand is, as a share of the longest it could be there.
+const STRAND_SHORTEST: f32 = 0.5;
+
+/// How much of its branch's gravity bend a strand takes: it is a rope hanging plumb, so it only curves
+/// a little where it leaves slanted, and its wood needs few rings.
+const STRAND_BEND_SHARE: f32 = 0.25;
+
+/// The thinnest a strand's base is, in metres, whatever `min_twig_radius` says: a strand of no
+/// thickness would be a hairline of degenerate triangles.
+const STRAND_THINNEST: f32 = 0.001;
+
+/// Hang [`StrandParams`](crate::StrandParams) strands from the outer part of every branch of the seated
+/// `skeleton`: each is a [`NodeKind::Strand`] one level below its branch, appended after every other node
+/// (a parent still comes before its children), born when its branch reaches the point it hangs from.
+/// The leader, which only continues the trunk, carries none. Each branch draws from a stream of its own
+/// (keyed by its id), so the strands of one branch never move another's.
+fn hang_strands(skeleton: &mut Skeleton, params: &TreeParams) {
+    let s = &params.branches.strands;
+    if s.density <= 0.0 || s.length <= 0.0 {
+        return;
+    }
+    let b = &params.branches;
+    let bend = (b.gravity_strength * (1.0 - b.stiffness)).max(0.0) * STRAND_BEND_SHARE;
+    let start = s.start.clamp(0.0, 1.0);
+    let spread = s.spread.clamp(0.0, 90.0).to_radians();
+    let longest = s.length * params.trunk.height;
+    let floor = b.floor_level + s.clearance;
+    let branches = skeleton.nodes.len();
+    for i in 1..branches {
+        let parent = skeleton.nodes[i].clone();
+        if parent.kind == NodeKind::Leader || parent.length <= 0.0 {
+            continue;
+        }
+        let mut rng = SeededRng::from_parts(params.seed ^ STRAND_SALT, parent.id);
+        let expected = s.density * parent.length * (1.0 - start);
+        let count = expected.floor() as u32 + u32::from(rng.next_f32() < expected.fract());
+        for _ in 0..count {
+            let t = rng.range(start, 1.0);
+            let lean = spread * rng.next_f32().sqrt();
+            let around = rng.range(0.0, TAU);
+            let direction = Vec3::new(lean.sin() * around.cos(), -lean.cos(), lean.sin() * around.sin());
+            let at = parent.point_at(t);
+            // As far as it can hang: all of `longest`, or down to the floor, whichever is less.
+            let reach = if b.floor_avoidance { longest.min((at.y - floor).max(0.0) / -direction.y) } else { longest };
+            let length = reach * rng.range(STRAND_SHORTEST, 1.0);
+            let parent_radius = lerp(parent.base_radius, parent.tip_radius, t);
+            let (base_radius, tip_radius) = floored_radii(0.0, 0.0, b.min_twig_radius.max(STRAND_THINNEST), parent_radius);
+            let mut strand = Node {
+                kind: NodeKind::Strand,
+                parent: Some(parent.id),
+                attach_t: t,
+                anchor: at,
+                start: at,
+                direction,
+                length,
+                bend,
+                base_radius,
+                tip_radius,
+                depth: parent.depth.saturating_add(1),
+                height_ratio: parent.height_ratio,
+                ..blank_node()
+            };
+            if b.floor_avoidance {
+                strand.keep_above(floor);
+            }
+            strand.keep_out_of_trunk(&params.trunk, params.seed);
+            if strand.length > 0.05 {
+                push_node(skeleton, strand);
+            }
+        }
+    }
+    if skeleton.nodes.len() > branches {
+        skeleton.recount_children();
+    }
 }
 
 /// Placeholder values for fields filled in later (`..blank_node()`).
