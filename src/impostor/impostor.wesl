@@ -13,7 +13,7 @@ import bevy_pbr::render::{
 };
 import package::shading::common::{
     flora, flora_wind, wind_bend, shake_at, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
-    snow_on, snow_shelter, wet_on, LEAF_FROST,
+    snow_on, snow_shelter, wet_on, LEAF_FROST, tree_condition, condition_defoliation, condition_withering,
 };
 import package::impostor::impostor_common::impostor_corner;
 
@@ -113,6 +113,24 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         glide = glide_tint(mesh_functions::get_tag(in.instance_index), baked.a > 0.5);
     }
     color = vec4<f32>(color.rgb * mix(glide, flora.autumn.rgb, turn), color.a * (1.0 - season.y * leafy));
+    // A sick or dying tree (`TreeCondition`, in the mesh's tag): its leafy texels wither toward the
+    // dry leaf colour and the crown thins by the share of its leaves the class has lost, in patches
+    // like the season's (and, where a pixel spans several, the share of them), so a far crown shows
+    // the class the meshes show. A hull crown keeps its facets (`flora.tree.y`).
+    let condition = tree_condition(mesh_functions::get_tag(in.instance_index));
+    if condition != 0u {
+        let leaves = saturate(baked.a);
+        let own = fract(sin(dot(floor(spot), vec2<f32>(21.19, 47.83))) * 17317.371);
+        let wither = saturate(condition_withering(condition) * (0.6 + 0.8 * own));
+        color = vec4<f32>(
+            color.rgb * mix(vec3<f32>(1.0), flora.withered.rgb, wither * leaves * flora.withered.w),
+            color.a,
+        );
+        let lost = condition_defoliation(condition) * select(1.0, 0.0, flora.tree.y > 0.5);
+        let draw = fract(sin(dot(floor(spot), vec2<f32>(63.1, 17.7))) * 9741.3);
+        let gone = mix(step(draw, lost), lost, spread);
+        color = vec4<f32>(color.rgb, color.a * (1.0 - gone * leaves));
+    }
     // A flowering tree (`FoliageParams::blossom`) wears its flowers in patches as they open, over
     // its leaves or on the bare crown in early spring; the picture was baked without them.
     let flower_spot = fract(sin(dot(floor(spot), vec2<f32>(39.346, 11.135))) * 24634.634);

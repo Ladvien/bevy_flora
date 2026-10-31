@@ -122,7 +122,7 @@ use bevy_flora::{
     FoliagePusher,
     GpuGrowth, Growing,
     GustFront, LodDistances, LodSettings, PoolColors, PooledLook, PooledTree, ProceduralTree, RecolorPool, RenderStyle,
-    Scatter, SeededRng, SeeThroughTrees, TreeAge, TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes,
+    Scatter, SeededRng, SeeThroughTrees, TreeAge, TreeCondition, TreeLod, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes,
     build_pool,
 };
 
@@ -286,6 +286,9 @@ struct Args {
     glide: f32,
     /// Pool mode: every species' pool built at this many ages, the trees spread among them.
     ages: u32,
+    /// The shares of the trees that are sick and dying (`TreeCondition`), picked by a hash of the
+    /// tree's number, so a run repeats.
+    ill: (f32, f32),
 }
 
 impl Args {
@@ -308,7 +311,7 @@ fn usage() -> ! {
          [--scatter <preset[:weight]>,... [--grove <m>] [--clearing <m>] [--stand <x,z,radius>]] \
          [--undergrowth <preset>[:<spacing>]] [--terrain <relief>] [--background] [--tree-lod] [--shadow-radius <m>] \
          [--see-through <x,y,z>[,<radius>]] [--prepass <none|depth|all>] [--fire <x,z[,radius]|armed>] [--push <x,z>] \
-         [--looks [--recolor [--glide <s>]]] [--ages <n>]"
+         [--looks [--recolor [--glide <s>]]] [--ages <n>] [--sick <share>] [--dying <share>]"
     );
     std::process::exit(2);
 }
@@ -361,6 +364,7 @@ fn parse_args() -> Args {
         recolor: false,
         glide: 0.0,
         ages: 1,
+        ill: (0.0, 0.0),
     };
     let mut it = std::env::args().skip(1);
     fn value<T: std::str::FromStr>(it: &mut impl Iterator<Item = String>) -> T {
@@ -539,6 +543,8 @@ fn parse_args() -> Args {
             "--recolor" => args.recolor = true,
             "--glide" => args.glide = value(&mut it),
             "--ages" => args.ages = value(&mut it),
+            "--sick" => args.ill.0 = value(&mut it),
+            "--dying" => args.ill.1 = value(&mut it),
             "--screenshot" => args.screenshot = Some(it.next().unwrap_or_else(|| usage()).into()),
             _ => usage(),
         }
@@ -883,16 +889,35 @@ fn setup(
     if let Some(radius) = bench.args.shadow_radius {
         commands.insert_resource(FloraShadows { radius });
     }
-    for (transform, species, variant) in trees {
+    // `--sick` and `--dying`: the trees in those conditions, by a hash of their number.
+    let (sick, dying) = bench.args.ill;
+    let condition = |n: usize| {
+        let u = (n as u32).wrapping_mul(2_654_435_761) >> 8;
+        let u = u as f32 / (1u32 << 24) as f32;
+        if u < dying {
+            Some(TreeCondition::Dying)
+        } else if u < dying + sick {
+            Some(TreeCondition::Sick)
+        } else {
+            None
+        }
+    };
+    for (n, (transform, species, variant)) in trees.into_iter().enumerate() {
         let base = &bases[species];
         if let Some(pool) = pools.get(species).map(|ages| &ages[variant as usize % ages.len()]) {
             let look = PooledLook(look_at(transform.translation.x, bench.extent, bench.args.looks));
-            commands.spawn((PooledTree { pool: pool.clone(), variant }, look, transform, ForestTree));
+            let mut tree = commands.spawn((PooledTree { pool: pool.clone(), variant }, look, transform, ForestTree));
+            if let Some(condition) = condition(n) {
+                tree.insert(condition);
+            }
             continue;
         }
         let mut params: TreeParams = base.clone();
         params.seed = base.seed.wrapping_add(variant as i32);
         let mut tree = commands.spawn((ProceduralTree(params), transform, ForestTree));
+        if let Some(condition) = condition(n) {
+            tree.insert(condition);
+        }
         match bench.args.mode {
             Mode::Gpu => {
                 tree.insert(GpuGrowth);

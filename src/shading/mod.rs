@@ -266,6 +266,11 @@ pub struct FloraUniform {
     ///
     /// [`FoliageParams::blossom`]: crate::FoliageParams::blossom
     pub blossom: Vec4,
+    /// What a withered leaf's colour is multiplied by (linear rgb: the dry leaf colour over the
+    /// leaf colour, at most 1000 a channel, as for `autumn`) and 1, for any species with leaves:
+    /// the colour a sick or dying tree's leaves move toward ([`TreeCondition`](crate::TreeCondition));
+    /// zero for wood.
+    pub withered: Vec4,
 }
 
 /// Most a channel of the leaf colour may be multiplied by to reach the autumn colour: enough for
@@ -419,6 +424,7 @@ impl FloraUniform {
             bark_mean: Vec4::ZERO,
             autumn: params.foliage.autumn.map_or(Vec4::ZERO, |autumn| colour_ratio(autumn, params.foliage.color)),
             blossom: params.foliage.blossom.map_or(Vec4::ZERO, |blossom| colour_ratio(blossom, params.foliage.color)),
+            withered: colour_ratio(crate::condition::WITHERED_LEAF, params.foliage.color),
         }
     }
 
@@ -431,6 +437,7 @@ impl FloraUniform {
             tint: Vec4::ZERO,
             autumn: Vec4::ZERO,
             blossom: Vec4::ZERO,
+            withered: Vec4::ZERO,
             tree: self.tree.with_y(0.0),
             ..self
         }
