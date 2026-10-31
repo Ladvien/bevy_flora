@@ -22,6 +22,7 @@ use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::mesh::{Mesh3d, MeshTag};
 use bevy::reflect::Reflect;
+use bevy::time::Time;
 
 /// The dry leaf colour a sick or dying tree's leaves move toward, whatever their own colour:
 /// `FloraUniform::withered` is its ratio to the species' leaf colour. A design default
@@ -35,6 +36,131 @@ pub(crate) const TAG_SHIFT: u32 = 8;
 
 /// The bits of a [`MeshTag`] that are a pooled look's.
 pub(crate) const TAG_LOOK_MASK: u32 = (1 << TAG_SHIFT) - 1;
+
+/// The tag bit that says a tree's decline is on its way (a [`ConditionGlide`] is running): the shaders then
+/// read the level in the bits above it instead of the class. `common.wesl`'s
+/// `CONDITION_GLIDING_BIT`.
+const GLIDING_BIT: u32 = 1 << (TAG_SHIFT + 2);
+
+/// Where the level of a gliding decline starts in a mesh's tag, 8 bits to 255 (`LEVEL_STEPS` is the
+/// top step in use). `common.wesl`'s `CONDITION_LEVEL_SHIFT` and `CONDITION_STEPS`.
+const LEVEL_SHIFT: u32 = TAG_SHIFT + 3;
+const LEVEL_STEPS: f32 = 254.0;
+
+/// How long a change of a tree's [`TreeCondition`] takes to be drawn, in seconds. A resource
+/// the plugin adds with 0, which draws a change at once: a sick tree has lost its leaves in the frame
+/// after the insert. Above 0 a change is drawn as a **glide** (`docs/research/condition-glide.md`): the
+/// share of the crown's leaves that is lost rises, and the leaves that are left dry, continuously from
+/// what the tree shows now to what the new class shows, along a smoothstep, whatever the tree's own
+/// class was (a change half way through starts where the tree is). A tree that is made healthy
+/// recovers the same way, its leaves returning; so does one whose component is removed.
+///
+/// What a game *reads* does not wait: [`FloraIndex`](crate::FloraIndex) and
+/// [`IndexedTree::condition`](crate::IndexedTree::condition) say the class the game set the moment
+/// it was set; only the picture glides. A tree that appears with its condition (a forest loaded from
+/// a save, a pool whose assets arrive after the trees) shows it at once, and so does any tree
+/// when the glide is 0. The time is the app's [`Time`], so a paused game does not decline.
+///
+/// Read when a change is seen (the frame it is made, in [`PostUpdate`](bevy::app::PostUpdate)), so
+/// the value that counts for a tree is the one the resource has then: a lightning strike that should
+/// take a second sets 1 and inserts [`TreeCondition::Dying`] in the same frame.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_flora::{ConditionGlide, TreeCondition};
+/// # fn set(mut commands: Commands, tree: Entity) {
+/// commands.insert_resource(ConditionGlide { seconds: 40.0 });
+/// commands.entity(tree).insert(TreeCondition::Dying); // thins over 40 seconds, not at once
+/// # }
+/// ```
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Resource)]
+pub struct ConditionGlide {
+    /// Seconds a change takes to be drawn; 0 or less draws it at once.
+    pub seconds: f32,
+}
+
+/// What a tree's meshes show of its [`TreeCondition`]: the class the tag's bits say (the game's
+/// own, the target of a glide), the level on screen, and whether it is on its way there. On a tree
+/// that has a condition, or whose decline is still going out after the component was removed; added
+/// by `sync_condition_tags` when a tree with a condition is first seen drawn.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ConditionShown {
+    /// The class the tag's class bits carry: what the game set (healthy once it removed the component).
+    pub(crate) class: TreeCondition,
+    /// The level on screen, 0 healthy to 1 dying, as the tag says it (the quantised value while gliding).
+    pub(crate) level: f32,
+    /// A glide is running (`ConditionGliding` is on the entity).
+    gliding: bool,
+}
+
+impl ConditionShown {
+    /// Settled on `class`: its anchor level, no glide.
+    fn settled(class: TreeCondition) -> Self {
+        Self { class, level: class.level(), gliding: false }
+    }
+
+    /// The bits of a mesh's tag above the look's that carry this state.
+    pub(crate) fn tag_bits(&self) -> u32 {
+        if self.gliding {
+            self.class.tag_bits() | GLIDING_BIT | (level_step(self.level) << LEVEL_SHIFT)
+        } else {
+            self.class.tag_bits()
+        }
+    }
+}
+
+/// The glide of a tree's decline in flight: where it started, where it is going, how long it has run
+/// and how long it lasts. On the entity only while it runs, in sparse storage, so a forest of
+/// settled trees, ill or well, has nothing to visit each frame.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[component(storage = "SparseSet")]
+pub(crate) struct ConditionGliding {
+    from: f32,
+    to: f32,
+    elapsed: f32,
+    seconds: f32,
+}
+
+impl ConditionGliding {
+    /// The level `elapsed` seconds into the glide, and whether it has arrived: a smoothstep from `from`
+    /// to `to`.
+    fn at(&self) -> (f32, bool) {
+        let t = (self.elapsed / self.seconds).clamp(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        (self.from * (1.0 - eased) + self.to * eased, t >= 1.0)
+    }
+}
+
+/// A level, 0 to 1, as the tag's step (0 to `LEVEL_STEPS`), the nearest.
+fn level_step(level: f32) -> u32 {
+    (level.clamp(0.0, 1.0) * LEVEL_STEPS).round() as u32
+}
+
+/// A tag's step as the level it stands for (`condition_level` in `common.wesl`).
+fn step_level(step: u32) -> f32 {
+    (step.min(LEVEL_STEPS as u32) as f32) / LEVEL_STEPS
+}
+
+/// The share of a crown's leaves a decline at `level` has lost: through the classes' own shares,
+/// `Healthy` at 0, `Sick` at a half and `Dying` at 1 (`level_defoliation` in `common.wesl`).
+pub(crate) fn defoliation_at(level: f32) -> f32 {
+    let level = level.clamp(0.0, 1.0);
+    let (sick, dying) = (TreeCondition::Sick.defoliation(), TreeCondition::Dying.defoliation());
+    if level <= 0.5 {
+        let t = level * 2.0;
+        0.0 * (1.0 - t) + sick * t
+    } else {
+        let t = level * 2.0 - 1.0;
+        sick * (1.0 - t) + dying * t
+    }
+}
+
+/// How far the leaves that stay have withered on average at `level`: the class values at the
+/// anchors (0, a half, 1), so linear (`level_withering` in `common.wesl`).
+pub(crate) fn withering_at(level: f32) -> f32 {
+    level.clamp(0.0, 1.0)
+}
 
 /// The condition of a tree, in the three classes of a forest-health survey's crown assessment
 /// (`docs/research/tree-condition.md`): a healthy crown, one in decline, one close to death. Ordered
