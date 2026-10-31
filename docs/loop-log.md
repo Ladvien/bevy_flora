@@ -202,3 +202,106 @@ was 16 GB free when the pass began and is 3.7 GB now (`df -h /`, 100% by Apple's
 pass on this Mac should free space first (`cargo build --examples` alone needs 2 to 4 GB). Leftovers
 of earlier passes: none found (`git worktree list` shows only the clone; no `f*` directories in `~`
 or `/tmp`); the branches `loop/iter-1`, `-2`, `-3` and `-4` remain on origin and are not deleted.
+
+## Iteration 5 — 2026-10-31 — TreeCondition: a tree a game can call sick or dying (#87)
+
+Host: this Mac (Apple M5, Metal, macOS 26.6.2), not big. Disk 13 GB free at the start, 6 GB at the end
+(the shared `CARGO_TARGET_DIR` is 73 GB). HomeStill: `system_status` ok (18 668 documents, 488 794
+embedded chunks), `scribe_health` ready (11 VLM slots); `distill_search` answered a GPU-busy 500 for two of
+twelve queries (bge-m3 wanted 5 000 MB, 4 794 free) and the retries returned. Corpus re-scan of
+`catalog_recent` (200): one phenology paper added (`10.5194_bg-2015-619`); the other 199 were unrelated.
+
+**State found.** One open issue, #87 (enhancement, opened 2026-10-20, skipped last pass). No bug, no
+`consumer`-labelled issue, no parked branch (`git branch --list 'wiggum/parked-*'` empty; the
+`WIP(pass 1, checkpoint)` commits are driver snapshots). bevy_emerge's F6 (#102) is closed: its own loop
+landed the stroke-masked scatter, single-tree placement, the `.tree.ron` editor and `forest_view` against
+this crate (so backlog items 2 and 3 of iteration 0 were met on its side). v0.46.1 was tagged 49 minutes
+before this pass ended, so the 6-hour release rule allows no release: the change rides in the next one.
+
+**Pick.** #87, by the rule that an open enhancement outranks a candidate the pass invents. Runner-up:
+the look of a condition (below), which the issue itself leaves as a separate matter. Ranked candidates:
+(1) #87 state, (2) #87 look (colour, defoliation), (3) `.tree.ron` round trip bit for bit for every
+preset, (4) D-074 / D-075 harness bugs, (5) D-052 willow curtains.
+
+**What changed.**
+
+- `TreeCondition { Healthy, Sick, Dying }` (`src/condition.rs`): a component on the tree's entity,
+  ordered, reflected and registered. A tree without one is healthy, so a 100 000-tree pooled forest pays
+  nothing for the trees that are well. Set by inserting, cleared by inserting `Healthy` or removing it.
+- `IndexedTree::condition` and `FloraIndex::condition_of(entity) -> Option<TreeCondition>`. `index_trees`
+  reads the component whenever it inserts a tree and patches the entry in place from
+  `RemovedComponents` then `Changed<TreeCondition>` (removals first: a remove and an insert in one frame
+  end at the insert; a tree not indexed has no entry to patch).
+- Per instance, not per pool: survives a variant change, a pool reload and a `PooledTree` taken off and
+  put back; a condition set before the pool exists shows when it does; a felled tree leaves the index
+  (`None`) and keeps the component.
+- **Assumed decision (owner may override)**, recorded on #87 with the `assumed-decision` label: a
+  component on the entity, not a `SetTreeCondition` message or an index-owned map (a message that only
+  inserts a component is a second way to do one thing; Bevy's change detection is the notification), and
+  `Option<TreeCondition>` from `condition_of` (the issue's example returned a bare value). No `Dead`
+  class: a dead tree is the game's to fell. State only: the crate draws a sick tree as a healthy one.
+- **Breaking:** `IndexedTree` has a new public field, so the next release is 0.47.0. `index.rs`'s test
+  helper `tree()` gained `condition: Healthy` (an assumed owner exception: a new field's default in a
+  literal; no assertion changed; stated in the commit).
+- Docs: rustdoc, a crate-root doctest (`# Sick and dying trees`), the README's "Finding trees" section
+  (its snippet gained `blight` and compiles as a doctest), `ARCHITECTURE.md`, `CLAUDE.md`, an
+  `## [Unreleased]` CHANGELOG entry (the first; none existed), a `loop-05` line in `qa/visual_findings.md`.
+
+**Sources.** Botanical: `10.3390_f8040137` ("Crown defoliation is the most widely used parameter for the
+assessment of tree vitality"), `10.1007_s10342-005-0085-3` (transparency classes; "next-year mortality
+rate increased exponentially with transparency"), `10.3389_fpls.2026.1809811` (stand grades by crown
+dieback, ~10 / 30 / 50 / 80%), `10.1038_s41467-020-18996-3` (mode of death). Shipping game: Timberborn's
+alive / dying / dead plants as one mod's notes on the decompiled game record them
+(<https://github.com/timbermods/dam-good-maps/pull/742>, a web page, second hand), Gregory ch. 16 (a game
+object is its attributes and behaviours). Technical: `10.1145_3748522.3779910` (components added to and
+removed from entities), Bevy 0.20 `Changed` / `RemovedComponents` doc comments. All quoted in
+`docs/research/tree-condition.md`. Pending index: Dobbertin and Brang 2001, Timberborn first-party.
+
+**Numbers** (`/tmp/f5/findings.md`, removed with the scratch).
+
+- Gallery narrowed to the seven CI scenarios (the change reaches no mesh or draw call; the full 492 not
+  run, said plainly): 7 PNG = 7 rows, none under 100 KB, 0 flags, no BLANK_CAPTURE / CAPTURE_TIMEOUT;
+  against main's binary `stats.tsv` columns 1-10 identical, 0 of 7 PNG differ (`compare_gallery` mean
+  of means 0.000); two new CPU runs byte for byte alike; CPU vs `--gpu`: mean of means 0.581, worst 1.205,
+  exit 0, the same to the digit as main's and as iteration 4's. Warnings: only the asset-watcher WARN
+  (binaries run from `/tmp`, no `assets` dir; textures are compiled in) and the benign winit `Destroyed`.
+- Forest bench, interleaved base / new, three runs each, median of medians ms/frame (cpu ms/frame): pool
+  10 000 4.90 (14.58) -> 4.91 (14.70); naive 1 000 34.87 (18.57) -> 34.86 (18.62); gpu-live 1 000, 200
+  frames 185.11 (247.65) -> 186.67 (250.05). All within 1.0%. No building code touched, so no build probe.
+- Smoke at forest scale (a throwaway example, deleted): 10 000 pooled oaks spawn and index in 22.6 ms,
+  an idle update is 1.1 ms, 1 993 conditions inserted through `within` take 0.8 ms and one update
+  applies them in 0.5 ms; the index reads back 1 993 dying and none outside the radius; a scan for the
+  ill is 0.03 ms; a felled one: `condition_of` `None`, component kept, index 9 999.
+- Tests: 328 lib (323 + 5 new) and 66 doc green; clippy `--all-targets --all-features -D warnings`,
+  `cargo doc -D warnings`, `cargo build`, `--features serde`, `--release`, `cargo check --examples`,
+  `cargo package --locked` (verify build) clean. Mutation check of the new tests: no-`Changed` path,
+  no-removal path, procedural insert ignoring the component and pooled insert ignoring it each fail a
+  test (the third survived the first draft; the move-and-rebuild step was added for it).
+
+**Critique and verdict** (`/tmp/f5/critique.md`): the feature is state only, so a sick tree is drawn as a
+healthy one and a game shows it with `PooledLook` / `RecolorTree` beside the component (two components to
+keep in step); the recolour test cannot fail until the look slice exists and says so; `IndexedTree`'s new
+field breaks hand-built literals. #87's five criteria: GREAT. The look: not built, NOT YET, first in the
+backlog.
+
+**Gate gaps, said plainly.** `cargo build --examples` (default features) was `cargo check --examples`
+because of the disk (clippy `--all-targets --all-features` compiled every example); the full 492-scenario
+gallery and the eleven README clips were not re-run (nothing that draws changed, no release this pass).
+`cargo-semver-checks` is not installed: 0.47.0 follows from the new public field.
+
+**Commits** (`loop/iter-5`): `8dd1ed1` Research: corpus, `323ba42` Research: tree-condition, `f1ce6c9`
+the implementation (Fixes #87), `5e81b2f` docs.
+
+### Ranked backlog after iteration 5
+
+1. **The look of a condition** (#87 second slice): `MeshTag` per instance on a pool's mesh entities
+   (batches survive), read in the leaf and wood fragment stages and the leaf vertex stage; foliage colour
+   green to ochre and a share of leaves hidden by the per-leaf hash `FloraFire` uses (~30-50% sick, ~80%
+   dying); impostors and `GpuGrowth` follow; gallery scenarios for each class. Design in
+   `docs/research/tree-condition.md`.
+2. **`.tree.ron` round trip**: `to_ron` / `from_ron` builds vertex-identical trees for every preset (the
+   editor writes the file, the game loads it); emerge's own tests only check the seed and one field.
+3. **Release 0.47.0** (breaking: `IndexedTree::condition`) once the tag is 6 hours old: re-record the
+   eleven clips, `cargo semver-checks` if installed.
+4. **D-074 / D-075**: a lone gallery scenario draws no leaves; renders not byte-identical run to run on big.
+5. **D-052 willow curtains**; owner clean-up of #90's locator test; a CPU mirror of `wind_bend`.

@@ -5,6 +5,42 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [Unreleased]
+
+Per-tree condition (issue #87): a game marks a tree sick or dying and reads it back through
+`FloraIndex`.
+
+### Added
+
+- `TreeCondition { Healthy, Sick, Dying }` (ordered from well to ill; reflected and registered by the
+  plugin): a component a game inserts on a tree's entity, a `ProceduralTree` or a `PooledTree`. A tree
+  without one is healthy, so a pooled forest pays nothing for the trees that are well; inserting
+  `Healthy` or removing the component clears it. It is the tree's own, not its pool's: it survives a
+  change of variant, a reload of the pool, and a `PooledTree` taken off its entity and put back. A felled
+  tree keeps the component as it was cut and leaves the index. State only: the crate draws a sick tree as
+  a healthy one (the look is the next slice; recolour with `RecolorTree` or a `PooledLook` meanwhile).
+- `IndexedTree::condition` and `FloraIndex::condition_of(entity) -> Option<TreeCondition>` (`None` for a
+  tree the index does not hold). The plugin keeps them up to date from `Changed<TreeCondition>` and
+  `RemovedComponents<TreeCondition>`, and reads the component whenever it indexes a tree, so a condition
+  set before a pooled tree's pool has loaded shows when it does.
+- `TreeCondition` in the crate root and the prelude; a crate-root doctest and the README's "Finding trees"
+  section show it.
+
+### Changed
+
+- **Breaking:** `IndexedTree` has a new public field, `condition`, so a struct literal of it needs one
+  (a game builds none: the index hands them out). The next release is a minor one.
+
+### Tests
+
+- `a_condition_set_on_a_tree_reads_back_through_the_index_as_set_changed_and_cleared`,
+  `a_pooled_trees_condition_is_its_own_and_survives_what_the_pool_does`,
+  `a_condition_set_before_the_tree_is_indexed_applies_when_it_is`,
+  `a_felled_trees_condition_does_not_panic_and_stays_on_its_entity` and
+  `a_recolour_and_a_condition_in_one_frame_both_apply_and_equal_looks_still_share_a_material`: the five
+  acceptance criteria of #87. `index.rs`'s `tree()` helper gains `condition: Healthy` (an assumed owner
+  exception: a new field's default in a literal; no assertion changed).
+
 ## [0.46.1] - 2026-10-30
 
 The plant lean is a fixed share of the plant's own height (the owner's 1792016453, "This bush seems to

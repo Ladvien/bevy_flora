@@ -31,6 +31,7 @@ cargo run --release --example tree_file --features ron,file_watcher [-- --export
 - `src/skeleton.rs`, `growth.rs`: node tree and age model
 - `src/mesh/`: ring helpers (winding lives in `rings.rs`), trunk, branches, smoothing
 - `src/foliage.rs`, `pipeline.rs`, `plugin.rs`, `background.rs`: leaves (scanned outlines included), `build_tree`, Bevy components/systems, building trees on the async compute pool (`BuildInBackground`)
+- `src/condition.rs`: `TreeCondition` (`Healthy`, `Sick`, `Dying`), a component a game inserts on a tree's entity and `FloraIndex` mirrors (`IndexedTree::condition`, `condition_of`); state only, pure CPU, derives `Component`
 - `src/shape.rs`: `TreeShape`, the gameplay capsules and crown box (opt-in component kept up to date by the plugin)
 - `src/see_through.rs`: `SeeThroughTrees`, the camera's see-through fade (arming the flora materials, its slots in the shared buffer); its shaders are `see_through` in `shading/common.wesl` and `shading/see_through_prepass.wesl`
 - `src/push.rs`: `FoliagePusher`, bodies whose foliage gives way: the nearest `MAX_PUSHERS` to the camera, each with its trail of the last half second, in the shared buffer's push slots; the shaders (`FLORA_PUSH`, `push_offset` and `wood_flex` in `shading/common.wesl`) bend leaves and thin wood aside in the vertex stages
