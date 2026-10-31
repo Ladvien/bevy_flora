@@ -230,10 +230,21 @@ fn add_distributed_leaves(
     rng: &mut SeededRng,
 ) {
     let count = distributed_leaf_count(foliage, node.length, node.height_ratio);
+    let strand = node.wood.kind == NodeKind::Strand;
+    // A strand's leaves keep their places as it grows: leaf `i` sits where it does on the grown
+    // strand, and the young strand shows its first ones, in order from the base (the draws are the
+    // same at every age, and `GpuGrowth` shows the same leaves at the same places). Every other
+    // branch spreads as many leaves as it has now over its length.
+    let spread = if strand && node.wood.progress > 0.0 {
+        distributed_leaf_count(foliage, node.length / node.wood.progress, node.height_ratio).max(count)
+    } else {
+        count
+    };
     for i in 0..count {
-        let t = (i as f32 + rng.range(0.0, 1.0)) / count as f32;
-        let biased_t = t * t;
-        let position = node.wood.point_at(0.3 + biased_t * 0.7);
+        let t = (i as f32 + rng.range(0.0, 1.0)) / spread as f32;
+        // A strand carries its leaves along its whole length; other wood bunches them toward its base.
+        let along = if strand { 0.1 + t * 0.9 } else { 0.3 + t * t * 0.7 };
+        let position = node.wood.point_at(along);
         let size = foliage.leaf_size
             * (1.0 + rng.range(-foliage.leaf_size_variation, foliage.leaf_size_variation));
         let direction = leaf_direction(node, foliage, rng);
@@ -1761,5 +1772,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_strands_leaves_keep_their_places_as_it_grows() {
+        // The leaf cards of a young strand are the first of the grown strand's, at the same
+        // fractions of its length (every other branch re-spreads its leaves at each age): the draws
+        // do not depend on the age, and the GPU's growth shows the same leaves at the same places.
+        let params = TreePreset::Willow.params();
+        let full = generate_skeleton(&params);
+        let along = |skeleton: &crate::skeleton::Skeleton, id: u32| -> Vec<f32> {
+            let i = skeleton.nodes.iter().position(|n| n.id == id).expect("the strand exists");
+            let node = &skeleton.nodes[i];
+            let mut points = Vec::new();
+            leaf_points_for_node(skeleton, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
+            points.iter().map(|p| (p.position - node.start).dot(node.direction) / node.length).collect()
+        };
+        let (mut compared, mut fewer) = (0, 0);
+        for age in [5.0, 6.0, 8.0] {
+            let aged = full.aged(age, &params.growth);
+            for node in aged.nodes.iter().filter(|n| n.kind == NodeKind::Strand && n.progress > 0.55 && n.progress < 1.0) {
+                let young = along(&aged, node.id);
+                let grown = along(&full, node.id);
+                assert!(!young.is_empty() && young.len() <= grown.len(), "strand {}: {} leaves young, {} grown", node.id, young.len(), grown.len());
+                for (k, (a, b)) in young.iter().zip(&grown).enumerate() {
+                    assert!((a - b).abs() < 1e-3, "strand {} age {age}: leaf {k} sits at {a} of the strand, {b} when grown", node.id);
+                }
+                compared += 1;
+                fewer += usize::from(young.len() < grown.len());
+            }
+        }
+        assert!(compared >= 10, "only {compared} growing strands compared");
+        assert!(fewer >= 3, "only {fewer} of {compared} young strands show fewer leaves than when grown");
     }
 }

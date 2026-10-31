@@ -450,3 +450,127 @@ binaries, galleries, captures, bench output, findings, critique), and what this 
 `package/bevy_flora-0.46.1*`; `df -h /` 12 GB free at the start, 3.4 GB before, 15 GB after. Kept: the target
 directory's dependency builds (71 GB). Leftovers of earlier passes: none found (no `f*_base` in `~` or `/tmp`);
 the branches `loop/iter-1` to `-6` remain on origin, not deleted.
+
+## Iteration 7 — 2026-10-31 — Weeping strands: the willow's branches hang to the ground (D-052)
+
+Host: this Mac (Apple M5, Metal, macOS 26.6.2), not big. Disk 15 GB free at the start, 5.6 GB at the end (the
+shared `CARGO_TARGET_DIR` is 76 GB); `bevy_emerge#195` says the loop hosts are out of memory, and this pass ran
+one build or one render at a time. HomeStill: `system_status` ok (18 669 documents, 488 829 embedded chunks;
+Qdrant upserts time out and bge-m3 finds the GPU busy at times), `scribe_health` ok, `distill_search` answered
+(thin for weeping habit; `paper_search` and the web gave the sources). Corpus re-scan of `catalog_recent` (200):
+nothing a note needs that `corpus.md` did not list (Scintilla is already there; the rest of the batch is SIGGRAPH
+rendering and medical text), so no `Research: corpus` commit.
+
+**State found.** No open issue on `bevy_flora`, no `consumer` label, no parked branch, bevy_emerge's open family
+issues (#96 F0, #103 F7) name nothing this crate lacks; its `forest_scatter` hand-rolls a polyline distance test
+(`under_stroke`, 10 lines) around `Scatter::points_where`, which works and ships (not taken). v0.46.1 was 2 h 25 m
+old, so the 6-hour rule allows no release this pass; 0.47.0 (breaking, see below) carries iterations 5, 6 and 7.
+
+**Pick.** D-052, the willow, the one tree in the set that fails the brief's first test: "the silhouette reads as
+the species it is named for". `mature_willow` and `inspect --preset willow` read as arches of bare wood on a
+flat-capped pole with a thin scatter of leaves; eight preset variants had been tried and all gave the mound, so
+it needed a generator feature. Ranked: (1) D-052 as a generator feature; (2) release 0.47.0 (blocked until 04:42);
+(3) a gradual decline (#87's class change pops); (4) `Scatter::along` a polyline for bevy_emerge (they have it);
+(5) D-074 / D-075 on big. The runner-up was the gradual decline: a game can live with a pop, and cannot ship that
+willow.
+
+**What changed** (`docs/research/weeping-strands.md`, committed first as `33ba0d7`).
+
+- `BranchParams::strands` (`StrandParams`: `density`, `start`, `length`, `spread`, `clearance`) and
+  `NodeKind::Strand`. After the skeleton is seated, every branch gets `density * length * (1 - start)` straight
+  ropes hung from its outer part, plumb within `spread`, `length` times the trunk's height long or down to
+  `clearance` above the floor, a twig's radius, two rings of wood. They draw from streams of their own and come
+  after every other node: a tree without them is the tree it was and one with them keeps every other branch
+  where it was (both tested). A strand is born when its branch reaches it and carries its leaves along its whole
+  length; its leaf `i` keeps its place on the grown strand at every age, which is what `GpuGrowth` shows (the
+  first build re-spread them as every branch does and the GPU differed by 2.3 of 255 on `age_willow_8`, 1.4 after).
+  Levels of detail, felling, fire, wind and falling leaves needed nothing: a strand is a node.
+- The willow uses them (`qa/visual_findings.md` D-077): strands 1.6 per metre from a tenth of each branch,
+  0.7 of the trunk's height; limbs from 40% of the trunk (was 50%), `angle` 46 (50), `angle_curve` -0.1 (-0.4),
+  `trunk.taper` 0.22 (0.4), leaves 6.5 per metre (10) and 0.34 m (0.26). A mature willow is 119k vertices (wood
+  30k, leaves 93k) where it was 55k, builds in 4.4 ms where it took 2.2, level 1 holds 24k leaf vertices (9.5k)
+  and level 2 9k (3.6k). Every other preset is unchanged.
+- **Assumed decision (owner may override)**, in the commit body and D-077: the willow's look values. Options:
+  strands alone (left bare arcs on a pole), the strands with the limb retune above (taken), or more branches
+  (D-052's eight failed variants). The retune is a design default; the owner's reply wins.
+- Found on the way, fixed: `TreeShape`'s crown box did not hold the leaves on a bent branch's arch (it spanned a
+  branch's start and end; `the_crown_holds_every_leaf_and_the_box_holds_the_crown_at_every_age` caught it on the
+  new willow at age 5), and under `pipe_radius_enabled` floor avoidance let drooping wood dip up to
+  `pipe_radius_min` below the floor (the first build's `pipe_willow` `BELOW_FLOOR`); the pipe model also floored
+  every strand to a 2 cm rod, so a strand keeps its own radius there. The pipe fix moves `pipe_shrub`,
+  `pipe_fern` and their young scenarios by a centimetre or two (opt-in mode only).
+- Breaking: `BranchParams::strands` (new field), `NodeKind::Strand` (new variant): 0.47.0.
+
+**Sources.** Botanical: "Gravity sensing and responses in the coordination of the shoot gravitropic setpoint
+angle" (doi `10.1111/nph.18474`, read at PMC9828789: "Stems grow vertically upward, whereas lateral organs ...
+tend to grow at a specific angle according to a gravity vector known as the gravitropic setpoint angle (GSA)";
+the WEEP gene "results in pendulous branch growth in peach trees"), Missouri Botanical Garden on *Salix
+babylonica* ("a stout trunk topped by a graceful broad-rounded crown of branches that sweep downward to the
+ground ... as wide" as tall), the URI identification sheet ("hanging or drooping for long distances, almost
+rope-like"). Shipping game: the SpeedTree Modeler manual's branch generator (Gravity "equivalent to a downward
+pointing direction force", the force's profile curve along the branch, Length "+ % of parent", Prune > Ground).
+Technical: `book_real_time_rendering_4th_akenine` (alpha-textured leaf cards against overdraw), this crate's
+`lod.rs`. Pending index: Weber and Penn 1995 (paywalled), Moulia et al. 2022, the WEEP paper, EDIS ENH-734.
+
+**Numbers** (`/tmp/f7`, removed with the scratch).
+
+- Gallery, 526 scenarios on CPU and `--gpu`: 526 PNG = 526 rows, none under 100 KB, no flag, no BLANK_CAPTURE
+  or CAPTURE_TIMEOUT, no `ERROR` or `panicked` (one `WARN` under `--gpu`: the known hull-crown note). Against
+  main's binary the 522 earlier scenarios: `stats.tsv` columns 1-10 identical for 489; the 33 that moved are 29
+  willow ones and the four pipe-model shrub and fern ones; all 488 non-willow scenarios with an unmoved mesh are
+  the same image below the HUD (the willow's `grow_willow_1`, a bare young trunk, differs by its taper). Two runs
+  of one filter and the full run agree on columns 1-10; CPU and `--gpu` stats agree.
+- GPU parity: all 526 mean of means 0.080, worst 2.109 (`smoothyoung_shrub_4`, as before); the seven CI
+  scenarios 0.581 and 1.205 before, **0.694 and 1.452 after**: `age_willow_6` 0.664 to 1.452. Not "no worse", and
+  said so: with strands off the retuned willow reads 1.29, so most of it is the fuller, larger-leafed crown showing
+  the existing difference in how a growing limb's leaves are spread (CPU re-spreads them over the aged length, the
+  GPU shows the first ones of the grown branch); the strands add 0.13. `compare_gallery` exits 0 on both sets.
+- Forest bench, interleaved base / new, medians of 4, 3 and 3 runs, ms/frame (cpu): pool 10 000 4.97 (14.51) ->
+  4.90 (14.45) -1.5%; naive 1 000 35.01 (18.92) -> 34.96 (18.92) -0.1%; gpu-live 1 000, 200 frames 182.46
+  (248.1) -> 179.01 (244.9) -1.9%. One pool run of the new binary was in the Mac's fast mode (4.56).
+- Build probe (`build_tree`, best of 5): the willow 2.22 -> 4.44 ms mature, 0.43 -> 0.75 ms at age 4; `build_lods`
+  3.7 -> 7.4 ms; every other preset's vertex and triangle counts unchanged and its time within noise.
+- Looked at: `/tmp/f7/cur/{a..h}` (eight tuning rounds: front and side at 15 m, a 9 m game view, the gallery's four
+  views), the age and seed series, seasons, conditions, painterly, toon, the four oaks with strands, pipe willow.
+- Tests: 341 lib (334 + 7 new) and 67 doc green; clippy `--all-targets --all-features -D warnings`, `cargo doc
+  -D warnings`, `cargo check`, `--features serde`, `--examples`, `cargo package --locked` (131 files, the
+  yanked `clipboard-win` note as before). Mutation: re-spreading the strand leaves over the current count fails
+  `a_strands_leaves_keep_their_places_as_it_grows`; the unfixed crown box fails the shape test.
+
+**Critique and verdict** (`/tmp/f7/critique.md`): the generator feature (`StrandParams`: deterministic, closed,
+off the trunk and the floor, grows with its branch, CPU and GPU agree on its leaves, no other tree moves): GREAT.
+The willow's look: **NOT YET**, much better than before and not a tree to ship at 9 to 15 m. Flaws, measured
+against the note's "what great looks like": the strands' wood reads as thin pale wires among sparse leaf cards (a
+string curtain; the leaf cards are 6 cm wide and 6 a metre, the rope is bare between them); the crown's top is bare
+arcs on a slim flat-capped trunk; from 30 m level 1 drops all wood under 1.5 cm, so the curtain is gone and the
+tree reads as before; it costs 2.2 times the vertices. Eight tuning rounds (strand density, leaf size and count,
+limb angle, branch start, trunk taper; a rising top limb made a plume above the trunk and was dropped) and none
+reached GREAT with straight, constant-colour ropes of this vertex budget, so D-052 stays Open with its remaining
+flaws and options, and the improved willow ships rather than reverting to the mound. The rule's "revert to the last
+GREAT state" has no state to revert to: the old willow was never GREAT.
+
+**Gate gaps, said plainly.** `cargo build`, `cargo build --release` and `cargo build --examples` (default
+features) were `cargo check` and `cargo check --examples`, and `cargo package --locked`'s own verification build,
+because each would rebuild Bevy in a new feature set (3 to 4 GB) on a disk with 5 GB free; `cargo test
+--all-features` ran as `--lib --tests` and `--doc` for the same reason (clippy `--all-targets` compiles every
+example). No README clip was re-recorded: no healthy non-willow tree changed, and the release re-records all
+eleven (the `grove.gif` and `growth.gif` clips that show the willow will change then). No sibling-repo commit.
+
+**Commits** (`loop/iter-7`): `33ba0d7` Research: weeping strands, `a8ee746` the implementation, its docs and
+the QA log.
+
+### Ranked backlog after iteration 7
+
+1. **Release 0.47.0** (breaking: `IndexedTree::condition`, `FloraUniform::withered`, `BranchParams::strands`,
+   `NodeKind::Strand`) once v0.46.1 is 6 hours old (04:42 local, Oct 31): re-record the eleven clips (the willow
+   in `grove.gif` and `growth.gif` changes), `cargo semver-checks` if installed.
+2. **Finish the willow (D-052)**: leaf ribbons (a wider or longer leaf on a strand, so the leaves cover the rope),
+   strands kept as lines at level 1, limbs whose leaves reach their tips (`add_distributed_leaves` bunches them at
+   the base), a greener strand colour (a per-node wood colour), a forked trunk instead of a flat-capped pole; and
+   the cost: coarse levels keep every 3rd and 8th leaf, so a willow's far levels are 2.5 times an old willow's.
+3. **Age-stable leaf places for every `AllBranches` node** (CPU = GPU for growing limbs): the strand's rule
+   (`leaf i keeps its place`) for all of them. It is the cause of the willow's parity (1.29 without its strands)
+   and of the `age_*` residue in every `AllBranches` preset; it moves those presets' young trees, so it needs a
+   gallery pass of its own.
+4. **A gradual decline** (iteration 6's #2): a class change pops; leaves the new class loses should fall.
+5. **D-074 / D-075** on big; a dying tree's wood and shadow; D-067; a CPU mirror of `wind_bend`.
