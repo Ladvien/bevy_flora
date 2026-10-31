@@ -707,10 +707,9 @@ docs commit (CHANGELOG, ARCHITECTURE, README parity numbers, the note, D-078).
 
 ### Ranked backlog after iteration 8
 
-1. **Release 0.47.0** (breaking: `IndexedTree::condition`, `FloraUniform::withered`, `BranchParams::strands`,
-   `NodeKind::Strand`, `Node::full_length`) once v0.46.1 is 6 hours old (04:42 local): re-record the eleven clips
-   (`growth.gif` and `grove.gif` change: young leaves and the willow), update the README's frame times and
-   compatibility table, `cargo semver-checks` if installed.
+1. ~~Release 0.47.0~~ done at the end of this pass (below). Next release: the first of the items here that
+   changes the package, once v0.47.0 is 6 hours old (10:43 local, Oct 31); the CHANGELOG has no `[Unreleased]`
+   section yet, start one.
 2. **A leaf eases in**: a fractional `leaf_count` (`n + the share of the next leaf`) in the vertex stage and in
    `leaf_points_for_node`, so a leaf that appears grows from nothing over the interval until the next, instead of
    appearing at its node's full leaf size (the one pop left in a growing crown).
@@ -720,3 +719,36 @@ docs commit (CHANGELOG, ARCHITECTURE, README parity numbers, the note, D-078).
 5. **`RadialOutward` facing on a growing branch** (the CPU uses the tip it has now, the GPU the mature tip: an
    orientation difference of a few degrees), D-074 / D-075 on big, a dying tree's wood and shadow, D-067, a CPU
    mirror of `wind_bend`.
+
+**Release 0.47.0** (published at 04:43 local, v0.46.1 being 6 h 0 m 30 s old by `git log -1 --format=%ct`).
+Contents: iterations 5 to 8 (`TreeCondition` and its look, the willow's strands, the leaf places). Version by the
+breaking items the CHANGELOG lists (`IndexedTree::condition`, `FloraUniform::withered`, `BranchParams::strands`,
+`NodeKind::Strand`, `Node::full_length`: a minor bump before 1.0); `cargo semver-checks` is not installed here and
+its rustdoc builds of two Bevy-sized trees do not fit a disk that was down to 2.4 GB free at the clips' peak, so
+the bump is by the documented list, not by the tool (gap said plainly). `release: v0.47.0` (`e029efc`): Cargo.toml
+and Cargo.lock, the README's compatibility row and install snippet (0.47), the CHANGELOG entry and its compare
+link, and all eleven README clips re-recorded with the release binaries (`/tmp/f8/record.sh`, the commands of
+`AGENTS.md`; `ffprobe`: growth 480x360 24 fps 192 frames 4.96 MB, grove, seasons, shake, fell, fire, push, chop
+and harvest 560x315 20 fps 160 frames 2.9 to 6.0 MB, playground and isometric 560x315 16 fps 128 frames 7.0 MB).
+Seven changed (growth by a few leaves of the young maple; grove, seasons, shake, fell and fire show the new willow;
+isometric by 78 bytes), four are byte for byte the 0.46.1 files (push, chop, harvest, playground); first, middle
+and last frames of the changed ones against the old files at `/tmp/f8/clips/cmp_*.png`: the captions stand. The
+frame times the README, `src/lib.rs`, `src/pool.rs` and `ARCHITECTURE.md` quote (Apple M4 Pro, 1080p) are not
+re-measured: this Mac is an M5, and the forest bench here moved by under 1% (above), so they stand.
+`cargo publish --dry-run`, `cargo publish` (crates.io 0.47.0, created 09:43 UTC:
+<https://crates.io/crates/bevy_flora/0.47.0>), tag `v0.47.0` pushed, `gh release create v0.47.0` with the CHANGELOG
+entry. No issue referenced or closed (none was open).
+
+**Clean-up (iteration 8).** Merge `6112532` on `main`, release commit `e029efc` (pushed, tree of `loop/iter-8` plus
+the release's files, so the gate stood; `cargo package --locked` and `publish --dry-run` both passed on it).
+Baseline kept as copies of main's release binaries under `/tmp/f8/base` (no second worktree or target directory:
+`git worktree list` shows only the clone). Removed, mine: `/tmp/f8` (3 GB at its peak: binaries, galleries, clip
+frames and old-against-new montages, bench output, findings, critique, a venv with Pillow), the repo's
+`target/capture` (1.9 GB of clip frames), the throwaway `tests/zz_probe.rs` (never committed), and in
+`CARGO_TARGET_DIR` every file this pass wrote (modified after 02:15 today, 17 227 files, 1.9 GB): the debug test
+binaries and rlibs, the default-feature check metadata of Bevy, the release and debug incremental caches, the
+`doc` output and `package/bevy_flora-0.46.1*` and `-0.47.0*`; `df -h /` 15 GB free at the start, 2.4 GB at the
+lowest (the clips' frames), 19 GB after. Kept: the target directory's dependency builds (71 GB, all older than this
+pass). Leftovers of earlier passes: none of this loop's (no `f*_base` in `~` or `/tmp`); `~/i62base`,
+`~/bevy_emerge-baseline*.txt` belong to another project and were not touched; the branches `loop/iter-1` to `-8`
+remain on origin, not deleted.
