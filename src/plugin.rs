@@ -336,6 +336,10 @@ impl bevy::app::Plugin for FloraPlugin {
                     // The far trees quieted, then every mesh of a tree told.
                     crate::shadows::cut_far_shadows.after(crate::index::index_obstacles),
                     sync_shadow_casting.after(crate::shadows::cut_far_shadows),
+                    // The class of every tree's condition in the tag of its meshes, for the shaders.
+                    crate::condition::sync_condition_tags,
+                    // And whether any tree has one, so the vertex stages read no tag while none does.
+                    crate::glide::sync_condition_flag,
                 )
                     .after(bevy::transform::TransformSystems::Propagate),
             )

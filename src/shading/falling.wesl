@@ -9,7 +9,7 @@ import bevy_pbr::render::{
     view_transformations::position_world_to_clip,
     mesh_view_bindings::globals,
 };
-import package::shading::common::{leaf_season_tint, FALLEN_LEAF_CLIP};
+import package::shading::common::{leaf_season_tint, leaf_withered_tint, FALLEN_LEAF_CLIP};
 import package::shading::falling_common::falling_leaf;
 
 @vertex
@@ -45,7 +45,12 @@ fn vertex(
     out.uv_b = vec2<f32>(vertex.uv_b.x, mix(vertex.uv_b.y, 1.0, leaf.open));
 
 @if(VERTEX_COLORS)
-    out.color = vec4<f32>(vertex.color.rgb * leaf_season_tint(sway, vertex.color), vertex.color.a);
+    // A leaf that fell from a sick or dying tree is as dry as those left on it: its withering
+    // (`Decline::withered`) is the fourth lane of its face.
+    out.color = vec4<f32>(
+        vertex.color.rgb * leaf_withered_tint(leaf_season_tint(sway, vertex.color), face.w),
+        vertex.color.a,
+    );
 
 @if(VERTEX_OUTPUT_INSTANCE_INDEX)
     out.instance_index = vertex_no_morph.instance_index;

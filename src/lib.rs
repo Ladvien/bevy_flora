@@ -362,8 +362,10 @@
 //! or [`PooledTree`]), and reads it back through the index: every [`IndexedTree`] says how well it
 //! is. A tree without the component is healthy. The condition is the tree's own, so a pooled tree
 //! keeps it through a change of variant or a reload of its pool; a felled tree leaves the index and
-//! keeps the component. The crate draws a sick tree as a healthy one: recolour it
-//! ([`RecolorTree`], [`PooledLook`]) to show it.
+//! keeps the component. The tree is drawn in its condition: a sick crown has lost about a third of
+//! its leaves and what is left is half way to dry, a dying one four fifths of them
+//! ([`TreeCondition::defoliation`], [`TreeCondition::withering`]); wood, fruit and flowers are as
+//! they were.
 //!
 //! ```rust,no_run
 //! use bevy::prelude::*;
