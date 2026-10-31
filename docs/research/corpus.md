@@ -86,6 +86,15 @@ what it rests on; this file only says what exists. Newest additions last in each
 - `10.3832_ifor0538-003`: Johnson and Jacob, "Monitoring the effects of air pollution on forest
   condition in Europe: is crown defoliation an adequate indicator?" (iForest 2010; in the catalog,
   not yet converted when added 2026-10-31).
+- `10.1016_j.scitotenv.2020.141792`: "From the comfort zone to crown dieback: Sequence of physiological
+  stress thresholds in mature European beech trees" (the sequence under progressive drought: early
+  defoliation, embolism, crown dieback exceeding 20% in the year after; added 2026-10-31).
+- `10.1111_plb.13467`: Frei et al., "European beech dieback after premature leaf senescence during the
+  2018 drought in northern Switzerland" (mortality rising monotonously over time; added 2026-10-31).
+- `10.1051_forest:2006042`: Bréda, Huc, Granier and Dreyer, "Temperate forest trees and stands under severe
+  drought: a review of ecophysiological responses, adaptation processes and long-term consequences"
+  (Annals of Forest Science 2006; the 2003 drought's premature leaf shedding in beech, canopy leaf area
+  index falling in August with the fallen leaves still green; added 2026-10-31).
 
 ## Game objects and entity state (`TreeCondition`, `FloraIndex`)
 

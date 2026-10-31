@@ -13,7 +13,7 @@ import bevy_pbr::render::{
 };
 import package::shading::common::{
     flora, flora_wind, wind_bend, shake_at, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
-    snow_on, snow_shelter, wet_on, LEAF_FROST, tree_condition, condition_defoliation, condition_withering,
+    snow_on, snow_shelter, wet_on, LEAF_FROST, condition_level, level_defoliation, level_withering,
     condition_own_withering, tags_read,
 };
 import package::impostor::impostor_common::impostor_corner;
@@ -128,16 +128,16 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     // reads as leaves lost, where finer ones read as noise (`fwidth` stays out of the branch below).
     let cell = spot / 2.0;
     let cell_spread = saturate(max(fwidth(cell.x), fwidth(cell.y)) - 0.5);
-    let condition = tree_condition(tag);
-    if condition != 0u {
+    let level = condition_level(tag);
+    if level > 0.0 {
         // Where the picture is leaf: the colour moves only where it is mostly leaf (a soft wood
         // texel next to a leaf would flare, the ratio is large), the coverage thins wherever there
         // is a trace of one, so the soft edge of a lost leaf goes with it.
         let leaf_core = smoothstep(0.4, 0.9, baked.a);
         let leaf_edge = saturate(baked.a * 4.0);
         let own = fract(sin(dot(floor(cell), vec2<f32>(21.19, 47.83))) * 17317.371);
-        wither = condition_own_withering(condition_withering(condition), mix(own, 0.5, cell_spread)) * leaf_core;
-        let lost = condition_defoliation(condition) * select(1.0, 0.0, flora.tree.y > 0.5);
+        wither = condition_own_withering(level_withering(level), mix(own, 0.5, cell_spread)) * leaf_core;
+        let lost = level_defoliation(level) * select(1.0, 0.0, flora.tree.y > 0.5);
         let draw = fract(sin(dot(floor(cell), vec2<f32>(63.1, 17.7))) * 9741.3);
         thin = mix(step(draw, lost), lost, cell_spread) * leaf_edge;
     }

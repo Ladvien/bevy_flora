@@ -11,6 +11,7 @@
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
 //!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]
 //!     [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches] [--condition <sick|dying>]
+//!     [--decline <seconds>[,<after>[,<every>]]]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -70,6 +71,12 @@
 //! the crown thins and dries; it works in every mode and at every level of detail (the impostor
 //! included: `--mode pool --level 3`), and with `--season` and `--fell`.
 //!
+//! `--decline <seconds>[,<after>[,<every>]]` (with `--condition`, `dying` by default) sets the
+//! condition only once the tree is ready, drawn as a [`ConditionGlide`](bevy_flora::ConditionGlide)
+//! of that many seconds, and photographs `after` seconds into it and every `every` seconds after
+//! that: `--decline 8,0,1 --frames 9` is eight seconds of a crown thinning and drying, a frame a
+//! second. The clock steps a fixed 1/60 s a frame, so the levels are the same on every run.
+//!
 //! `--hull <tiers>,<sides>[,<lift>[,<jitter>]]` (with `--branches`: every branch drawn, not the trunk
 //! chain only, `CrownStyle::Hull::trunk_only`) draws the crown as a faceted hull of that many
 //! stacked cones ([`CrownStyle::Hull`](bevy_flora::CrownStyle), lift 0.2 and jitter 1 by default)
@@ -92,7 +99,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
-    BuckTree, CrownStyle, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason,
+    BuckTree, ConditionGlide, CrownStyle, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason,
     FloraWetness, FloraWind, FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeCondition,
     TreeLod, TreeNotch, TreePool, TreePreset, TreeShape, TrunkStyle, build_pool, build_pool_with_deadfall, build_tree,
     DeadfallKind, DeadfallSettings, PooledDeadfall,
@@ -180,6 +187,10 @@ struct Args {
     branches: Option<()>,
     /// The tree's condition (`TreeCondition`): `sick` or `dying`.
     condition: Option<TreeCondition>,
+    /// With `--condition`: the tree starts healthy and gets the condition once it is ready, drawn
+    /// as a glide of `.0` seconds (`ConditionGlide`); photograph `.1` seconds later and every `.2`
+    /// seconds after that.
+    decline: Option<(f32, f32, f32)>,
 }
 
 fn usage() -> ! {
@@ -191,7 +202,8 @@ fn usage() -> ! {
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
          [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]] \
-         [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches] [--condition <sick|dying>]"
+         [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches] [--condition <sick|dying>] \
+         [--decline <seconds>[,<after>[,<every>]]]"
     );
     std::process::exit(2);
 }
@@ -240,6 +252,7 @@ fn parse_args() -> Args {
         prism: None,
         branches: None,
         condition: None,
+        decline: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -345,6 +358,15 @@ fn parse_args() -> Args {
             "--autumn" => {
                 let p = floats(&it.next().unwrap_or_else(|| usage()));
                 args.autumn = match p[..] {
+                    [seconds] => Some((seconds, 0.0, 0.0)),
+                    [seconds, after] => Some((seconds, after, 0.0)),
+                    [seconds, after, every] => Some((seconds, after, every)),
+                    _ => usage(),
+                };
+            }
+            "--decline" => {
+                let p = floats(&it.next().unwrap_or_else(|| usage()));
+                args.decline = match p[..] {
                     [seconds] => Some((seconds, 0.0, 0.0)),
                     [seconds, after] => Some((seconds, after, 0.0)),
                     [seconds, after, every] => Some((seconds, after, every)),
@@ -677,7 +699,7 @@ fn setup(
     if shoot.args.colliders {
         commands.entity(tree).insert(TreeShape::default());
     }
-    if let Some(condition) = shoot.args.condition {
+    if let Some(condition) = shoot.args.condition.filter(|_| shoot.args.decline.is_none()) {
         commands.entity(tree).insert(condition);
     }
     fell(&mut commands, tree, &shoot.args);
@@ -755,6 +777,16 @@ fn drive(
         if let Some((_, after, _)) = shoot.args.autumn {
             shoot.wait = ticks(after).max(SETTLE_FRAMES);
         }
+        // `--decline`: the condition is set now and the decline glides (`ConditionGlide`); the first
+        // photograph waits `after` seconds into it.
+        if let Some((seconds, after, _)) = shoot.args.decline {
+            commands.insert_resource(ConditionGlide { seconds });
+            let condition = shoot.args.condition.unwrap_or(TreeCondition::Dying);
+            for tree in &standing {
+                commands.entity(tree).insert(condition);
+            }
+            shoot.wait = ticks(after).max(SETTLE_FRAMES);
+        }
         // `--burn`: the tree's cell is lit now, and the first photograph waits.
         if let Some((after, _)) = shoot.args.burn {
             if let Some(fire) = fire.as_mut() {
@@ -770,7 +802,7 @@ fn drive(
         shoot.in_flight = false;
         shoot.frame += 1;
         let every = shoot.args.drop.map(|(_, _, every)| every).or(shoot.args.autumn.map(|(_, _, every)| every));
-        let every = every.or(shoot.args.burn.map(|(_, every)| every));
+        let every = every.or(shoot.args.burn.map(|(_, every)| every)).or(shoot.args.decline.map(|(_, _, every)| every));
         // A walking `--push` body: a photograph every quarter of a second.
         let walking = shoot.args.push.is_some_and(|(_, _, velocity)| velocity != Vec2::ZERO);
         let every = every.or(walking.then_some(0.25));
