@@ -37,7 +37,10 @@ fn setup(mut commands: Commands) {
     let mut params = TreePreset::Maple.params();
     params.seed = 7;
     commands.spawn((ProceduralTree(params), TreeAge(0.0), Growing { rate: 1.0 }));
-    commands.spawn((DirectionalLight::default(), Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    commands.spawn((
+        DirectionalLight { shadow_maps_enabled: true, ..default() },
+        Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
     commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 5.0, 20.0).looking_at(Vec3::new(0.0, 4.0, 0.0), Vec3::Y)));
 }
 ```
