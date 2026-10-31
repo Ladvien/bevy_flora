@@ -80,7 +80,8 @@ use crate::units::FloraUnits;
 pub struct ProceduralTree(pub TreeParams);
 
 /// Age of the tree in growth units (see [`crate::GrowthParams`]).
-/// Defaults to `f32::INFINITY`: fully grown.
+/// Defaults to `f32::INFINITY`: fully grown. [`TreeParams::mature_at`](crate::TreeParams::mature_at)
+/// is the age from which a tree changes no more.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct TreeAge(pub f32);

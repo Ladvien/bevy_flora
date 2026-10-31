@@ -389,12 +389,7 @@ fn main() {
             }
             "--preset" => {
                 let name = args.next().unwrap_or_else(|| usage());
-                preset = Some(
-                    TreePreset::ALL
-                        .into_iter()
-                        .find(|p| p.name() == name)
-                        .unwrap_or_else(|| usage()),
-                );
+                preset = Some(TreePreset::from_name(&name).unwrap_or_else(|| usage()));
             }
             "--style" => {
                 style = match args.next().as_deref() {
@@ -727,7 +722,7 @@ fn setup(
     };
     capture.trees = trees.iter().map(|&(_, at, ..)| at).collect();
     for (params, at, start, frames) in trees {
-        let mature_at = build_tree(&params, f32::INFINITY).mature_at;
+        let mature_at = params.mature_at();
         let tree = commands
             .spawn((
                 ProceduralTree(params),
