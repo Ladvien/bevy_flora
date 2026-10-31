@@ -15,7 +15,7 @@ use bevy::mesh::Mesh;
 
 use super::frame::{Class, Tag, placement, twisted};
 use super::state::GrowthState;
-use crate::foliage::{FoliageMeshes, foliage_meshes, leaf_points_for_node};
+use crate::foliage::{FoliageMeshes, foliage_meshes, leaf_points_for_node, leaf_ranks};
 use crate::mesh::MeshData;
 use crate::mesh::branch::{WoodPiece, WoodSpan, skeleton_mesh_with, tube_rings};
 use crate::mesh::trunk::{TrunkPieces, root_bulge_unit, trunk_ring_count};
@@ -231,6 +231,9 @@ fn tag_leaves(mature: &Skeleton, params: &TreeParams, state: &GrowthState) -> [(
         }
         for &(i, from, to) in &ranges {
             let node = &mature.nodes[i];
+            // Under `AllBranches` a branch shows its leaves in the order they appear (`leaf_ranks`),
+            // and the shader shows those whose ordinal is under the branch's leaf count.
+            let ranks = (foliage.placement == FoliagePlacement::AllBranches).then(|| leaf_ranks(to - from));
             for p in from..to {
                 // A tip cluster hangs off the node's end; other leaves off the point they sit at.
                 let anchor = if foliage.placement == FoliagePlacement::TipClusters {
@@ -243,7 +246,7 @@ fn tag_leaves(mature: &Skeleton, params: &TreeParams, state: &GrowthState) -> [(
                     tags[v] = Tag {
                         node: node.id,
                         class: Class::Leaf,
-                        ordinal: (p - from) as u32,
+                        ordinal: ranks.as_ref().map_or((p - from) as u32, |ranks| ranks[p - from]),
                         axis: (anchor - node.start) / node.length,
                         ..Tag::default()
                     };

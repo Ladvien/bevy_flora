@@ -586,3 +586,137 @@ default-feature check metadata of Bevy, the release and debug incremental caches
 `df -h /` 15 GB free at the start, 5.7 GB before, 15 GB after. Kept: the target directory's dependency builds (all
 older than this pass). Leftovers of earlier passes: none found (no `f*_base` in `~` or `/tmp`); the branches
 `loop/iter-1` to `-7` remain on origin, not deleted.
+
+## Iteration 8 — 2026-10-31 — Leaves keep their places as a branch grows: CPU growth = GPU growth (D-078)
+
+Host: this Mac (Apple M5, Metal, macOS 26.6.2), not big. Disk 15 GB free at the start, 4.9 GB before the clean-up
+(the shared `CARGO_TARGET_DIR` is 79 GB); one build or one render at a time. HomeStill: `system_status` ok (18 669
+documents, 488 829 embedded chunks), `scribe_health` ok, `distill_search` and `markdown_read` answered (the
+shoot-apex papers and de Reffye et al. 1988 were in the corpus; SpeedTree's growth manual came from the web).
+Corpus re-scan of `catalog_recent` (200): nothing on trees, plants, leaves, wind, fire, impostors or levels of
+detail that `corpus.md` lacked (one SIGGRAPH winding-number paper), so no `Research: corpus` commit.
+
+**State found.** No open issue on `bevy_flora` (the list was read; `gh` answered), no `consumer` label, no parked
+branch (`git branch --list 'wiggum/parked-*'` empty), a clean `main` at `a91e2dc`. bevy_emerge's family issue #102
+(F6) is closed for its slices 2 to 6 and owes a clip only (its `forest_view` draws a scattered tree as a
+`PooledTree` and a placed one as a `ProceduralTree` with `TreeAge`, the crate's own components): nothing
+this crate lacks. v0.46.1 was 3 h 41 m old at the start, so the 6-hour rule gave no release before 04:42.
+
+**Pick.** Iteration 7's backlog item 3, the one in the brief's first category (a GPU-grown tree that does not
+match the CPU one, and growth that jumps): under `AllBranches` (11 of the 20 presets) a branch spread the leaves it
+had over its length, so each time it gained one every leaf of it moved. Measured with a throwaway probe over every
+preset (ages 0 to 20 in steps of 0.1, branches neither new nor grown): a leaf hopped a mean 1 to 2 cm and a p95 of
+9 to 18 cm (oak 15, maple 18, up to 36) per step, and a leaf of the CPU tree stood a mean 8 to 14 cm, p95 35 to
+58 cm and up to 1.3 m from where `GpuGrowth` puts it (oak cards are 33 cm). Ranked: (1) this, correctness and
+both growth paths; (2) release 0.47.0 (blocked until 04:42; it follows the pass); (3) a gradual decline for
+`TreeCondition` (a class change pops); (4) finish the willow (D-052, eight tuning rounds already failed); (5)
+D-074/D-075 on big. The runner-up, the gradual decline, is a feature a game can fake with two class changes; this
+is a fault a game cannot fix from outside.
+
+**What changed** (`docs/research/leaf-places.md`, committed first as `f4ce982`; implementation `43fbb3d`).
+
+- A grown `AllBranches` branch has `N` leaf slots (`distributed_leaf_count` of `Node::full_length`, a new public
+  field: the exact grown length, because `length / progress` is it only to a rounding error and a count that
+  lands on a whole number fell by one at some ages, which moved every leaf of a branch for that age: found by the
+  probe on a pine's leader at 6.3 years, before the field), each slot at `0.3 + 0.7 t^2` of the branch with
+  `t = (j + u_j) / N` and draws of its own (size, direction, turn, tint, hue, drawn in slot order, `draw_per_leaf`).
+  A branch `n` leaves long shows the `n` slots that appear first, `foliage::leaf_ranks`: the tip's, then the gaps'
+  (van der Corput order counted from the tip). A grown branch shows every slot in slot order, so a mature tree
+  is byte for byte what it was (all 462 unchanged gallery images, every mature scenario among them; levels of
+  detail, pools and impostors are built from the mature list and do not move).
+- `GpuGrowth` shows the same leaves with no change to its shaders or its node buffer: `gpu/mesh.rs` tags each
+  leaf's vertices with its rank as the ordinal and `state.rs` already wrote `leaf_count = n`. Its doc loses the
+  "`AllBranches` leaves keep their mature positions; the CPU path respaces them" difference and gains the one
+  that remains (a leaf that faces out from its branch's tip, `LeafOrientation::RadialOutward`, faces out from the
+  mature tip on the GPU and from the tip it has now on the CPU).
+- **Assumed decision (owner may override)**, in the commit body and `docs/research/leaf-places.md`: the order in
+  which leaves appear. Options: base-first, acropetal (the botanical order, what `GpuGrowth` showed; my first
+  build, which left thin bare limb ends past the last leaf on young oaks and apples: `s1.png`), tip-first then
+  the gaps (taken: young crowns keep the look they had, and mature trees and coarse levels are unchanged), or
+  absolute "in place" timing (SpeedTree's: a leaf starts when the branch has grown to where it stands; the
+  shader cannot find a point on a bent axis at a fraction it was not measured at). The rank order is a design
+  default; the owner's reply wins.
+- **Assumed owner exception**, in the commit body and the CHANGELOG: `a_strands_leaves_keep_their_places_as_it_grows`
+  asserted that a young strand shows the first leaves of the grown strand; the rule it pins is unchanged and now
+  holds for every `AllBranches` branch, but the leaves that show first are the tip's, so it became
+  `every_branchs_leaves_keep_their_places_as_it_grows` (the same places, draws and counts, on every preset and
+  every age from 30% to 95% of maturity, and at least ten young strands). `grown_leaves_and_flowers_match_the_cpu_meshers`
+  no longer skips the `AllBranches` presets (widened, with `RadialOutward` leaves made to face along their branch).
+- Breaking: `Node::full_length` (a new public field): 0.47.0.
+
+**Sources.** Botanical: Mirabet, Besnard, Vernoux and Boudaoud, "Noise and robustness in phyllotaxis" (stem
+`10.1371_journal.pcbi.1002389`: "Lateral organs (leaves and flowers) are successively initiated as primordia at
+the shoot apex yielding a regular arrangement on the stem known as phyllotaxis"); de Reffye, Edelin, Francon,
+Jaeger and Puech, "Plant models faithful to botanical structure and development" (stem `10.1145_378456.378505`:
+"the leaves and fruits are inserted in the right places on the branches (according to the age of the tree)").
+Shipping game: the SpeedTree Modeler manual, "Growth" and "Leaf mesh generator properties" ("In place: The leaf
+will start growing exactly when the parent is long enough to reach its starting point in the fully grown
+model", "you create the model in the fully grown state and use these properties to control how it gets there",
+and Smoothing "to prevent wild leaf motion during growth"). Technical: `book_real_time_rendering_4th_akenine`
+(alpha LODs "experienced as much more continuous than the discrete geometry LOD method, and so avoids
+popping"), this crate's `gpu/frame.rs` and `growth.rs`. Pending index: Prusinkiewicz and Lindenmayer (not in the
+corpus as text), Hallé, Oldeman and Tomlinson (paywalled); SpeedTree's real-time modelers have no growth.
+
+**Numbers** (`/tmp/f8`, removed with the scratch).
+
+- Gallery, 526 scenarios on CPU and `--gpu`: 526 PNG = 526 rows each, none under 100 KB, no flag, no
+  BLANK_CAPTURE or CAPTURE_TIMEOUT, no `ERROR` or `panicked` (one `WARN` under `--gpu`: the known hull-crown note).
+  Against main's binary: 462 images byte for byte, 64 changed (the young trees of the 11 presets, plus their
+  `hull_*` crowns); `stats.tsv` columns 2-8 identical but for the leaf count of `age_apple_8` and
+  `pipeyoung_apple_5` (a leaf's fruit is its slot's), the bounding box of 37 young scenarios; CPU and `--gpu`
+  columns 1-10 identical for all 526. Two runs of `--filter age_ --filter grow_`: identical columns and all 117 PNGs
+  byte for byte, and the same as the full run.
+- GPU parity (`compare_gallery`), all 526: mean of means **0.030** (0.080 before), worst **1.186** (`grow_willow_7`;
+  2.109, `smoothyoung_shrub_4`, before), 83 PNGs byte-identical (79 of 492 in the README); the seven CI scenarios
+  **0.221 and 0.920** against 0.694 and 1.452 measured here with main's binary. The probe's leaf places, CPU against
+  GPU, every `AllBranches` preset and age: 0 (was p95 35 to 58 cm, max 1.3 m); a leaf's re-spread hop per step: 0
+  (was p95 9 to 18 cm).
+- Forest bench, interleaved base / new, medians of three, ms/frame (cpu): pool 10 000 4.96 (14.55) -> 4.98 (14.60)
+  +0.4% (+0.3%); naive 1 000 35.05 (19.18) -> 34.94 (18.85) -0.3% (-1.7%); gpu-live 1 000, 200 frames 177.47 (243.35)
+  -> 178.82 (243.30) +0.8% (0.0%).
+- Build probe (`build_tree`, best of 9, `/tmp/f8/after/build_new.txt` and `before/build_base.txt`): mature and age 4
+  within +0 to 3.5% for 19 of 20 presets (oak +3.5%, willow 4.89 -> 5.01 ms) and `dead_tree` 0.020 -> 0.021 ms, a
+  microsecond; vertex and triangle counts identical for every preset at both ages.
+- Looked at: `/tmp/f8/cmp/{s1..s5,r1..r7}.png` (before | after, front, side and close-up quarters of grow_oak_6,
+  age_apple_6, age_maple_6, age_spruce_4, age_willow_6, age_shrub_4, grow_willow_9, extreme_lagthick_6,
+  extreme_fastgrow_2, hull_fir_2, hull_spruce_2; hull_spruce_5 was read before the final rule and not after).
+- Tests: 343 lib (341 before: one replaced, three added, one widened) and 67 doc green; clippy
+  `--all-targets --all-features -D warnings`, `cargo doc -D warnings`, `cargo check`, `--features serde`,
+  `--examples`, `--examples --all-features`, `cargo package --locked` (131 files). Mutations that fail the new
+  tests: the re-spread (oak branch 15 at 0.4 of maturity, leaf 0 at 0.322 of it, 0.302 grown), the leaf's index as
+  its GPU ordinal (oak age 4, node 14), and `length / progress` (progress 0.8004: slot 1 at 0.370, 0.320 grown).
+
+**Critique and verdict** (`/tmp/f8/critique.md`): the leaf places on a growing branch: **GREAT** (CPU against
+GPU 0, no hop, parity 0.030 and 1.19, mature trees bit-identical, build and forest cost within 1% and 3.5%).
+Flaws found, none stopping a ship: a branch with one leaf carries it at its tip, so a young shrub shows a single
+leaf standing above its crown (`age_shrub_4`, the largest change outside the hull scenarios, mean 4.5 of 255); a
+leaf that appears still appears at the node's current leaf size, not from nothing (one pop per count increment,
+as before: this change ended the re-spread of the others, not the appearance of the new one; a fractional
+`leaf_count` in the vertex stage would ease it in: backlog 1); the `RadialOutward` facing difference above; leaves
+move outward with their wood while sub-branches hold their attach points (continuous, the shader's limit); the
+README clips are re-recorded by the release.
+
+**Gate gaps, said plainly.** `cargo build`, `cargo build --release` and `cargo build --examples` (default
+features) were `cargo check` and `cargo check --examples`, and `cargo package --locked`'s own verification build
+(it compiles `bevy_flora` alone), because each would rebuild Bevy in a new feature set (3 to 4 GB) on a disk with
+5 GB free; `cargo test --all-features` ran as `--lib --tests` and `--doc` for the same reason (clippy
+`--all-targets` compiles every example). The release example binaries (`--all-features`) were built and run.
+
+**Commits** (`loop/iter-8`): `f4ce982` Research: leaf places, `43fbb3d` the implementation and its tests, the
+docs commit (CHANGELOG, ARCHITECTURE, README parity numbers, the note, D-078).
+
+### Ranked backlog after iteration 8
+
+1. **Release 0.47.0** (breaking: `IndexedTree::condition`, `FloraUniform::withered`, `BranchParams::strands`,
+   `NodeKind::Strand`, `Node::full_length`) once v0.46.1 is 6 hours old (04:42 local): re-record the eleven clips
+   (`growth.gif` and `grove.gif` change: young leaves and the willow), update the README's frame times and
+   compatibility table, `cargo semver-checks` if installed.
+2. **A leaf eases in**: a fractional `leaf_count` (`n + the share of the next leaf`) in the vertex stage and in
+   `leaf_points_for_node`, so a leaf that appears grows from nothing over the interval until the next, instead of
+   appearing at its node's full leaf size (the one pop left in a growing crown).
+3. **A gradual decline** (iteration 6's #2): a class change pops; leaves the new class loses should fall.
+4. **Finish the willow (D-052)**: leaf ribbons, strands kept as lines at level 1, limbs whose leaves reach their
+   tips, a greener strand colour, a forked trunk instead of a flat-capped pole.
+5. **`RadialOutward` facing on a growing branch** (the CPU uses the tip it has now, the GPU the mature tip: an
+   orientation difference of a few degrees), D-074 / D-075 on big, a dying tree's wood and shadow, D-067, a CPU
+   mirror of `wind_bend`.
