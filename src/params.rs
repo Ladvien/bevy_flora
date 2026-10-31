@@ -520,9 +520,10 @@ impl Default for LeafShading {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct WindResponse {
     /// How far the whole tree bends (0 = rigid): a multiplier on the main bend, which leans every
-    /// plant by a share of its own height, so a shrub and a pine with the same `sway`, drawn at the
-    /// same scale, lean through the same angle. The presets keep it between 0.9 (the oak, the
-    /// conifers, the baobab and the other stiff species) and 1.6 (the willow).
+    /// plant by a share of its own height, so a shrub and a pine with the same `sway` lean through
+    /// the same angle, at whatever `Transform` scale or [`FloraUnits`](crate::FloraUnits) they are
+    /// drawn at. The presets keep it between 0.9 (the oak, the conifers, the baobab and the other
+    /// stiff species) and 1.6 (the willow).
     pub sway: f32,
     /// How much its leaves flutter (0 = not at all).
     pub flutter: f32,
