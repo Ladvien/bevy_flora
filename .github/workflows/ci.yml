@@ -76,6 +76,7 @@ jobs:
           xvfb-run -a cargo run --release --example gallery -- --warmup-secs 20 --out target/ci/cpu \
             --filter grow_oak_4 --filter grow_oak_6 --filter age_spruce_6 --filter smoothyoung_spruce_4 \
             --filter age_willow_6 --filter smoothyoung_oak_4 --filter pipeyoung_pine_5 \
+            --filter condition_oak_sick_4 --filter condition_oak_dying_6 \
             2>&1 | tee target/ci/cpu.log
 
       # `gallery --gpu` exits with an error when the device cannot grow trees on
@@ -86,6 +87,7 @@ jobs:
           xvfb-run -a cargo run --release --example gallery -- --gpu --warmup-secs 20 --out target/ci/gpu \
             --filter grow_oak_4 --filter grow_oak_6 --filter age_spruce_6 --filter smoothyoung_spruce_4 \
             --filter age_willow_6 --filter smoothyoung_oak_4 --filter pipeyoung_pine_5 \
+            --filter condition_oak_sick_4 --filter condition_oak_dying_6 \
             2>&1 | tee target/ci/gpu.log
           if grep -E "ERROR|panicked" target/ci/gpu.log; then exit 1; fi
 

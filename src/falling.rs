@@ -58,6 +58,7 @@ use bevy::shader::{Shader, ShaderDefVal};
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 
+use crate::condition::{Decline, TreeCondition};
 use crate::felling::{Felled, TreeLanded};
 use crate::fire::{FloraFire, burnt_front};
 use crate::ground::FloraGround;
@@ -126,7 +127,8 @@ pub(crate) const ATTRIBUTE_FALL_ANCHOR: MeshVertexAttribute =
 /// long it lies on the ground and how fast it falls.
 pub(crate) const ATTRIBUTE_FALL_PATH: MeshVertexAttribute =
     MeshVertexAttribute::new("FallPath", 0x666C_6F72_6121, VertexFormat::Float32x4);
-/// Per falling-leaf vertex: its card's face normal in the burst's space (xyz; w unused).
+/// Per falling-leaf vertex: its card's face normal in the burst's space (xyz) and how far the leaf
+/// had withered on its tree (w, `Decline::withered`; 0 for a healthy tree's).
 pub(crate) const ATTRIBUTE_FALL_FACE: MeshVertexAttribute =
     MeshVertexAttribute::new("FallFace", 0x666C_6F72_6122, VertexFormat::Float32x4);
 
@@ -303,6 +305,8 @@ pub(crate) struct Card {
     pub indices: Range<usize>,
     /// `leaf_season_moment` of its phase: a deciduous tree sheds it once the leaf fall passes it.
     pub moment: f32,
+    /// The card's phase (`sway.w`), what the shaders draw its moment, its decline and its tint from.
+    pub phase: f32,
     /// A flower or a fruit (vertex alpha below 0.5), not a leaf: it never drops as a leaf.
     pub flower: bool,
 }
@@ -337,6 +341,7 @@ pub(crate) fn leaf_cards(mesh: &Mesh) -> Vec<Card> {
                 vertices: v..v + 1,
                 indices: 0..0,
                 moment: leaf_season_moment(s[3]),
+                phase: s[3],
                 flower: colors.is_some_and(|colors| colors[v][3] < 0.5),
             }),
         }
@@ -508,13 +513,15 @@ impl BurstBuilder {
 
     /// Add `cards` of `source` (a tree's leaf mesh) for the tree placed at `tree`, each letting go
     /// `release(card, rng)` seconds after `fall.now` (before it when negative). `ground` is the
-    /// ground's height at a world (x, z); a card hanging less than 5 cm above it stays. Returns how
-    /// many it added.
+    /// ground's height at a world (x, z); a card hanging less than 5 cm above it stays. `decline` is
+    /// what the tree's condition has done to its leaves: the leaves fall as dry as those on the tree
+    /// (the caller leaves out the ones it has lost). Returns how many it added.
     #[allow(clippy::too_many_arguments)]
     pub fn add<'a>(
         &mut self,
         source: &Mesh,
         cards: impl IntoIterator<Item = &'a Card>,
+        decline: Decline,
         tree: &GlobalTransform,
         ground: impl Fn(Vec2) -> f32,
         fall: Fall,
@@ -595,7 +602,7 @@ impl BurstBuilder {
                 out.sway.push(sway[v]);
                 out.anchor.push(anchor.extend(fall.now + delay).to_array());
                 out.path.push([local_floor, seed, rest, speed]);
-                out.face.push(face.extend(0.0).to_array());
+                out.face.push(face.extend(decline.withered(card.phase)).to_array());
             }
             let start = card.vertices.start;
             out.indices.extend(source_indices[card.indices.clone()].iter().map(|&i| base + (i - start) as u32));
@@ -721,6 +728,12 @@ struct LeafSource {
     hull: Option<i32>,
 }
 
+/// What a tree in `condition` has done to the leaves that fall from it: the tree's own, as its
+/// shaders draw the leaves left on it ([`Decline`]).
+fn decline_of(condition: Option<&TreeCondition>, leaves: &LeafSource) -> Decline {
+    Decline::new(condition, leaves.hull.is_some())
+}
+
 /// The leaves of a tree drawn on the CPU with [`FloraMaterial`]s, or from a pool's: `None` for any
 /// other tree, and a tree with no leaves.
 fn leaf_source(
@@ -827,6 +840,7 @@ pub(crate) fn drop_leaves(
         Option<&PooledTree>,
         Option<&PooledLook>,
         Option<&Felled>,
+        Option<&TreeCondition>,
     )>,
     stumps: Query<&GlobalTransform>,
     bursts: Query<&LeafBurst>,
@@ -843,13 +857,15 @@ pub(crate) fn drop_leaves(
         if budget == 0 {
             continue;
         }
-        let Ok((at, render, tree, pooled, look, felled)) = trees.get(drop.tree) else { continue };
+        let Ok((at, render, tree, pooled, look, felled, condition)) = trees.get(drop.tree) else { continue };
         let Some(leaves) = leaf_source(render, tree, pooled, look, pools.as_deref()) else { continue };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let shed = leaves.deciduous.then_some(season.leaf_fall);
         let burnt = burnt_front(fire.as_deref(), at.translation());
+        let decline = decline_of(condition, &leaves);
         let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
-        let mut cards: Vec<&Card> = read.cards.iter().filter(|card| card.on_tree(shed, burnt)).collect();
+        let mut cards: Vec<&Card> =
+            read.cards.iter().filter(|card| card.on_tree(shed, burnt) && !decline.has_lost(card.phase)).collect();
         if cards.is_empty() {
             continue;
         }
@@ -866,7 +882,7 @@ pub(crate) fn drop_leaves(
         let stood = felled.and_then(|felled| stumps.get(felled.stump).ok()).unwrap_or(at).translation().y;
         let height = |p: Vec2| ground.as_deref().map_or(stood, |ground| ground.height(p));
         let mut burst = BurstBuilder::new(at.translation());
-        burst.add(read.mesh(source), cards[..chosen].iter().copied(), at, height, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+        burst.add(read.mesh(source), cards[..chosen].iter().copied(), decline, at, height, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
         let Some(burst) = burst.finish() else { continue };
         let Some(material) = caches.material(&leaves.material, &mut flora) else { continue };
         live += burst.leaves;
@@ -907,7 +923,14 @@ pub(crate) fn shed_with_season(
     mut state: ResMut<SeasonShed>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     trees: Query<
-        (&GlobalTransform, Option<&TreeRender>, Option<&ProceduralTree>, Option<&PooledTree>, Option<&PooledLook>),
+        (
+            &GlobalTransform,
+            Option<&TreeRender>,
+            Option<&ProceduralTree>,
+            Option<&PooledTree>,
+            Option<&PooledLook>,
+            Option<&TreeCondition>,
+        ),
         Without<Felled>,
     >,
     bursts: Query<&LeafBurst>,
@@ -963,7 +986,7 @@ pub(crate) fn shed_with_season(
         a.total_cmp(b).then(p.x.total_cmp(&q.x)).then(p.z.total_cmp(&q.z))
     });
     let mut looks: HashMap<AssetId<FloraMaterial>, (Handle<FloraMaterial>, BurstBuilder)> = HashMap::default();
-    for (_, (at, render, tree, pooled, look)) in near {
+    for (_, (at, render, tree, pooled, look, condition)) in near {
         let budget = settings.max_leaves.saturating_sub(live) as usize;
         if budget == 0 {
             break;
@@ -974,9 +997,13 @@ pub(crate) fn shed_with_season(
         };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let burnt = burnt_front(fire.as_deref(), position);
+        let decline = decline_of(condition, &leaves);
         let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
-        let falling: Vec<&Card> =
-            read.shed_between(from, to).filter(|card| card.moment >= burnt).take(budget).collect();
+        let falling: Vec<&Card> = read
+            .shed_between(from, to)
+            .filter(|card| card.moment >= burnt && !decline.has_lost(card.phase))
+            .take(budget)
+            .collect();
         if falling.is_empty() {
             continue;
         }
@@ -986,7 +1013,7 @@ pub(crate) fn shed_with_season(
             .or_insert_with(|| (leaves.material.clone(), BurstBuilder::new(position)));
         let mut rng = SeededRng::from_parts(place_seed(position) ^ now.to_bits() as i32, 1);
         // Each lets go when the leaf fall passed its moment, assuming it rose evenly meanwhile.
-        live += burst.add(read.mesh(source), falling, at, height, fall, &mut rng, |card, _| {
+        live += burst.add(read.mesh(source), falling, decline, at, height, fall, &mut rng, |card, _| {
             ((card.moment - from) / span - 1.0) * elapsed
         });
     }
@@ -1147,7 +1174,7 @@ mod tests {
         let fall = Fall { now: 10.0, rest: 6.0, drift: Vec2::new(0.5, 0.0), units: 1.0 };
         let mut rng = SeededRng::new(3);
         let mut burst = BurstBuilder::new(tree.translation());
-        burst.add(&oak, chosen.iter().copied(), &tree, |_| 1.0, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+        burst.add(&oak, chosen.iter().copied(), Decline::default(), &tree, |_| 1.0, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
         let burst = burst.finish().expect("leaves above the ground");
         assert_eq!(burst.leaves as usize, chosen.len());
         let vertices: usize = chosen.iter().map(|card| card.vertices.len()).sum();
@@ -1195,7 +1222,7 @@ mod tests {
             let fall = Fall { now: 10.0, rest: 6.0, drift: Vec2::new(0.5 * k, 0.0), units: k };
             let mut rng = SeededRng::new(3);
             let mut burst = BurstBuilder::new(tree.translation());
-            burst.add(&oak, chosen.iter().copied(), &tree, |_| k, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
+            burst.add(&oak, chosen.iter().copied(), Decline::default(), &tree, |_| k, fall, &mut rng, |_, rng| rng.range(0.0, LET_GO));
             burst.finish().expect("leaves above the ground")
         };
         let (metres, feet) = (burst_in(1.0), burst_in(3.2808));
@@ -1310,6 +1337,49 @@ mod tests {
         // Burnt through: nothing more falls.
         app.world_mut().resource_mut::<FloraFire>().scorch(Vec3::ZERO, 3.0, 1.0);
         assert_eq!(drop_all(&mut app), left as u32);
+    }
+
+    #[test]
+    fn a_dying_tree_drops_only_the_leaves_it_has_left_and_they_fall_dry() {
+        // The same oak, healthy and dying, drops every leaf it has.
+        let drop_all = |condition: Option<TreeCondition>| {
+            let mut app = app();
+            let mut oak = app.world_mut().spawn((ProceduralTree(TreePreset::Oak.params()), Transform::default()));
+            if let Some(condition) = condition {
+                oak.insert(condition);
+            }
+            let oak = oak.id();
+            app.update();
+            app.update();
+            let all = {
+                let world = app.world();
+                let render = world.get::<TreeRender>(oak).unwrap();
+                let mesh = world.resource::<Assets<Mesh>>().get(&render.foliage.as_ref().unwrap().1).unwrap();
+                leaf_cards(mesh).iter().filter(|card| !card.flower).count()
+            };
+            app.world_mut().resource_mut::<FallingLeaves>().max_leaves = 100_000;
+            app.world_mut().resource_mut::<Messages<DropLeaves>>().write(DropLeaves { tree: oak, count: 100_000 });
+            app.update();
+            let world = app.world_mut();
+            let (burst, mesh) = world.query::<(&LeafBurst, &Mesh3d)>().single(world).unwrap();
+            let (leaves, mesh) = (burst.leaves as usize, mesh.0.clone());
+            let Some(VertexAttributeValues::Float32x4(faces)) = world.resource::<Assets<Mesh>>().get(&mesh).unwrap().attribute(ATTRIBUTE_FALL_FACE) else {
+                panic!("the burst keeps its leaves' faces");
+            };
+            (all, leaves, faces.iter().map(|face| face[3]).sum::<f32>() / faces.len() as f32)
+        };
+        let (all, healthy, withered) = drop_all(None);
+        assert_eq!(healthy, all, "a healthy tree drops from every leaf it has");
+        assert_eq!(withered, 0.0, "and none of them has withered");
+        let (_, dying, withered) = drop_all(Some(TreeCondition::Dying));
+        let share = dying as f32 / all as f32;
+        assert!((share - (1.0 - TreeCondition::Dying.defoliation())).abs() < 0.05, "{dying} of {all} leaves left on a dying oak");
+        let (_, sick, half) = drop_all(Some(TreeCondition::Sick));
+        assert!(((sick as f32 / all as f32) - (1.0 - TreeCondition::Sick.defoliation())).abs() < 0.05, "{sick} of {all} on a sick one");
+        // What falls is as dry as what is left on the tree: a dying tree's leaves nearly all the way
+        // (the burst carries it, its shader the colour), a sick one's half way.
+        assert!(withered > 0.85, "{withered:.2} withered on a dying oak's falling leaves");
+        assert!((half - TreeCondition::Sick.withering()).abs() < 0.1, "{half:.2} on a sick one's");
     }
 
     #[test]
