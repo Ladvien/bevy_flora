@@ -13,8 +13,10 @@ class as a glide.
   Sequence of physiological stress thresholds in mature European beech trees" (Science of the Total
   Environment, stem `10.1016_j.scitotenv.2020.141792`); "European beech dieback after premature leaf
   senescence during the 2018 drought in northern Switzerland" (Plant Biology, stem `10.1111_plb.13467`);
-  Granier et al., the 2003 drought's premature leaf shedding in beech (Annals of Forest Science, stem
-  `10.1051_forest:2006042`). The survey grades the classes come from stay as in `tree-condition.md`.
+  Bréda, Huc, Granier and Dreyer, "Temperate forest trees and stands under severe drought: a review of
+  ecophysiological responses, adaptation processes and long-term consequences" (Annals of Forest Science
+  2006, stem `10.1051_forest:2006042`), on the 2003 drought's premature leaf shedding in beech. The
+  survey grades the classes come from stay as in `tree-condition.md`.
 - Shipping game: Unreal Engine 5.7's Procedural Vegetation Editor (Epic's documentation,
   <https://dev.epicgames.com/documentation/unreal-engine/procedural-vegetation-editor-in-unreal-engine>,
   read 2026-10-31); Whatley, "Toward Photorealism in Virtual Botany" (GPU Gems 2, chapter 1, Far Cry's
@@ -86,8 +88,9 @@ distance.
 
 - `ConditionGlide::seconds`: 0 (at once). Design default, kept so no existing caller's draw changes.
 - The ease: smoothstep. Design default.
-- The level's resolution: 8 bits (255 steps). At the step a 3 000-leaf oak loses 7-8 leaves (0.8 of the
-  crown over 254 steps); over a 20 s glide that is one step per 0.08 s.
+- The level's resolution: 8 bits (254 steps). At a step a 3 000-leaf oak loses 6-10 leaves (0.8 of the
+  crown over 254 steps); at the steepest part of the smoothstep a tree takes 1.5 x 254 / seconds steps a
+  second (38 a second for a 10 s glide, 6 for a minute), and each step rewrites its meshes' tags.
 - The anchors (0, 0.5, 1) and the shares and witherings at them: unchanged from iteration 6.
 
 ## Validation targets
@@ -118,6 +121,17 @@ back as the leaves return. A lightning-struck tree (1-2 s) is the same code with
 No default changed (`ConditionGlide::seconds` is 0). `TreeCondition`'s own `defoliation` and `withering`
 are as they were. The `MeshTag` layout gains bits 10-18 above the class; bits 0-9 mean what they meant.
 
+Found while measuring, after this note's first commit: the cost of a glide is the number of `MeshTag`s that
+change (a tag change makes the vertex stage and the render world re-read the instance), not the systems
+(0.4 to 0.5 ms headless for 10 000 trees). 10 000 pooled oaks all declining at once: a 6 s glide takes the
+frame from 5.0 to 6.5 ms, a 30 s one from 5.0 to 5.6. Trees that began together first stepped their tags in
+the same frame (a spike of +6 ms every few frames, p95 5.4 to 10.8), so each tree's step is its level in
+steps plus its own fraction of a step (a hash of its entity), rounded down: the same total, no in-phase
+frames (a test fails without it). The remedies that would remove the cost, a glide's level in the shared
+buffer with trees that began together sharing a slot (no per-tree write), or tagging only the leaf meshes
+(about half the writes), are not in this pass: the first changes the shared buffer's layout and the constants
+of eight shaders, the second needs a leaf marker on every mesh a tree is spawned with.
+
 ## Pending index
 
 - Whatley's chapter itself (GPU Gems 2, chapter 1) is quoted second-hand through Real-Time Rendering; the
@@ -126,3 +140,5 @@ are as they were. The `MeshTag` layout gains bits 10-18 above the class; bits 0-
   grades, not a per-week curve): the smoothstep is a design default until one is found.
 - Unreal's page documents an offset for a plant's health at generation time; whether any shipped game
   animates a health value at runtime is not documented in what the corpus or the web gave.
+- A shipped game that animates a tree's health continuously in the vertex stage, for the cost of one tag
+  write per step per tree: unknown; see `## Deviations` on the cost found.
