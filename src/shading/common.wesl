@@ -35,6 +35,9 @@ struct FloraUniform {
     // a flower's colour multiplier (the blossom colour over the leaf colour), 1; zero for a
     // species without flowers and for wood
     blossom: vec4<f32>,
+    // a withered leaf's colour multiplier (the dry leaf colour over the leaf colour), 1; zero for
+    // wood
+    withered: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> flora: FloraUniform;
@@ -320,12 +323,85 @@ fn gliding() -> bool {
     return flora_wind[GLIDE].x > 0.5;
 }
 
-// What the mesh tagged `tag` multiplies its colour by, its leaves' if `leaf`.
+// What the mesh tagged `tag` multiplies its colour by, its leaves' if `leaf`. The glide tag is the
+// tag's low byte; a tree's condition (`CONDITION_SHIFT`) sits above it.
 fn glide_tint(tag: u32, leaf: bool) -> vec3<f32> {
-    if tag == 0u || tag > MAX_GLIDE_LOOKS {
+    let look = tag & GLIDE_TAG_MASK;
+    if look == 0u || look > MAX_GLIDE_LOOKS {
         return vec3<f32>(1.0);
     }
-    return flora_wind[GLIDE + 2u * tag - 1u + select(0u, 1u, leaf)].rgb;
+    return flora_wind[GLIDE + 2u * look - 1u + select(0u, 1u, leaf)].rgb;
+}
+
+// A tree's condition (`TreeCondition`, condition.rs): its class is in bits 8 and 9 of the `MeshTag`
+// of every mesh the tree is drawn with, above the glide tag (`condition::TAG_SHIFT`): 0 healthy,
+// 1 sick, 2 dying.
+const CONDITION_SHIFT: u32 = 8u;
+const GLIDE_TAG_MASK: u32 = 255u;
+
+fn tree_condition(tag: u32) -> u32 {
+    return (tag >> CONDITION_SHIFT) & 3u;
+}
+
+// The share of its leaves a class has lost, and how far the leaves that stay have withered toward
+// the dry leaf colour, on average (`TreeCondition::defoliation` and `withering`).
+fn condition_defoliation(condition: u32) -> f32 {
+    if condition == 1u {
+        return 0.35;
+    }
+    if condition == 2u {
+        return 0.8;
+    }
+    return 0.0;
+}
+
+fn condition_withering(condition: u32) -> f32 {
+    if condition == 1u {
+        return 0.5;
+    }
+    if condition == 2u {
+        return 1.0;
+    }
+    return 0.0;
+}
+
+// A leaf's own draw for its tree's decline, 0..1, from its phase (`condition::leaf_decline_moment`):
+// not the season's moment, so the leaves a sick tree has lost are not the ones that turn first.
+fn leaf_decline_moment(sway: vec4<f32>) -> f32 {
+    return fract(sway.w * 4.61 + 0.719);
+}
+
+// Whether the tree's condition has taken this leaf, `alpha` its vertex colour's alpha (1 a leaf; a
+// flower or a fruit is below 0.5 and is the game's to count, so it stays). A hull crown keeps all
+// its facets (`flora.tree.y`). Evaluated in the shadow pass too, so the gaps let the light through.
+fn leaf_defoliated(sway: vec4<f32>, alpha: f32, tag: u32) -> bool {
+    let share = condition_defoliation(tree_condition(tag));
+    return share > 0.0 && alpha >= 0.5 && flora.tree.y < 0.5 && leaf_decline_moment(sway) < share;
+}
+
+// How far a leaf with the draw `draw` (0..1) has withered in a class whose leaves wither
+// `withering` on average: its own way, 0.4 either side of it (`Decline::withered`).
+fn condition_own_withering(withering: f32, draw: f32) -> f32 {
+    return saturate(withering + 0.8 * (draw - 0.5));
+}
+
+// How far this leaf has withered for its tree's condition, 0 (its colour) to 1 (the dry leaf colour),
+// each leaf its own way (`condition_own_withering`); 0 for a healthy tree, and for a flower or a
+// fruit (alpha below 0.5), which keep their colour.
+fn leaf_withering(sway: vec4<f32>, alpha: f32, tag: u32) -> f32 {
+    let withering = condition_withering(tree_condition(tag));
+    if withering == 0.0 || alpha < 0.5 {
+        return 0.0;
+    }
+    return condition_own_withering(withering, fract(sway.w * 2.83 + 0.37));
+}
+
+// What a leaf's colour is multiplied by once it has withered `withered` (`leaf_withering`) of the way
+// from the colour `tint` gives it (the season's: its autumn colour once turned) to the dry leaf
+// colour (`flora.withered`, that colour over the leaf's, 0 for wood): a dying tree's leaves are dry
+// in autumn too, not an autumn colour dried over.
+fn leaf_withered_tint(tint: vec3<f32>, withered: f32) -> vec3<f32> {
+    return mix(tint, flora.withered.rgb, withered * flora.withered.w);
 }
 
 // The fire (`FloraFire`, fire.rs), compiled in while one exists (`FLORA_FIRE`). Slot `FIRE` holds

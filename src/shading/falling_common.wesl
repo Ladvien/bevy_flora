@@ -7,7 +7,8 @@
 //   path:   the ground's height under where it lands (x, burst space), a seed in 0..1 (y), how long
 //           it lies on the ground (z, seconds) and how fast it falls once it has picked up speed (w)
 //   face:   the card's face normal in the burst's space (xyz), one per card, so the tumble and the
-//           settling turn the whole card alike
+//           settling turn the whole card alike, and how far the leaf had withered on its tree (w, the
+//           tree's condition: `falling.wesl` moves its colour toward the dry leaf colour by it)
 // `falling.rs` mirrors the timing (`landing_time`, the drift) to size the burst's bounds and its life.
 import package::shading::common::{flora_wind, world_per_metre};
 
