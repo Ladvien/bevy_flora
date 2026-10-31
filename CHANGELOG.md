@@ -38,9 +38,10 @@ A change of `TreeCondition` can be drawn as a decline over seconds (`docs/resear
   in place of the class functions, in every leaf stage (the main pass, the prepass, the GPU-growth twins and
   the impostor). A tree with no glide carries the bits it always did, and `forest`, `gallery` and every
   settled tree draw as before: of 526 gallery scenarios 522 are the same images and 4 (`painterly_oak`,
-  `painterly_maple`, `toon_oak`, `toon_maple`) differ in one pixel of 1 228 800 each, a leaf-edge pixel, the
-  same one in the pair of a species (shader code changed, so its instruction order may have); `stats.tsv`
-  columns 1 to 10 are identical and no flag appears, on the CPU and under `--gpu`.
+  `painterly_maple`, `toon_oak`, `toon_maple`) differ in one pixel of 1 228 800 each, the same pixel in the
+  pair of a species (shader code changed, so instruction order may have); `stats.tsv`
+  columns 1 to 10 are identical and no flag appears, on the CPU and under `--gpu`; CPU against `--gpu` over
+  all 526: mean of means 0.029 of 255 and worst 1.162, the seven CI scenarios 0.218 and 0.922, all as before.
 - What a glide costs, measured on an Apple M5 (10 000 pooled oaks, `forest --mode pool`, all declining at
   once, interleaved with a run without): a 6-second glide takes the frame from 5.0 to 6.5 ms for its length
   (p95 5.4 to 10.5), a 30-second one from 5.0 to 5.6 (p95 5.4 to 6.1): the cost is the number of mesh tags
