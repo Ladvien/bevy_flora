@@ -40,6 +40,8 @@ what it rests on; this file only says what exists. Newest additions last in each
   signaling to regulate branching".
 - `10.1038_s41598-017-14831-w`: "Climate change accelerates growth of urban trees in metropolises
   worldwide".
+- `10.1111_cgf.13263`: "Tree Growth Modelling Constrained by Growth Equations" (2017; added 2026-10-30).
+- `10.14214_sf.a8529`: "A functional model of tree growth and tree architecture" (1997; added 2026-10-30).
 
 ## Phenology (leaf colour, leaf fall, blossom)
 
@@ -70,6 +72,8 @@ what it rests on; this file only says what exists. Newest additions last in each
   resilience".
 - `10.1038_s41598-017-06747-2`: "Small fire refugia in the grassy matrix and the persistence of
   Afrotemperate forest in the Drakensberg mountains".
+- `sig2024_Scintilla_Simulating_Combustible_Vegetation_for_Wildfires`: "Scintilla: Simulating
+  Combustible Vegetation for Wildfires" (SIGGRAPH 2024; per-plant fuel and ignition; added 2026-10-30).
 
 ## Wind animation (shipping games and technique)
 
