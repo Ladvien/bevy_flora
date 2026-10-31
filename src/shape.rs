@@ -210,9 +210,18 @@ impl TreeShape {
                 // A leaf reaches its size (or a tip cluster its radius) from where it sits.
                 let pad = Vec3::splat(foliage.leaf_size * scale * (1.0 + foliage.leaf_size_variation.max(0.0)) * 1.5);
                 let end = node.point_at(1.0);
-                let from = if foliage.placement == FoliagePlacement::AllBranches { node.start } else { end };
-                let lo = from.min(end) - pad;
-                let hi = from.max(end) + pad;
+                // Leaves along a branch sit on its wood, which a bent branch arches past both ends.
+                let (wood_lo, wood_hi) = if foliage.placement == FoliagePlacement::AllBranches {
+                    if node.bend > 0.0 {
+                        node.axis(node.axis_points()).into_iter().fold((end, end), |(lo, hi), (c, _)| (lo.min(c), hi.max(c)))
+                    } else {
+                        (node.start.min(end), node.start.max(end))
+                    }
+                } else {
+                    (end, end)
+                };
+                let lo = wood_lo - pad;
+                let hi = wood_hi + pad;
                 crown = Some(match crown {
                     Some((min, max)) => (min.min(lo), max.max(hi)),
                     None => (lo, hi),

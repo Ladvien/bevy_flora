@@ -41,7 +41,7 @@ use bevy::window::WindowResolution;
 use bevy_flora::{
     CrownShape, CrownStyle, FloraPlugin, FloraSeason, FloraWind, FoliagePlacement, GpuGrowth, GpuGrowthSupport,
     LeafOrientation, LeafStyle, MeshData, NodeKind, ProceduralTree, RenderStyle, TreeAge, TreeCondition, TreeMeshes, TreeParams,
-    TreePreset, TrunkStyle, TrunkTermination, build_tree,
+    StrandParams, TreePreset, TrunkStyle, TrunkTermination, build_tree,
 };
 
 const WINDOW: UVec2 = UVec2::new(1280, 960);
@@ -396,6 +396,22 @@ fn scenarios() -> Vec<Scenario> {
             p.trunk.randomness = 0.8;
             p.branches.gravity_strength = 1.5;
             p.branches.stiffness = 0.0;
+        }),
+        // Pendant strands (`StrandParams`) on an oak: leaning ropes on the outer half, plumb ropes from
+        // every branch's base, ropes stopping above a raised floor, and the same ropes on a young tree.
+        ("strands_oak", inf, |p| {
+            p.branches.strands = StrandParams { density: 1.5, start: 0.5, length: 0.4, spread: 25.0, clearance: 0.15 };
+        }),
+        ("strands_oak_plumb", inf, |p| {
+            p.branches.strands = StrandParams { density: 3.0, start: 0.0, length: 1.0, spread: 0.0, clearance: 0.15 };
+        }),
+        ("strands_oak_floor2", inf, |p| {
+            p.branches.floor_level = 2.0;
+            p.branches.start = 0.1;
+            p.branches.strands = StrandParams { density: 2.0, start: 0.2, length: 1.0, spread: 10.0, clearance: 0.3 };
+        }),
+        ("strands_oak_4", 4.0, |p| {
+            p.branches.strands = StrandParams { density: 1.5, start: 0.5, length: 0.4, spread: 25.0, clearance: 0.15 };
         }),
     ];
     for (name, age, edit) in extremes2 {
