@@ -59,7 +59,7 @@ fn vertex(
 
     let world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local, 1.0));
     out.world_position = vec4<f32>(
-        wind_bend(world.xyz, local.y, origin, length(world_from_local[1].xyz), globals.time, shake),
+        wind_bend(world.xyz, origin, globals.time, shake),
         1.0
     );
     // Pushed aside by a body moving through, as in `vertex.wesl`.

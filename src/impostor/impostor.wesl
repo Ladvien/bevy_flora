@@ -60,8 +60,7 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     );
 
     // The tree sways with the wind, and swings when shaken, like its meshes do.
-    let scale_y = length(world_from_local[1].xyz);
-    let bent = wind_bend(corner.world, vertex.position.y, origin, scale_y, globals.time, shake_at(origin, globals.time));
+    let bent = wind_bend(corner.world, origin, globals.time, shake_at(origin, globals.time));
     out.world_position = vec4<f32>(bent, 1.0);
     out.position = position_world_to_clip(bent);
     // The tree's own +Z in the world (its yaw): what the baked normals are relative to.

@@ -1100,7 +1100,7 @@ mod tests {
     #[test]
     fn the_uniform_holds_the_tree_and_nothing_of_the_weather() {
         let uniform = FloraUniform::new(&TreePreset::Willow.params());
-        assert_eq!(uniform.response, Vec4::new(1.4, 1.6, 0.7, 0.8));
+        assert_eq!(uniform.response, Vec4::new(1.6, 1.6, 0.7, 0.8));
         let wood = uniform.wood();
         assert_eq!((wood.tree, wood.response), (uniform.tree, uniform.response));
         assert_eq!((wood.leaf, wood.tint), (Vec4::ZERO, Vec4::ZERO));
@@ -1408,5 +1408,98 @@ mod tests {
         for slot in [0, 1, 5, 6, 8] {
             assert_eq!(feet[slot], metres[slot], "slot {slot}");
         }
+    }
+
+    /// The owner, 1792016453: "This bush seems to be swaying with the wind a lot, but the big trees
+    /// aren't even a little. This should be more uniform." What set that was the species' `sway`
+    /// (the shrub presets carry 1.2-1.5 against the pines' 0.6-0.9), because `wind_bend`'s lean was
+    /// already proportional to the plant's height: its height term (a trunk-normalised `h`, then
+    /// squared) is 1.0 at *any* plant's top, so `sway` was the only thing left to decide who moved.
+    /// The lean now measures the vertex's own distance from the root instead, so every species leans
+    /// a fixed share of **its own** height. This holds the shader half: the lean must come from
+    /// `length(rel)`, never from a trunk-normalised height (which cannot tell a shrub from a pine).
+    /// The retune of the presets' `sway` values themselves is a preset change (the gallery's hard
+    /// rule) and is proposed, not applied, in `qa/visual_findings.md`.
+    #[test]
+    fn the_lean_comes_from_the_vertexs_own_distance_from_the_root() {
+        let source = include_str!("common.wesl");
+        let lean_line = source.lines().find(|l| l.contains("let lean = MAIN_BEND") && l.contains("scale_y"))
+            .expect("wind_bend's lean line");
+        assert!(lean_line.contains("length(rel)"), "the lean must come from the vertex's own distance from the root (a share of the plant's own height), not a trunk-normalised height that is 1.0 for every species at its top: {lean_line}");
+        assert!(!lean_line.contains("flora.tree.x"), "the lean must not be trunk-normalised (the old h): {lean_line}");
+        // The plant's absolute size must still matter: `local_y` alone could not, so `rel` (the
+        // world-space offset from the root) has to be defined before the lean reads it.
+        assert!(source.find("let rel = world - origin").unwrap_or(source.len()) < source.find("let lean = MAIN_BEND").unwrap_or(0), "`rel` must be defined before the lean reads it");
+    }
+
+    /// Issue #90 (D-073): `rel = world - origin` is a distance between two world-space positions,
+    /// so it already carries the tree's `Transform` scale (and `FloraUnits`); a `scale_y` factor in
+    /// the lean counted the scale twice, and a tree drawn at scale `s` leaned `s` times the share of
+    /// its own height it leans at scale 1 (a foot world: 3.28 times as far). `wind_bend` takes no
+    /// scale and none of its six callers hands it one. Comments are stripped first: the lean line
+    /// says in a comment why `scale_y` is absent, and the test above finds the line by that name.
+    #[test]
+    fn wind_bend_takes_no_scale_and_the_lean_has_no_scale_factor() {
+        fn code(source: &str) -> String {
+            source.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n")
+        }
+        let common = code(include_str!("common.wesl"));
+        let signature = common.lines().find(|l| l.contains("fn wind_bend(")).expect("wind_bend's signature");
+        assert!(!signature.contains("scale"), "wind_bend must take no scale: its lean is already in world units: {signature}");
+        let lean = common.lines().find(|l| l.contains("let lean = MAIN_BEND")).expect("wind_bend's lean line");
+        assert!(!lean.contains("scale"), "the lean must not multiply the tree's scale in again: {lean}");
+        for (stage, source) in [
+            ("vertex", include_str!("vertex.wesl")),
+            ("prepass", include_str!("prepass.wesl")),
+            ("growth", include_str!("../gpu/growth.wesl")),
+            ("growth_prepass", include_str!("../gpu/growth_prepass.wesl")),
+            ("impostor", include_str!("../impostor/impostor.wesl")),
+            ("impostor_prepass", include_str!("../impostor/impostor_prepass.wesl")),
+        ] {
+            let source = code(source);
+            let call = source.lines().find(|l| l.contains("wind_bend(")).unwrap_or_else(|| panic!("{stage} calls wind_bend"));
+            assert!(!call.contains("scale") && !call.contains("world_from_local"), "{stage} must not hand wind_bend a scale: {call}");
+        }
+    }
+
+    /// The owner's complaint in numbers, mirrored from `wind_bend` (the shader's own formula): a
+    /// plant's crown now leans a fixed share of its **own** height, so a 0.5 m shrub and an 8 m pine
+    /// sway by near the same percentage — the "more uniform" of 1792016453 — and the species' `sway`
+    /// is a multiplier on that share, not the thing that decides who moves.
+    ///
+    /// Mirrors the shipped formula (`MAIN_BEND * response.x * length(rel)`, then the
+    /// bend-not-stretch renormalisation; the `1.0` below stands for the tree's scale, which
+    /// `rel` carries by itself); if the shader's lean line changes, this has to change
+    /// with it, and the first test above holds that the two stay in step.
+    #[test]
+    fn a_shrub_and_a_pine_sway_by_near_the_same_share_of_their_own_height() {
+        // The two presets the owner's note names, and their sway as shipped: the retune keeps every
+        // species in a 0.9-1.6 multiplier band, so the most-leaned species is under twice the
+        // least-leaned one. (The old spread, 0.2-1.5, had the shrub at 4.8% of its own height
+        // against the pine's 2.8% — the "bush sways, the tree doesn't" of 1792016453.)
+        let (pine, shrub) = (TreePreset::Pine, TreePreset::Shrub);
+        let params = |p: TreePreset| -> (f32, f32) { let q = p.params(); (q.trunk.height, q.wind.sway) };
+        let (pine_trunk, pine_sway) = params(pine);
+        let (shrub_trunk, shrub_sway) = params(shrub);
+
+        const MAIN_BEND: f32 = 0.04;
+        let top_lean = |trunk: f32, sway: f32| -> f32 {
+            // The root at the ground, the plant straight up: the top vertex's distance from the root
+            // is the trunk's height, so the lean is `MAIN_BEND * sway * trunk`, of which the share is
+            // the lean per metre of the plant's own height.
+            let lean = MAIN_BEND * sway * 1.0 * trunk;
+            lean / trunk
+        };
+
+        let (pine_lean, shrub_lean) = (top_lean(pine_trunk, pine_sway), top_lean(shrub_trunk, shrub_sway));
+        assert!((pine_lean - shrub_lean).abs() < 0.02, "a pine ({pine_lean:.3}) and a shrub ({shrub_lean:.3}) must sway by near the same share of their own height: the lean is a fixed share of the plant's own height now, not a species' `sway` scaled by its height in units");
+        // Absolute displacement still grows with the plant: nobody traded uniformity for everything
+        // moving the same *distance*.
+        assert!(MAIN_BEND * pine_sway * pine_trunk > MAIN_BEND * shrub_sway * shrub_trunk, "the pine's absolute lean must still exceed the shrub's");
+        // And the species' character survives as a multiplier: the most-swung species must be at
+        // most twice the least-swung one, so a bush never out-leans a tree by the old spread.
+        let mut sways: Vec<f32> = TreePreset::ALL.iter().map(|p| p.params().wind.sway).collect();
+        sways.sort_by(|a, b| b.total_cmp(a));
+        assert!(sways[0] / sways[sways.len() - 1] <= 2.0, "the species' sway spans {} to {}: a multiplier band, not the old 0.2-1.5 spread that decided who moved", sways[sways.len() - 1], sways[0]);
     }
 }

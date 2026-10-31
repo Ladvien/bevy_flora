@@ -38,8 +38,7 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
         vertex.position.xy, world_from_local, view.world_position, view.world_from_view[2].xyz, orthographic, params.x,
         0.0,
     );
-    let scale_y = length(world_from_local[1].xyz);
-    let bent = wind_bend(corner.world, vertex.position.y, origin, scale_y, globals.time, shake_at(origin, globals.time));
+    let bent = wind_bend(corner.world, origin, globals.time, shake_at(origin, globals.time));
     out.world_position = vec4<f32>(bent, 1.0);
     out.position = position_world_to_clip(bent);
 @if(UNCLIPPED_DEPTH_ORTHO_EMULATION) {

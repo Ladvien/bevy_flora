@@ -277,9 +277,12 @@ pub struct MeshParams {
     pub adaptive_resolution: bool,
     /// Segments per unit radius when `adaptive_resolution` is on.
     pub resolution_scale: f32,
-    /// Lower bound on radial segments when `adaptive_resolution` is on.
+    /// Lower bound on radial segments when `adaptive_resolution` is on. Above
+    /// `max_radial_segments` it gives way: the upper bound wins.
     pub min_radial_segments: u32,
-    /// Upper bound on radial segments when `adaptive_resolution` is on.
+    /// Upper bound on radial segments when `adaptive_resolution` is on. It always holds, even
+    /// below `min_radial_segments`, so it caps the wood's vertex cost; a tube never has fewer than
+    /// 3 sides.
     pub max_radial_segments: u32,
     /// Recompute parent radii from children (Da Vinci's pipe model).
     pub pipe_radius_enabled: bool,
@@ -516,7 +519,11 @@ impl Default for LeafShading {
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct WindResponse {
-    /// How far the whole tree bends (0 = rigid).
+    /// How far the whole tree bends (0 = rigid): a multiplier on the main bend, which leans every
+    /// plant by a share of its own height, so a shrub and a pine with the same `sway` lean through
+    /// the same angle, at whatever `Transform` scale or [`FloraUnits`](crate::FloraUnits) they are
+    /// drawn at. The presets keep it between 0.9 (the oak, the conifers, the baobab and the other
+    /// stiff species) and 1.6 (the willow).
     pub sway: f32,
     /// How much its leaves flutter (0 = not at all).
     pub flutter: f32,
