@@ -57,6 +57,11 @@ what it rests on; this file only says what exists. Newest additions last in each
   longevity".
 - `10.5194_bg-2015-619`: "Climate seasonality limits leaf carbon assimilation and wood productivity
   in tropical forests" (added 2026-10-31).
+- `s2025-advances-materials-3`: SIGGRAPH 2025 "Advances in Real-Time Rendering in Games", a materials
+  talk: a shipped renderer's vegetation materials take a season colour LUT and an alpha texture with two
+  channels, one with and one without leaves, chosen by the season (8 season values; found in
+  `catalog_recent` 2026-10-31). The 2015 to 2025 "Advances" notes (`s20NN-advances-*`) were indexed the
+  same day; `distill_search` finds no other vegetation talk in them.
 
 ## Tree condition and mortality (issue #87)
 
