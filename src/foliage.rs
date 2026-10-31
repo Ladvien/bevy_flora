@@ -76,10 +76,28 @@ pub(crate) fn node_leaf_scale(node: &Node, growth: &GrowthParams) -> f32 {
 }
 
 /// Leaves along a branch of `length` metres under
-/// [`FoliagePlacement::AllBranches`]: at least one, more on longer wood.
-pub(crate) fn distributed_leaf_count(foliage: &FoliageParams, length: f32, height_ratio: f32) -> i32 {
+/// [`FoliagePlacement::AllBranches`], as a real number: at least one, more on longer wood. The
+/// leaf of rank `r` has flushed `clamp(count - r, 0, 1)` (`leaf_flush_scale`), so a leaf eases in
+/// over the growth of branch that the next one takes to be born.
+pub(crate) fn distributed_leaf_amount(foliage: &FoliageParams, length: f32, height_ratio: f32) -> f32 {
     let height_mod = height_modifier(height_ratio, foliage);
-    ((foliage.density * length * height_mod) as i32).max(1)
+    (foliage.density * length * height_mod).max(1.0)
+}
+
+/// Whole leaves along a branch of `length` metres under [`FoliagePlacement::AllBranches`]: the
+/// leaves that have flushed (`distributed_leaf_amount` truncated).
+pub(crate) fn distributed_leaf_count(foliage: &FoliageParams, length: f32, height_ratio: f32) -> i32 {
+    distributed_leaf_amount(foliage, length, height_ratio) as i32
+}
+
+/// How grown the leaf of rank `ordinal` is on a branch that carries `amount` leaves
+/// ([`distributed_leaf_amount`]): 0 until the branch is long enough for its turn, 1 a leaf-spacing
+/// of growth later, smoothstep between, so a leaf that appears grows from nothing instead of
+/// popping in at its mature size. `GpuGrowth`'s vertex stage computes the same
+/// (`growth_common.wesl`, `piece_scale`).
+pub(crate) fn leaf_flush_scale(amount: f32, ordinal: u32) -> f32 {
+    let flush = (amount - ordinal as f32).clamp(0.0, 1.0);
+    flush * flush * (3.0 - 2.0 * flush)
 }
 
 /// Append the leaf points of node `i` to `points`.
@@ -252,23 +270,27 @@ fn add_distributed_leaves(
     foliage: &FoliageParams,
     rng: &mut SeededRng,
 ) -> LeafSlots {
-    let count = distributed_leaf_count(foliage, node.length, node.height_ratio) as usize;
+    let amount = distributed_leaf_amount(foliage, node.length, node.height_ratio);
+    let count = amount as usize;
     let strand = node.wood.kind == NodeKind::Strand;
     // A leaf keeps its place on its branch as the branch grows (docs/research/leaf-places.md): the
     // grown branch has `total` slots, slot `j` at `(j + u_j) / total` of the way, with draws of its
     // own (the same at every age), and a branch that is `count` leaves long shows the `count`
     // slots that appear first (`leaf_ranks`), as `GpuGrowth` shows them. Spreading the leaves it
-    // has now over the branch would move every one of them each time it gains a leaf.
+    // has now over the branch would move every one of them each time it gains a leaf. The leaf
+    // whose turn comes next is born at nothing and grows to its size over the length of branch
+    // the one after it takes to be born (`leaf_flush_scale`, docs/research/leaf-ease-in.md).
     let total = (distributed_leaf_count(foliage, node.wood.full_length, node.height_ratio) as usize).max(count);
     let ranks = leaf_ranks(total);
-    let mut kept = Vec::with_capacity(count);
+    let mut kept = Vec::with_capacity(count + 1);
     for (slot, &rank) in ranks.iter().enumerate() {
         let t = (slot as f32 + rng.range(0.0, 1.0)) / total as f32;
         let size = foliage.leaf_size
             * (1.0 + rng.range(-foliage.leaf_size_variation, foliage.leaf_size_variation));
         let direction = leaf_direction(node, foliage, rng);
         let rotation = rng.range(0.0, TAU) * foliage.rotation_variation;
-        if rank as usize >= count {
+        let flush = leaf_flush_scale(amount, rank);
+        if flush <= 0.0 {
             continue;
         }
         // A strand carries its leaves along its whole length; other wood bunches them toward its base.
@@ -276,7 +298,7 @@ fn add_distributed_leaves(
         points.push(LeafPoint {
             position: node.wood.point_at(along),
             direction,
-            size,
+            size: size * flush,
             rotation,
             tint: 0.0,
             hue: 0.0,

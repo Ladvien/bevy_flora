@@ -7,7 +7,7 @@
 
 use bevy::math::Vec3;
 
-use crate::foliage::{distributed_leaf_count, node_leaf_scale};
+use crate::foliage::{distributed_leaf_amount, node_leaf_scale};
 use crate::mesh::branch::{collar_geometry, primary_root, root_segment_emitted};
 use crate::mesh::trunk::{TrunkRing, trunk_cone_lift, trunk_pieces, trunk_rings};
 use crate::params::{FoliagePlacement, TreeParams};
@@ -51,7 +51,9 @@ pub(crate) struct NodeState {
     pub tip_radius: f32,
     /// Growth scale of the node's leaves, 0 to 1.
     pub leaf_scale: f32,
-    /// Leaves shown along the node under `AllBranches`; negative: all of them.
+    /// Leaves along the node under `AllBranches`, as a real number (`distributed_leaf_amount`): the
+    /// leaf of ordinal `i` shows at `leaf_flush_scale(leaf_count, i)` of its size. Negative: all of
+    /// them, at full size.
     pub leaf_count: f32,
     /// Centre of the collar's wide end.
     pub collar_start: Vec3,
@@ -94,7 +96,7 @@ impl NodeState {
         if params.foliage.enabled && node.length > 0.0 {
             state.leaf_scale = node_leaf_scale(node, &params.growth);
             if params.foliage.placement == FoliagePlacement::AllBranches {
-                state.leaf_count = distributed_leaf_count(&params.foliage, node.length, node.height_ratio) as f32;
+                state.leaf_count = distributed_leaf_amount(&params.foliage, node.length, node.height_ratio);
             }
         }
 
