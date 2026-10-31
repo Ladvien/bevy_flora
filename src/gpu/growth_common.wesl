@@ -85,9 +85,13 @@ fn piece_scale(g: GrowthAttrs, kind: u32, b: vec4<f32>, c: vec4<f32>, d: vec4<f3
             scale = mix(b.x, b.y, g.axis.w);
         }
         case KIND_LEAF: {
+            // `b.w` is the real number of leaves the node carries (negative: all of them, at full
+            // size). The leaf of this ordinal is absent before its turn and eases in over the
+            // growth of branch the next one takes to be born: `leaf_flush_scale` in `frame.rs`.
             let ordinal = g.id.y >> 8u;
-            let shown = b.z > 0.0 && (b.w < 0.0 || f32(ordinal) < b.w);
-            scale = select(0.0, b.z, shown);
+            let flush = select(clamp(b.w - f32(ordinal), 0.0, 1.0), 1.0, b.w < 0.0);
+            let shown = b.z > 0.0 && flush > 0.0;
+            scale = select(0.0, b.z * smoothstep(0.0, 1.0, flush), shown);
         }
         case KIND_COLLAR: {
             scale = mix(c.w, d.w, smoothstep(0.0, 1.0, g.axis.w));
