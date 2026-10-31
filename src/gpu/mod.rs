@@ -69,9 +69,6 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 ///   a young thin branch keeps the sides of the mature branch.
 /// - **Unborn parts have zero size**, instead of being absent; their triangles
 ///   collapse to a point and draw nothing.
-/// - With [`FoliagePlacement::AllBranches`](crate::FoliagePlacement::AllBranches),
-///   leaves keep their mature positions along a branch and the first ones appear
-///   as it lengthens; the CPU path respaces them.
 /// - Tip-cluster leaves that are mirrored away from the trunk
 ///   ([`FoliagePlacement::TipClusters`](crate::FoliagePlacement::TipClusters))
 ///   keep the mirroring the mature tree chose.

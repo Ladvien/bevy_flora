@@ -380,7 +380,7 @@ fn grown_leaves_and_flowers_match_the_cpu_meshers() {
     for preset in TreePreset::ALL {
         let mut params = preset.params();
         params.mesh.smooth_iterations = 0;
-        if params.foliage.placement == FoliagePlacement::AllBranches || !params.foliage.enabled {
+        if !params.foliage.enabled {
             continue;
         }
         // Every compared tree flowers, so each flower is held to its leaf's growth too.
