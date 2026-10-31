@@ -1178,3 +1178,18 @@ export and the cost sentence. Sibling repositories: none touched.
    moved its pin to this commit and says what it still writes. Also Sanctuary's rain-and-fire rule (`douse_forest`
    writes `fire.spread.speed` from a wetness each frame): `FireSpread` is writable and the policy is the game's, so
    only a hook if two consumers want the same rule.
+
+**Clean-up (iteration 11).** Merge `dbf338c` on `main` (pushed; tree identical to `loop/iter-11`, re-gated on the
+merged tree: 357 lib and 72 doc tests, clippy `--all-targets --all-features -D warnings`). No release: v0.47.0
+(tag 04:23) was 3 h 51 m old at the merge, the 6-hour rule; the next release is 0.47.1, from 10:23 local on, and
+carries iterations 9, 10 and 11 (`[Unreleased]` is written). No issue referenced or closed (none was open).
+Baseline kept as copies of main's release binaries under `/tmp/f11/base` (no second worktree or target directory:
+`git worktree list` shows only the clone). Removed, mine: `/tmp/f11` (1.0 GB: base and new binaries, galleries, bench
+output, the throwaway `zz_probe.rs` copy, findings, critique), the throwaway `examples/zz_probe.rs` (deleted before
+its first commit), and in `CARGO_TARGET_DIR` every file this pass wrote (modified after 07:40 today, 17 997 files,
+5.0 GB: release and debug incremental caches of `bevy_flora` and its examples, the release example binaries, `doc`,
+`package/`); `df -h /` 20 GB free at the start, 13 GB at the lowest (the packaged build and the debug test
+binaries), 22 GB after. Kept: the target directory's dependency builds (71 GB, older than this pass). Leftovers of
+earlier passes: none found (no `f*_base` in `~` or `/tmp`); the branches `loop/iter-1` to `-11` remain on origin, not
+deleted. Process slip, not repeated: one edit to `qa/visual_findings.md` (a column of its last line) was made with a
+short `python3` script instead of `edit`.
