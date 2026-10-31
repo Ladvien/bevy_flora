@@ -76,10 +76,28 @@ pub(crate) fn node_leaf_scale(node: &Node, growth: &GrowthParams) -> f32 {
 }
 
 /// Leaves along a branch of `length` metres under
-/// [`FoliagePlacement::AllBranches`]: at least one, more on longer wood.
-pub(crate) fn distributed_leaf_count(foliage: &FoliageParams, length: f32, height_ratio: f32) -> i32 {
+/// [`FoliagePlacement::AllBranches`], as a real number: at least one, more on longer wood. The
+/// leaf of rank `r` has flushed `clamp(count - r, 0, 1)` (`leaf_flush_scale`), so a leaf eases in
+/// over the growth of branch that the next one takes to be born.
+pub(crate) fn distributed_leaf_amount(foliage: &FoliageParams, length: f32, height_ratio: f32) -> f32 {
     let height_mod = height_modifier(height_ratio, foliage);
-    ((foliage.density * length * height_mod) as i32).max(1)
+    (foliage.density * length * height_mod).max(1.0)
+}
+
+/// Whole leaves along a branch of `length` metres under [`FoliagePlacement::AllBranches`]: the
+/// leaves that have flushed (`distributed_leaf_amount` truncated).
+pub(crate) fn distributed_leaf_count(foliage: &FoliageParams, length: f32, height_ratio: f32) -> i32 {
+    distributed_leaf_amount(foliage, length, height_ratio) as i32
+}
+
+/// How grown the leaf of rank `ordinal` is on a branch that carries `amount` leaves
+/// ([`distributed_leaf_amount`]): 0 until the branch is long enough for its turn, 1 a leaf-spacing
+/// of growth later, smoothstep between, so a leaf that appears grows from nothing instead of
+/// popping in at its mature size. `GpuGrowth`'s vertex stage computes the same
+/// (`growth_common.wesl`, `piece_scale`).
+pub(crate) fn leaf_flush_scale(amount: f32, ordinal: u32) -> f32 {
+    let flush = (amount - ordinal as f32).clamp(0.0, 1.0);
+    flush * flush * (3.0 - 2.0 * flush)
 }
 
 /// Append the leaf points of node `i` to `points`.
@@ -252,23 +270,27 @@ fn add_distributed_leaves(
     foliage: &FoliageParams,
     rng: &mut SeededRng,
 ) -> LeafSlots {
-    let count = distributed_leaf_count(foliage, node.length, node.height_ratio) as usize;
+    let amount = distributed_leaf_amount(foliage, node.length, node.height_ratio);
+    let count = amount as usize;
     let strand = node.wood.kind == NodeKind::Strand;
     // A leaf keeps its place on its branch as the branch grows (docs/research/leaf-places.md): the
     // grown branch has `total` slots, slot `j` at `(j + u_j) / total` of the way, with draws of its
     // own (the same at every age), and a branch that is `count` leaves long shows the `count`
     // slots that appear first (`leaf_ranks`), as `GpuGrowth` shows them. Spreading the leaves it
-    // has now over the branch would move every one of them each time it gains a leaf.
+    // has now over the branch would move every one of them each time it gains a leaf. The leaf
+    // whose turn comes next is born at nothing and grows to its size over the length of branch
+    // the one after it takes to be born (`leaf_flush_scale`, docs/research/leaf-ease-in.md).
     let total = (distributed_leaf_count(foliage, node.wood.full_length, node.height_ratio) as usize).max(count);
     let ranks = leaf_ranks(total);
-    let mut kept = Vec::with_capacity(count);
+    let mut kept = Vec::with_capacity(count + 1);
     for (slot, &rank) in ranks.iter().enumerate() {
         let t = (slot as f32 + rng.range(0.0, 1.0)) / total as f32;
         let size = foliage.leaf_size
             * (1.0 + rng.range(-foliage.leaf_size_variation, foliage.leaf_size_variation));
         let direction = leaf_direction(node, foliage, rng);
         let rotation = rng.range(0.0, TAU) * foliage.rotation_variation;
-        if rank as usize >= count {
+        let flush = leaf_flush_scale(amount, rank);
+        if flush <= 0.0 {
             continue;
         }
         // A strand carries its leaves along its whole length; other wood bunches them toward its base.
@@ -276,7 +298,7 @@ fn add_distributed_leaves(
         points.push(LeafPoint {
             position: node.wood.point_at(along),
             direction,
-            size,
+            size: size * flush,
             rotation,
             tint: 0.0,
             hue: 0.0,
@@ -1931,5 +1953,81 @@ mod tests {
             }
         }
         assert!(compared > 10_000, "compared only {compared} leaves");
+    }
+
+    #[test]
+    fn a_leaf_is_born_at_nothing_and_reaches_its_size_over_the_next_leafs_growth() {
+        // The leaf of ordinal 3 on a branch that carries `amount` leaves.
+        assert_eq!(leaf_flush_scale(2.0, 3), 0.0, "before its turn there is no leaf");
+        assert_eq!(leaf_flush_scale(3.0, 3), 0.0, "a whole count has no leaf of its own yet");
+        assert_eq!(leaf_flush_scale(3.5, 3), 0.5, "half way, half size");
+        assert_eq!(leaf_flush_scale(4.0, 3), 1.0, "a leaf-spacing of growth later it is whole");
+        assert_eq!(leaf_flush_scale(40.0, 3), 1.0, "and stays so");
+        let sizes: Vec<f32> = (0..=100).map(|i| leaf_flush_scale(3.0 + i as f32 * 0.01, 3)).collect();
+        assert!(sizes.windows(2).all(|w| w[0] <= w[1]), "a leaf never shrinks as its branch grows");
+        assert!(sizes[1] < 0.001 && 1.0 - sizes[99] < 0.001, "slow in and slow out: {} then {}", sizes[1], sizes[99]);
+        // every branch has at least one leaf, and that one is whole from the first (the node's own
+        // `leaf_scale` grows it from nothing)
+        let sparse = FoliageParams { density: 1.0, ..FoliageParams::default() };
+        assert_eq!(distributed_leaf_amount(&sparse, 0.2, 0.0), 1.0);
+        assert_eq!(leaf_flush_scale(distributed_leaf_amount(&sparse, 0.2, 0.0), 0), 1.0);
+    }
+
+    #[test]
+    fn a_leaf_that_appears_grows_from_nothing() {
+        // A leaf that keeps its place as its branch lengthens (`every_branchs_leaves_keep_...`) still
+        // appeared at its node's whole leaf size: on average a third of its mature size, and a
+        // quarter of the leaves above half of it, in a crown that is rebuilt every frame. Swept at
+        // 0.01 year (a growth clip steps 0.05, and a leaf eases in over about 0.1): no leaf is above a
+        // tenth of its size at first sight and none changes size by more than 0.3 between two steps.
+        let step = 0.01;
+        let mut leaves = 0;
+        for preset in TreePreset::ALL {
+            let params = preset.params();
+            if params.foliage.placement != FoliagePlacement::AllBranches {
+                continue;
+            }
+            let full = generate_skeleton(&params);
+            // (node id, the leaf's tint draw: one per slot) -> size
+            let sizes = |skeleton: &crate::skeleton::Skeleton| -> std::collections::HashMap<(u32, u32), f32> {
+                let mut sizes = std::collections::HashMap::new();
+                for (i, node) in skeleton.nodes.iter().enumerate() {
+                    let mut points = Vec::new();
+                    leaf_points_for_node(skeleton, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
+                    sizes.extend(points.iter().map(|p| ((node.id, p.tint.to_bits()), p.size)));
+                }
+                sizes
+            };
+            let mature = sizes(&full.aged(f32::INFINITY, &params.growth));
+            let mature_at = full.mature_at(&params.growth);
+            let mut before = std::collections::HashMap::new();
+            let mut age = 0.0;
+            while age <= mature_at {
+                let mut now = std::collections::HashMap::new();
+                for (key, size) in sizes(&full.aged(age, &params.growth)) {
+                    let grown = *mature.get(&key).unwrap_or_else(|| panic!("{} age {age}: node {} has a leaf the grown tree lacks", preset.name(), key.0));
+                    let share = size / grown;
+                    assert!(share <= 1.0 + 1e-4, "{} age {age}: a leaf larger than when grown ({share})", preset.name());
+                    let was = before.get(&key).copied().unwrap_or(0.0);
+                    assert!(
+                        was > 0.0 || share < 0.1,
+                        "{} age {age}: node {} leaf appears at {share} of its size",
+                        preset.name(),
+                        key.0
+                    );
+                    assert!(
+                        (share - was).abs() < 0.3,
+                        "{} age {age}: node {} leaf goes from {was} to {share} of its size in one step",
+                        preset.name(),
+                        key.0
+                    );
+                    leaves += usize::from(was == 0.0);
+                    now.insert(key, share);
+                }
+                before = now;
+                age += step;
+            }
+        }
+        assert!(leaves > 2000, "only {leaves} leaves appeared over the sweep");
     }
 }

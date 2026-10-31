@@ -35,14 +35,19 @@ Under `AllBranches` a leaf has one place on its branch, whatever the age
 slots (`distributed_leaf_count` of `Node::full_length`, the exact grown length: `length /
 progress` is it only to a rounding error): slot `j` sits at `0.3 + 0.7 t^2` of the branch
 (`0.1 + 0.9 t` on a strand), `t = (j + u_j) / N`, with the draws of its own (`u_j`, size,
-direction, turn, tint, hue; `draw_per_leaf`). A branch `n = distributed_leaf_count(length)`
-leaves long shows the `n` slots that appear first (`leaf_ranks`: the tip, then bisecting, so
-the leaves are spread over the whole branch at every `n`). A branch that gains a leaf moves
-none of the others, and the CPU tree and `GpuGrowth` put every leaf in the same place: the GPU
-tags a leaf with its rank (`gpu/mesh.rs`), `state.rs` writes `n`, and the shader shows the
-leaves whose rank is under it, at `start + length * c`. `gpu::tests` compares every leaf's
+direction, turn, tint, hue; `draw_per_leaf`). A branch `a = distributed_leaf_amount(length)` leaves
+long (the real number: `density * length * height_mod`, at least 1) shows the slots that appear
+first (`leaf_ranks`: the tip, then bisecting, so the leaves are spread over the whole branch at
+every `n`), the leaf of rank `r` at `leaf_flush_scale(a, r)` of its size: 0 until the branch is
+long enough for its turn, smoothstep to 1 over the growth of branch the next leaf takes
+(`docs/research/leaf-ease-in.md`), so a leaf that appears grows from nothing instead of popping in
+at its node's whole leaf size; the `floor(a)` leaves before it are whole. A branch that gains a
+leaf moves none of the others, and the CPU tree and `GpuGrowth` put every leaf in the same place
+and at the same size: the GPU tags a leaf with its rank (`gpu/mesh.rs`), `state.rs` writes `a`
+(`leaf_count`), and the shader scales the leaf by `smoothstep(clamp(a - rank, 0, 1))` times the
+node's `leaf_scale`, at `start + length * c` (`c` the leaf's fraction of the branch). `gpu::tests` compares every leaf's
 vertices with the CPU mesher's at seven ages (`grown_leaves_and_flowers_match_the_cpu_meshers`).
-A grown branch shows every slot, in slot order, so a mature tree is what it always was.
+A grown branch has `a >= N`, so every slot is whole, in slot order: a mature tree is what it always was.
 
 ## Leaf look (baked into the mesh)
 

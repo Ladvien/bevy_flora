@@ -9,6 +9,7 @@
 use bevy::math::Vec3;
 
 use super::state::{BASE, BASE_COLLAR, COLLAR, GrowthState, TOP_CAP, WOOD};
+use crate::foliage::leaf_flush_scale;
 
 /// Which formula places a vertex. The numbers are shared with the shader.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -102,10 +103,13 @@ pub(crate) fn placement(tag: &Tag, state: &GrowthState) -> Placement {
     match tag.class {
         Class::Tube => wood(on_axis, lerp(node.base_radius, node.tip_radius, tag.f), WOOD),
         Class::Leaf => {
-            let shown = node.leaf_scale > 0.0 && (node.leaf_count < 0.0 || (tag.ordinal as f32) < node.leaf_count);
+            // Under `AllBranches` `leaf_count` is the real number of leaves the node carries: the
+            // leaf of this ordinal is absent before its turn and eases in after it.
+            let flush = if node.leaf_count < 0.0 { 1.0 } else { leaf_flush_scale(node.leaf_count, tag.ordinal) };
+            let shown = node.leaf_scale > 0.0 && flush > 0.0;
             Placement {
                 anchor: on_axis,
-                scale: if shown { node.leaf_scale } else { 0.0 },
+                scale: if shown { node.leaf_scale * flush } else { 0.0 },
                 on: true,
                 collapse: on_axis,
                 twist: 0.0,
