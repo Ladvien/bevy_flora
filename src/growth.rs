@@ -14,7 +14,9 @@ use crate::skeleton::{Node, NodeKind, Skeleton};
 #[derive(Clone, Debug, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default, deny_unknown_fields))]
 pub struct GrowthParams {
-    /// Age at which trunk-attached growth reaches the parametric target.
+    /// Age at which trunk-attached growth reaches the parametric target. It is not the age a
+    /// tree stops changing (the last wood to thicken lags it): that is
+    /// [`TreeParams::mature_at`](crate::TreeParams::mature_at).
     pub maturity_age: f32,
     /// Trunk reaches full height at `maturity_age * trunk_fraction`.
     pub trunk_fraction: f32,

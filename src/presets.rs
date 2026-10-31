@@ -83,7 +83,11 @@ impl TreePreset {
         TreePreset::Fern,
     ];
 
-    /// snake_case name of the preset.
+    /// snake_case name of the preset: `oak`, `dragon_tree`. [`TreePreset::from_name`] and
+    /// [`FromStr`](std::str::FromStr) are its inverse, and [`Display`](std::fmt::Display) prints it.
+    ///
+    /// The `serde` form of a preset (`DragonTree`) is a different spelling and stays as saved files
+    /// have it.
     pub fn name(self) -> &'static str {
         match self {
             TreePreset::Oak => "oak",
@@ -107,6 +111,24 @@ impl TreePreset {
             TreePreset::Juniper => "juniper",
             TreePreset::Fern => "fern",
         }
+    }
+
+    /// The preset whose [`name`](TreePreset::name) is `name`, or `None`: the exact, snake_case
+    /// string (`"oak"`, `"dragon_tree"`), the one an editor, a command line or a data file keeps.
+    /// The match is exact: `"Oak"`, `"oak "` and the `serde` spelling `"DragonTree"` are not
+    /// presets.
+    ///
+    /// ```
+    /// use bevy_flora::TreePreset;
+    ///
+    /// assert_eq!(TreePreset::from_name("dragon_tree"), Some(TreePreset::DragonTree));
+    /// assert_eq!(TreePreset::from_name("sequoia"), None);
+    /// // `parse` says what the presets are when the name is not one.
+    /// let error = "sequoia".parse::<TreePreset>().unwrap_err();
+    /// assert!(error.to_string().contains("oak, pine, willow"));
+    /// ```
+    pub fn from_name(name: &str) -> Option<TreePreset> {
+        TreePreset::ALL.into_iter().find(|preset| preset.name() == name)
     }
 
     /// The parameters for this preset.
@@ -135,6 +157,49 @@ impl TreePreset {
         }
     }
 }
+
+impl std::fmt::Display for TreePreset {
+    /// The preset's [`name`](TreePreset::name).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(self.name())
+    }
+}
+
+impl std::str::FromStr for TreePreset {
+    type Err = UnknownPreset;
+
+    /// The preset [`TreePreset::from_name`] finds, or [`UnknownPreset`] naming what was asked and
+    /// what the presets are.
+    fn from_str(name: &str) -> Result<Self, UnknownPreset> {
+        TreePreset::from_name(name).ok_or_else(|| UnknownPreset(name.to_owned()))
+    }
+}
+
+/// A string that is not the [`name`](TreePreset::name) of a preset: what `"..".parse::<TreePreset>()`
+/// returns for it.
+///
+/// Its `Display` is a sentence an editor can show as it is: the name that was asked for and every
+/// preset the crate has, in [`TreePreset::ALL`] order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownPreset(
+    /// The string that was asked for.
+    pub String,
+);
+
+impl std::fmt::Display for UnknownPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}` is not a preset; the presets are ", self.0)?;
+        for (i, preset) in TreePreset::ALL.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(preset.name())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for UnknownPreset {}
 
 fn oak() -> TreeParams {
     TreeParams {
@@ -2201,5 +2266,32 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), TreePreset::ALL.len());
+    }
+
+    #[test]
+    fn a_preset_is_found_by_its_name_and_by_nothing_else() {
+        for preset in TreePreset::ALL {
+            assert_eq!(TreePreset::from_name(preset.name()), Some(preset));
+            assert_eq!(preset.name().parse::<TreePreset>(), Ok(preset));
+            assert_eq!(preset.to_string().parse::<TreePreset>(), Ok(preset), "Display and FromStr round-trip");
+        }
+        // The match is exact: a near miss is not a different preset.
+        for not_a_name in ["", "o", "oa", "oak ", " oak", "Oak", "OAK", "oak\n", "DragonTree", "dragon-tree", "dragon tree"] {
+            assert_eq!(TreePreset::from_name(not_a_name), None, "{not_a_name:?}");
+            assert_eq!(not_a_name.parse::<TreePreset>(), Err(UnknownPreset(not_a_name.to_owned())));
+        }
+    }
+
+    #[test]
+    fn the_error_says_what_was_asked_for_and_what_there_is() {
+        let error = "sequoia".parse::<TreePreset>().unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("`sequoia`"), "{text}");
+        for preset in TreePreset::ALL {
+            assert!(text.contains(preset.name()), "{text} does not list {}", preset.name());
+        }
+        // A caller can hand it on as a `dyn Error`.
+        let boxed: Box<dyn std::error::Error> = Box::new(error);
+        assert_eq!(boxed.to_string(), text);
     }
 }
