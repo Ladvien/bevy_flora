@@ -2,11 +2,11 @@
 
 Iteration 11, 2026-10-31. No issue is open on this repository (`gh issue list`, 0 open). The item comes from
 the section 4 fallback, "what the crate's consumers hand-roll": the same two lines are written by
-bevy_emerge (family issue F6, `Ladvien/bevy_emerge#102`), by Sanctuary and by this crate's own examples.
+bevy_grimoire (family issue F6, `bevy-coven/bevy_grimoire#102`), by Sanctuary and by this crate's own examples.
 
 ## What the consumers write today
 
-- A preset from its name: `TreePreset::ALL.iter().find(|t| t.name() == name)`, in bevy_emerge's
+- A preset from its name: `TreePreset::ALL.iter().find(|t| t.name() == name)`, in bevy_grimoire's
   `ops_tree.rs` (the tree editor's `preset` field, with an error message built by joining
   `TreePreset::ALL.iter().map(|t| t.name())`) and again in `forest_view.rs` (a species is a preset name or a
   `.tree.ron` path); in this repository `examples/capture_growth.rs`, `forest.rs` (three times),
@@ -14,7 +14,7 @@ bevy_emerge (family issue F6, `Ladvien/bevy_emerge#102`), by Sanctuary and by th
   language's own name for it, is missing: `"oak".parse::<TreePreset>()` does not compile.
 - The age at which a tree stops changing, to place a tree at a fraction of its growth: Sanctuary's
   `src/prototype/trees.rs` (`grown_age`, fed by `build_tree(&params, f32::INFINITY).mature_at`) builds a whole
-  mature tree, wood and leaves, once per kind to read one number; bevy_emerge's `place` takes an `age_years`
+  mature tree, wood and leaves, once per kind to read one number; bevy_grimoire's `place` takes an `age_years`
   and has no way to say how many years a species takes to mature. The number is already public
   (`generate_skeleton(&params).mature_at(&params.growth)`) but nothing says so, and nothing in `TreeParams`
   or `TreeAge` points at it.
@@ -62,11 +62,11 @@ parameters, and every tool and script that touches it needs the table's lookup.
 Two additions, no behaviour change.
 
 1. `TreePreset::from_name(&str) -> Option<TreePreset>`, the inverse of `TreePreset::name` (exact, snake_case,
-   the string the crate prints, `inspect --preset` takes and bevy_emerge writes), `impl FromStr for TreePreset`
+   the string the crate prints, `inspect --preset` takes and bevy_grimoire writes), `impl FromStr for TreePreset`
    whose error `UnknownPreset` names what was asked and, in its `Display`, every preset the crate has, and
    `impl Display for TreePreset` printing `name()`, so the two round-trip. The C-COMMON-TRAITS rule is the
    reason this belongs here: a downstream crate cannot add `FromStr` to a foreign type (the orphan rule the
-   guideline spells out with `Url` and `Display`), so bevy_emerge could only ever write the `find` itself.
+   guideline spells out with `Url` and `Display`), so bevy_grimoire could only ever write the `find` itself.
    `FromStr` documents its input format ("Check the type's documentation for the input formats it knows
    how to parse"): this one's is `name()`'s output, not the `serde` form (`DragonTree`), which stays as saved
    files have it.

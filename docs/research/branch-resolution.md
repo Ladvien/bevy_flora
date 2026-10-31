@@ -85,7 +85,7 @@ Unchanged defaults: `adaptive_resolution` false, `resolution_scale` 16 sides per
 
 ## What great looks like
 
-bevy_emerge's tree inspector over a live `.tree.ron`: a designer drags `min_radial_segments` past
+bevy_grimoire's tree inspector over a live `.tree.ron`: a designer drags `min_radial_segments` past
 `max_radial_segments` and the tree simply stops gaining sides at the cap, closed and lit, the frame
 cost never above what the cap allows; nothing panics, nothing is logged per frame, and the same
 file builds the same tree in the game.
