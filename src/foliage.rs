@@ -271,7 +271,7 @@ fn add_distributed_leaves(
     rng: &mut SeededRng,
 ) -> LeafSlots {
     let amount = distributed_leaf_amount(foliage, node.length, node.height_ratio);
-    let count = amount as usize;
+    let count = amount as i32 as usize;
     let strand = node.wood.kind == NodeKind::Strand;
     // A leaf keeps its place on its branch as the branch grows (docs/research/leaf-places.md): the
     // grown branch has `total` slots, slot `j` at `(j + u_j) / total` of the way, with draws of its
