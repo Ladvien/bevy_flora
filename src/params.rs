@@ -51,7 +51,12 @@ pub enum FoliagePlacement {
     /// appear and then vanish as the tree ages.
     #[default]
     TerminalBranches,
-    /// Distributed along every branch.
+    /// Distributed along every branch, toward its base. A leaf keeps its place on
+    /// its branch as the branch grows: a young branch shows some of the leaves of
+    /// the grown one, spread over its whole length, at the same fractions of it,
+    /// and gains the rest in the gaps, so no leaf hops along the wood when another
+    /// one appears (and [`GpuGrowth`](crate::GpuGrowth) puts each leaf where the
+    /// CPU does).
     AllBranches,
     /// Spherical clusters at the tips of branches without children in the
     /// full-grown tree.

@@ -69,13 +69,12 @@ pub(crate) const ATTRIBUTE_GROWTH_OFFSET: MeshVertexAttribute =
 ///   a young thin branch keeps the sides of the mature branch.
 /// - **Unborn parts have zero size**, instead of being absent; their triangles
 ///   collapse to a point and draw nothing.
-/// - With [`FoliagePlacement::AllBranches`](crate::FoliagePlacement::AllBranches),
-///   leaves keep their mature positions along a branch and the first ones appear
-///   as it lengthens; the CPU path respaces them.
 /// - Tip-cluster leaves that are mirrored away from the trunk
 ///   ([`FoliagePlacement::TipClusters`](crate::FoliagePlacement::TipClusters))
 ///   keep the mirroring the mature tree chose.
-/// - Leaf normals and the shape of primary bases follow the mature tree.
+/// - Leaf normals, the way a leaf faces under `LeafOrientation::RadialOutward` (out
+///   from its branch's mature tip, where the CPU path uses the tip the branch has
+///   now) and the shape of primary bases follow the mature tree.
 /// - A growing pointed trunk ends in a flat cap; with smoothing on, the CPU
 ///   path softens that cap into a point while the tree is young.
 /// - The [`Mesh`](bevy::mesh::Mesh) assets on the tree's children, and the
