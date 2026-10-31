@@ -343,34 +343,35 @@ fn glide_tint(tag: u32, leaf: bool) -> vec3<f32> {
 
 // A tree's condition (`TreeCondition`, condition.rs): its class is in bits 8 and 9 of the `MeshTag`
 // of every mesh the tree is drawn with, above the glide tag (`condition::TAG_SHIFT`): 0 healthy,
-// 1 sick, 2 dying.
+// 1 sick, 2 dying. While a decline is on its way (`ConditionGlide`) bit 10 is set and bits 11 to 18
+// hold the level it has reached in 254 steps (`condition::LEVEL_SHIFT`, `LEVEL_STEPS`).
 const CONDITION_SHIFT: u32 = 8u;
 const GLIDE_TAG_MASK: u32 = 255u;
+const CONDITION_GLIDING_BIT: u32 = 1024u;
+const CONDITION_LEVEL_SHIFT: u32 = 11u;
+const CONDITION_STEPS: f32 = 254.0;
 
-fn tree_condition(tag: u32) -> u32 {
-    return (tag >> CONDITION_SHIFT) & 3u;
+// How far a tree's decline has gone, 0 (healthy) through 0.5 (a sick class) to 1 (a dying one): the
+// level the tag carries while a decline glides, else the class's own (`TreeCondition::level`).
+fn condition_level(tag: u32) -> f32 {
+    if (tag & CONDITION_GLIDING_BIT) != 0u {
+        return min(f32((tag >> CONDITION_LEVEL_SHIFT) & 255u) / CONDITION_STEPS, 1.0);
+    }
+    return min(f32((tag >> CONDITION_SHIFT) & 3u) * 0.5, 1.0);
 }
 
-// The share of its leaves a class has lost, and how far the leaves that stay have withered toward
-// the dry leaf colour, on average (`TreeCondition::defoliation` and `withering`).
-fn condition_defoliation(condition: u32) -> f32 {
-    if condition == 1u {
-        return 0.35;
+// The share of its leaves a decline at `level` has lost, and how far the leaves that stay have
+// withered toward the dry leaf colour, on average: through the classes' values (`defoliation_at` and
+// `withering_at` in condition.rs; `TreeCondition::defoliation` and `withering` at the anchors).
+fn level_defoliation(level: f32) -> f32 {
+    if level <= 0.5 {
+        return mix(0.0, 0.35, level * 2.0);
     }
-    if condition == 2u {
-        return 0.8;
-    }
-    return 0.0;
+    return mix(0.35, 0.8, level * 2.0 - 1.0);
 }
 
-fn condition_withering(condition: u32) -> f32 {
-    if condition == 1u {
-        return 0.5;
-    }
-    if condition == 2u {
-        return 1.0;
-    }
-    return 0.0;
+fn level_withering(level: f32) -> f32 {
+    return level;
 }
 
 // A leaf's own draw for its tree's decline, 0..1, from its phase (`condition::leaf_decline_moment`):
@@ -383,7 +384,7 @@ fn leaf_decline_moment(sway: vec4<f32>) -> f32 {
 // flower or a fruit is below 0.5 and is the game's to count, so it stays). A hull crown keeps all
 // its facets (`flora.tree.y`). Evaluated in the shadow pass too, so the gaps let the light through.
 fn leaf_defoliated(sway: vec4<f32>, alpha: f32, tag: u32) -> bool {
-    let share = condition_defoliation(tree_condition(tag));
+    let share = level_defoliation(condition_level(tag));
     return share > 0.0 && alpha >= 0.5 && flora.tree.y < 0.5 && leaf_decline_moment(sway) < share;
 }
 
@@ -397,7 +398,7 @@ fn condition_own_withering(withering: f32, draw: f32) -> f32 {
 // each leaf its own way (`condition_own_withering`); 0 for a healthy tree, and for a flower or a
 // fruit (alpha below 0.5), which keep their colour.
 fn leaf_withering(sway: vec4<f32>, alpha: f32, tag: u32) -> f32 {
-    let withering = condition_withering(tree_condition(tag));
+    let withering = level_withering(condition_level(tag));
     if withering == 0.0 || alpha < 0.5 {
         return 0.0;
     }

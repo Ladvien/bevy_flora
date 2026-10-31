@@ -58,7 +58,7 @@ use bevy::shader::{Shader, ShaderDefVal};
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 
-use crate::condition::{Decline, TreeCondition};
+use crate::condition::{ConditionShown, Decline, TreeCondition};
 use crate::felling::{Felled, TreeLanded};
 use crate::fire::{FloraFire, burnt_front};
 use crate::ground::FloraGround;
@@ -729,9 +729,13 @@ struct LeafSource {
 }
 
 /// What a tree in `condition` has done to the leaves that fall from it: the tree's own, as its
-/// shaders draw the leaves left on it ([`Decline`]).
-fn decline_of(condition: Option<&TreeCondition>, leaves: &LeafSource) -> Decline {
-    Decline::new(condition, leaves.hull.is_some())
+/// shaders draw the leaves left on it ([`Decline`]), at the level the tree shows now when it is
+/// `shown` (a decline on its way), else its class's.
+fn decline_of(condition: Option<&TreeCondition>, shown: Option<&ConditionShown>, leaves: &LeafSource) -> Decline {
+    match shown {
+        Some(shown) => Decline::at(shown.level, leaves.hull.is_some()),
+        None => Decline::new(condition, leaves.hull.is_some()),
+    }
 }
 
 /// The leaves of a tree drawn on the CPU with [`FloraMaterial`]s, or from a pool's: `None` for any
@@ -841,6 +845,7 @@ pub(crate) fn drop_leaves(
         Option<&PooledLook>,
         Option<&Felled>,
         Option<&TreeCondition>,
+        Option<&ConditionShown>,
     )>,
     stumps: Query<&GlobalTransform>,
     bursts: Query<&LeafBurst>,
@@ -857,12 +862,12 @@ pub(crate) fn drop_leaves(
         if budget == 0 {
             continue;
         }
-        let Ok((at, render, tree, pooled, look, felled, condition)) = trees.get(drop.tree) else { continue };
+        let Ok((at, render, tree, pooled, look, felled, condition, shown)) = trees.get(drop.tree) else { continue };
         let Some(leaves) = leaf_source(render, tree, pooled, look, pools.as_deref()) else { continue };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let shed = leaves.deciduous.then_some(season.leaf_fall);
         let burnt = burnt_front(fire.as_deref(), at.translation());
-        let decline = decline_of(condition, &leaves);
+        let decline = decline_of(condition, shown, &leaves);
         let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
         let mut cards: Vec<&Card> =
             read.cards.iter().filter(|card| card.on_tree(shed, burnt) && !decline.has_lost(card.phase)).collect();
@@ -930,6 +935,7 @@ pub(crate) fn shed_with_season(
             Option<&PooledTree>,
             Option<&PooledLook>,
             Option<&TreeCondition>,
+            Option<&ConditionShown>,
         ),
         Without<Felled>,
     >,
@@ -986,7 +992,7 @@ pub(crate) fn shed_with_season(
         a.total_cmp(b).then(p.x.total_cmp(&q.x)).then(p.z.total_cmp(&q.z))
     });
     let mut looks: HashMap<AssetId<FloraMaterial>, (Handle<FloraMaterial>, BurstBuilder)> = HashMap::default();
-    for (_, (at, render, tree, pooled, look, condition)) in near {
+    for (_, (at, render, tree, pooled, look, condition, shown)) in near {
         let budget = settings.max_leaves.saturating_sub(live) as usize;
         if budget == 0 {
             break;
@@ -997,7 +1003,7 @@ pub(crate) fn shed_with_season(
         };
         let Some(source) = meshes.get(&leaves.mesh) else { continue };
         let burnt = burnt_front(fire.as_deref(), position);
-        let decline = decline_of(condition, &leaves);
+        let decline = decline_of(condition, shown, &leaves);
         let read = caches.cards(leaves.mesh.id(), source, leaves.hull);
         let falling: Vec<&Card> = read
             .shed_between(from, to)
