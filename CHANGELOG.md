@@ -83,9 +83,31 @@ and the tree is drawn in it. And a willow that weeps (D-052): pendant strands ha
 - Of the 522 earlier gallery scenarios, 489 have the meshes they had (`stats.tsv` columns 1-10 identical);
   the 33 that moved are 29 willow scenarios and the pipe-model shrub and fern (Fixed, below). Every one of
   the 488 non-willow scenarios whose mesh did not move is the same image below the HUD.
+- **Breaking:** `Node` has a new public field, `full_length` (a struct literal of it needs one; the skeleton
+  generator sets it). The next release is a minor one.
+- Of the 526 gallery scenarios, 462 are the same images as with the weeping strands above; the 64 that changed are young trees of
+  the 11 `AllBranches` presets (`grow_*`, `age_*`, `*young_*`, `hull_*` at ages 2 and 5, `condition_*` at 4 and
+  6, `extreme_fastgrow_2`, `extreme_lagthick_6`, `strands_oak_4`): their leaves are the same leaves in slightly
+  different places. Mature trees do not move (`stats.tsv` identical; the only columns that changed are the
+  bounding boxes of 37 young scenarios and the leaf count of two apple ones, `age_apple_8` and
+  `pipeyoung_apple_5`, whose fruit rides on the leaf slot it was drawn for).
 
 ### Fixed
 
+- **Leaves keep their places as a branch grows** (`AllBranches`: oak, willow, maple, spruce, pine, japanese
+  maple, shrub, cherry, apple, juniper, fern; `docs/research/leaf-places.md`). A branch spread the leaves it
+  had over its length, so each time it gained one, every leaf of it moved to a new place: measured over
+  every preset at ages 0 to 20 in steps of 0.1, an oak leaf hopped 15 cm (p95, up to 28) per step, a
+  maple's 18 cm (up to 36), and a leaf of the tree grown on the CPU stood a mean 8 to 14 cm, p95 35 to 58
+  cm and up to 1.3 m from the place `GpuGrowth` gave it. A branch now has the leaves of its grown self as
+  slots, each at a fixed fraction of its length with draws of its own (size, direction, turn, tint, hue),
+  and shows the ones that appear first: the tip's, then the gaps' (`foliage::leaf_ranks`), so a young limb
+  carries leaves along its whole length as it did, none moves when another appears, and the CPU tree and
+  `GpuGrowth` agree on every leaf (0 against up to 1.3 m; no change to the shaders or the node buffer: the
+  mature mesh is tagged with each leaf's rank). CPU against GPU over the gallery: mean of means 0.030 of
+  255 (it was 0.080; 83 of 526 PNGs byte-identical, it was 79 of 492), worst 1.19 (a young willow; it was
+  2.11), and the seven CI scenarios 0.221 and 0.920 (they were 0.694 and 1.452). `GpuGrowth`'s list of
+  differences loses `AllBranches` leaves.
 - `TreeShape`'s crown box did not hold every leaf of a tree whose branches arch: it spanned a branch's start
   and end, and a bent branch's axis rises past both before it falls, so leaves on the arch of a drooping
   limb could stand outside it (the willow at age 5, with its new limbs; `the_crown_holds_every_leaf_and_
@@ -115,11 +137,24 @@ and the tree is drawn in it. And a willow that weeps (D-052): pendant strands ha
 - `strands_hang_from_the_wood_and_stop_above_the_floor`, `strands_leave_every_other_branch_where_it_was`,
   `a_tree_that_asks_for_no_strands_has_none`, `strands_on_any_tree_keep_off_the_trunk_and_the_floor`,
   `a_strand_is_born_when_its_branch_reaches_the_point_it_hangs_from`,
-  `a_strands_leaves_keep_their_places_as_it_grows` (fails when the leaves re-spread over the strand's length
-  at each age) and `willow_curtains_hang_to_the_ground` (D-052's own acceptance: the lowest leaf vertex under
+  `every_branchs_leaves_keep_their_places_as_it_grows` (its strand half fails when the leaves re-spread
+  over the strand's length at each age) and `willow_curtains_hang_to_the_ground` (D-052's own acceptance: the lowest leaf vertex under
   30% of the tree's height, and the bottom third as wide as the middle within 10%: strands hang plumb, so
   a curtain is as wide at the ground as at its widest where a mound narrows to it; three seeds). A
-  `StrandParams` doctest. No existing assertion changed.
+  `StrandParams` doctest. No existing assertion changed in that work.
+- `every_branchs_leaves_keep_their_places_as_it_grows` (every `AllBranches` preset and the willow's strands,
+  every age from 30% to 95% of maturity: a young branch's leaves are slots of the grown branch, at the same
+  fractions of it, with the same draws; fails with the re-spread),
+  `a_young_branch_shows_leaves_over_its_whole_length` (the order leaves appear in, and its gaps),
+  `a_count_that_lands_on_a_whole_number_keeps_its_leaves_in_place` (fails with `length / progress`), and
+  `grown_leaves_and_flowers_match_the_cpu_meshers` now runs over the `AllBranches` presets too (it skipped
+  them; it compares the leaves of the CPU tree and of `GpuGrowth` vertex by vertex at seven ages, with the
+  leaves that face out from their branch's tip made to face along it: that facing is the mature tip's on
+  the GPU, a documented difference). Assumed owner exception: `a_strands_leaves_keep_their_places_as_it_grows`
+  asserted that a young strand's leaves are the first of the grown strand's; the rule it pins (a leaf keeps
+  its place as its branch grows) is unchanged and now holds for every `AllBranches` branch, but the leaves
+  that show first are the tip's and then the gaps', so the test became the general one above, which
+  checks the same places, draws and counts, on more.
 
 ## [0.46.1] - 2026-10-30
 
