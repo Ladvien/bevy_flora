@@ -356,6 +356,30 @@
 //! }
 //! ```
 //!
+//! # Sick and dying trees
+//!
+//! A game marks a tree with [`TreeCondition`], a component on the tree's entity ([`ProceduralTree`]
+//! or [`PooledTree`]), and reads it back through the index: every [`IndexedTree`] says how well it
+//! is. A tree without the component is healthy. The condition is the tree's own, so a pooled tree
+//! keeps it through a change of variant or a reload of its pool; a felled tree leaves the index and
+//! keeps the component. The crate draws a sick tree as a healthy one: recolour it
+//! ([`RecolorTree`], [`PooledLook`]) to show it.
+//!
+//! ```rust,no_run
+//! use bevy::prelude::*;
+//! use bevy_flora::{FloraIndex, TreeCondition};
+//!
+//! // A blight takes the trees near `centre`; later the sick ones near it are counted.
+//! fn blight(mut commands: Commands, index: Res<FloraIndex>) {
+//!     let centre = Vec2::new(10.0, -4.0);
+//!     for tree in index.within(centre, 12.0).filter(|tree| !tree.undergrowth) {
+//!         commands.entity(tree.entity).insert(TreeCondition::Sick);
+//!     }
+//!     let sick = index.within(centre, 12.0).filter(|tree| tree.condition >= TreeCondition::Sick).count();
+//!     info!("{sick} trees near the blight are sick or dying");
+//! }
+//! ```
+//!
 //! # Saving and loading
 //!
 //! A tree is its parameters and seed; a save holds what the game did to it. On load,
@@ -394,6 +418,7 @@
 //! ```
 
 pub mod background;
+pub mod condition;
 pub mod crown;
 pub mod crown_hull;
 pub mod deadfall;
@@ -440,6 +465,7 @@ pub use gpu::{GpuGrowth, GpuGrowthSupport, GrowthExtension, GrowthMaterial};
 pub use ground::FloraGround;
 pub use growth::GrowthParams;
 pub use harvest::{FallenFruit, FallingFruit, Fruit, FruitFell, TreeFruit};
+pub use condition::TreeCondition;
 pub use index::{FloraIndex, IndexedTree, Obstacle, ObstacleKind, TreeHit};
 pub use impostor::{IMPOSTOR_VIEWS, ImpostorAtlas, ImpostorMaterial, ImpostorTint};
 pub use lod::{LodDistances, LodSettings, TreeLod, build_lods};
@@ -487,7 +513,7 @@ pub mod prelude {
         GpuGrowth, Growing, GustFront,
         LeafBurst, LeafScan, LodDistances, LodScale, LodSettings, PoolColors, PooledLook, PooledTree, ProceduralTree,
         ProceduralTreeAsset, RecolorPool, RecolorTree, RenderStyle, CrownStyle, TrunkStyle,
-        Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeGenerated, TreeLanded, TreeLod, TreeLog,
+        Scatter, ScatterPoint, SeeThroughTrees, TreeAge, TreeBucked, TreeCondition, TreeGenerated, TreeLanded, TreeLod, TreeLog,
         TreeMature, TreeNotch, TreeParams, TreePool, TreePreset, TreeShake, TreeShakes, TreeShape, TreeStump,
         WindResponse, WoodCapsule, build_pool,
     };

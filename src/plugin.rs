@@ -241,6 +241,7 @@ impl bevy::app::Plugin for FloraPlugin {
             .init_resource::<FireRebind>()
             .init_resource::<PushSlots>()
             .register_type::<FloraUnits>()
+            .register_type::<crate::condition::TreeCondition>()
             .register_type::<ProceduralTree>()
             .register_type::<TreeAge>()
             .register_type::<Growing>()
