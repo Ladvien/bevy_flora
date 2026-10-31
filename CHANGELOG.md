@@ -7,10 +7,52 @@ All notable changes to `bevy_flora`. The format follows
 
 ## [Unreleased]
 
-A leaf that appears on a growing branch grows from nothing instead of popping in (`docs/research/leaf-ease-in.md`).
+A change of `TreeCondition` can be drawn as a decline over seconds (`docs/research/condition-glide.md`), and a leaf that appears on a growing branch grows from nothing instead of popping in (`docs/research/leaf-ease-in.md`).
+
+### Added
+
+- **`ConditionGlide { seconds }`: a change of `TreeCondition` can be drawn as a decline** over seconds, not
+  in the frame after it is set (`docs/research/condition-glide.md`, backlog 2 of iterations 6 to 9). A
+  resource, 0 by default: a change is drawn at once, as every caller has had it. Above 0 the share of the
+  crown's leaves that is lost and the dryness of the leaves that are left rise continuously from what the
+  tree shows now to what the new class shows (a smoothstep through the classes' own values: lost 0, 0.35,
+  0.8 and withered 0, 0.5, 1 at healthy, sick and dying, so a settled tree is drawn exactly as before). A
+  change half way through a glide starts where the tree is, so the picture never jumps whatever the game
+  does; `Healthy`, or removing the component, recovers a tree the same way, the leaves coming back; a tree
+  that appears with its condition (a save loaded, a pool whose assets arrive after its trees) shows it at
+  once, as does any tree while the resource is 0. `FloraIndex` and `condition_of` answer the class the game
+  set at once, only the picture glides. The time is the app's `Time` (a paused game does not decline) and
+  the value that counts is the one the resource has when the change is made. Exported from the crate root
+  and the prelude.
+- `inspect --decline <seconds>[,<after>[,<every>]]` (with `--condition`, `dying` by default) sets the
+  condition once the tree is ready and photographs the glide: `--condition dying --decline 8,0,1 --frames 9`
+  is eight seconds, a frame a second (deterministic: the clock steps 1/60 s a frame). Meshes, the impostor and
+  the falling leaves show the same level; the last frame of that run is byte for byte the image of `--condition
+  dying`, and the first of a healthy tree.
 
 ### Changed
 
+- The draw of a condition is a level (0 healthy, 0.5 sick, 1 dying) in the `MeshTag`, not a class: bit 10 says
+  a glide runs and bits 11 to 18 hold the level in 254 steps above the class bits, which stay what the game
+  set. The shaders read it through `condition_level`, `level_defoliation` and `level_withering` (`common.wesl`)
+  in place of the class functions, in every leaf stage (the main pass, the prepass, the GPU-growth twins and
+  the impostor). A tree with no glide carries the bits it always did, and `forest`, `gallery` and every
+  settled tree draw as before: of 526 gallery scenarios 522 are the same images and 4 (`painterly_oak`,
+  `painterly_maple`, `toon_oak`, `toon_maple`) differ in one pixel of 1 228 800 each, a leaf-edge pixel, the
+  same one in the pair of a species (shader code changed, so its instruction order may have); `stats.tsv`
+  columns 1 to 10 are identical and no flag appears, on the CPU and under `--gpu`.
+- What a glide costs, measured on an Apple M5 (10 000 pooled oaks, `forest --mode pool`, all declining at
+  once, interleaved with a run without): a 6-second glide takes the frame from 5.0 to 6.5 ms for its length
+  (p95 5.4 to 10.5), a 30-second one from 5.0 to 5.6 (p95 5.4 to 6.1): the cost is the number of mesh tags
+  that change, and each tree changes its tag at its own moments (a hash of the entity), so a forest that began
+  together does not rewrite every tag in one frame. The systems alone, headless: 0.40 ms a frame for 10 000
+  settled trees, 0.50 ms while all glide over 30 seconds. A forest with no glide in flight is unchanged: the
+  forest bench, interleaved base against new, medians of four, ms a frame (cpu): 10 000 pooled oaks 4.97
+  (13.84) to 5.00 (13.84), 1 000 naive 34.88 (18.71) to 34.89 (18.77), 1 000 growing on the GPU 178.5 (243.4)
+  to 180.1 (245.6): within 1% (the last is the bench's own spread).
+- A tree that has a condition carries a crate-internal `ConditionShown` (what its meshes show of it) and, for
+  the length of a glide, `ConditionGliding` in sparse storage, so only trees that glide are visited each frame;
+  the falling-leaf systems run after the system that advances glides.
 - **A leaf eases in** (`FoliagePlacement::AllBranches`: oak, willow, maple, spruce, pine, japanese maple,
   shrub, cherry, apple, juniper, fern). Leaves keep their places as a branch lengthens (0.47.0), but the
   one that appeared still appeared at its node's whole leaf size: measured over every `AllBranches` preset,
@@ -52,6 +94,18 @@ A leaf that appears on a growing branch grows from nothing instead of popping in
   whole), and `all_branches_leaves_appear_as_the_branch_lengthens` now also requires leaves easing in on
   the GPU side (`grown_leaves_and_flowers_match_the_cpu_meshers` holds every part-grown leaf's vertices
   to the CPU mesher's).
+- Condition glide (`condition.rs`): `a_change_of_condition_glides_to_its_class_and_arrives_as_the_class_tag` (a
+  dying change over two seconds: the class bits say the class and the index answers it on the first frame, the
+  level starts at healthy, rises monotonically without a frame step over a few percent, is half way half way
+  through and ends as the class's own tag, bit for bit), `a_change_in_the_middle_of_a_glide_starts_where_the_tree_is_and_a_recovery_glides_back`
+  (a reversal from 199 of 254 is continuous, `Healthy` and a removed component recover to no bits at all),
+  `a_tree_that_appears_with_its_condition_shows_it_at_once_and_so_does_a_glide_of_nothing` (procedural and
+  pooled), `a_pooled_trees_glide_survives_a_look_change_and_a_rebuild_keeps_it`,
+  `a_pause_stops_a_glide_and_a_settled_tree_has_none_running`, `trees_that_began_together_do_not_step_together`
+  (it fails with the per-tree fractions removed: all 120 trees step in one frame), the level functions (the
+  class values at the anchors, monotone between, clamped outside) and `a_declined_crown_at_a_level_has_lost_the_leaves_a_worse_level_loses_and_more`;
+  `falling.rs`: `a_tree_part_way_through_its_decline_drops_the_leaves_it_shows_and_they_fall_as_dry`. The
+  existing condition tests pass unchanged (no protected check was touched). 354 lib and 69 doc tests.
 
 ## [0.47.0] - 2026-10-31
 
