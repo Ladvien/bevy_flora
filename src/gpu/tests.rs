@@ -8,7 +8,7 @@ use super::state::{CONE, GrowthState, TOP_CAP};
 use crate::foliage::{foliage_meshes, leaf_points_for_node};
 use crate::mesh::branch::{WoodPiece, WoodSpan, skeleton_mesh_with};
 use crate::mesh::trunk::{trunk_pieces, trunk_ring_count};
-use crate::params::{FoliagePlacement, TreeParams, TrunkTermination};
+use crate::params::{FoliagePlacement, LeafOrientation, TreeParams, TrunkTermination};
 use crate::pipeline::aged_skeleton;
 use crate::presets::TreePreset;
 use crate::skeleton::{Skeleton, generate_skeleton};
@@ -380,8 +380,14 @@ fn grown_leaves_and_flowers_match_the_cpu_meshers() {
     for preset in TreePreset::ALL {
         let mut params = preset.params();
         params.mesh.smooth_iterations = 0;
-        if params.foliage.placement == FoliagePlacement::AllBranches || !params.foliage.enabled {
+        if !params.foliage.enabled {
             continue;
+        }
+        // Leaves that face out from their branch's tip face out from the tip it has now on the CPU
+        // and from the mature tip on the GPU (a documented difference, and one of orientation, not
+        // of place): every `AllBranches` preset is compared with its leaves along their branches.
+        if params.foliage.placement == FoliagePlacement::AllBranches && params.foliage.orientation == LeafOrientation::RadialOutward {
+            params.foliage.orientation = LeafOrientation::FollowBranch;
         }
         // Every compared tree flowers, so each flower is held to its leaf's growth too.
         params.foliage.blossom = Some(bevy::color::Color::WHITE);

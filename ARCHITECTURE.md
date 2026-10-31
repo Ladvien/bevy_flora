@@ -30,6 +30,17 @@ and scale to full size. Each node draws leaf randomness from its own RNG stream
 (`TerminalBranches`, `TipClusters`) pick the same branches at every age and a
 leaf never disappears as the tree grows.
 
+Under `AllBranches` a leaf has one place on its branch, whatever the age
+(`add_distributed_leaves`, `docs/research/leaf-places.md`): leaf `i` sits at
+`0.3 + 0.7 t^2` of the branch (`0.1 + 0.9 t` on a strand), `t = (i + u_i) / N`, `u_i`
+its own draw and `N` the leaf count of the *grown* branch (`distributed_leaf_count` of
+`length / progress`). A young branch shows its first `distributed_leaf_count(length)`
+leaves at those places, so a branch that gains a leaf moves none of the others, leaves open
+toward the tip as it lengthens, and the CPU tree and `GpuGrowth` (which shows the first
+`leaf_count` leaves of the mature mesh at `start + length * c`) put every leaf in the same
+place (`gpu::tests::grown_leaves_and_flowers_match_the_cpu_meshers` compares them at seven
+ages). A grown branch has `N` equal to its own count, so a mature tree is what it always was.
+
 ## Leaf look (baked into the mesh)
 
 The mesh carries what the leaf shader reads (see Leaf shading and wind): leaf-shaped

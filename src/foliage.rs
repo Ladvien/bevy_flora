@@ -231,11 +231,12 @@ fn add_distributed_leaves(
 ) {
     let count = distributed_leaf_count(foliage, node.length, node.height_ratio);
     let strand = node.wood.kind == NodeKind::Strand;
-    // A strand's leaves keep their places as it grows: leaf `i` sits where it does on the grown
-    // strand, and the young strand shows its first ones, in order from the base (the draws are the
-    // same at every age, and `GpuGrowth` shows the same leaves at the same places). Every other
-    // branch spreads as many leaves as it has now over its length.
-    let spread = if strand && node.wood.progress > 0.0 {
+    // A leaf keeps its place on its branch as the branch grows (docs/research/leaf-places.md): leaf
+    // `i` sits where it does on the grown branch, and a young branch shows its first ones, in order
+    // from the base (the draws are the same at every age, and `GpuGrowth` shows the same leaves at
+    // the same places). Spreading the leaves it has now over the branch would move every one of them
+    // each time it gains a leaf.
+    let spread = if node.wood.progress > 0.0 {
         distributed_leaf_count(foliage, node.length / node.wood.progress, node.height_ratio).max(count)
     } else {
         count
@@ -1804,5 +1805,52 @@ mod tests {
         }
         assert!(compared >= 10, "only {compared} growing strands compared");
         assert!(fewer >= 3, "only {fewer} of {compared} young strands show fewer leaves than when grown");
+    }
+
+    #[test]
+    fn every_branchs_leaves_keep_their_places_as_it_grows() {
+        // The same rule for every `AllBranches` preset, not only the willow's strands: the leaf cards
+        // of a growing branch are the first of the grown branch's, at the same fractions of its length.
+        // Spreading the leaves a branch has now over it moved all of them each time it gained one
+        // (an oak leaf hopped 15 cm per 0.1 year, and sat up to 92 cm from where `GpuGrowth` puts it).
+        let mut presets = 0;
+        for preset in TreePreset::ALL {
+            let params = preset.params();
+            if params.foliage.placement != FoliagePlacement::AllBranches {
+                continue;
+            }
+            presets += 1;
+            let full = generate_skeleton(&params);
+            let mature_at = full.mature_at(&params.growth);
+            let along = |skeleton: &crate::skeleton::Skeleton, id: u32| -> Vec<f32> {
+                let i = skeleton.nodes.iter().position(|n| n.id == id).expect("the branch exists");
+                let node = &skeleton.nodes[i];
+                let mut points = Vec::new();
+                leaf_points_for_node(skeleton, i, &params.foliage, &params.growth, &params.trunk, params.seed, &mut points);
+                points.iter().map(|p| (p.position - node.start).dot(node.direction) / node.length).collect()
+            };
+            let (mut compared, mut fewer) = (0, 0);
+            for share in [0.4, 0.6, 0.8] {
+                let aged = full.aged(mature_at * share, &params.growth);
+                for node in aged.nodes.iter().filter(|n| n.kind != NodeKind::Trunk && n.progress > 0.3 && n.progress < 1.0) {
+                    let young = along(&aged, node.id);
+                    let grown = along(&full, node.id);
+                    assert!(young.len() <= grown.len(), "{} branch {}: {} leaves young, {} grown", preset.name(), node.id, young.len(), grown.len());
+                    for (k, (a, b)) in young.iter().zip(&grown).enumerate() {
+                        assert!(
+                            (a - b).abs() < 1e-3,
+                            "{} branch {} at {share} of maturity: leaf {k} sits at {a} of the branch, {b} when grown",
+                            preset.name(),
+                            node.id
+                        );
+                    }
+                    compared += usize::from(!young.is_empty());
+                    fewer += usize::from(young.len() < grown.len());
+                }
+            }
+            assert!(compared >= 3, "{}: only {compared} growing branches with leaves compared", preset.name());
+            assert!(fewer >= 1, "{}: no young branch shows fewer leaves than when grown", preset.name());
+        }
+        assert!(presets > 0, "no preset places leaves on every branch");
     }
 }
