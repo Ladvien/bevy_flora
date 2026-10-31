@@ -10,7 +10,7 @@
 //!     [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] [--on-centre] [--drop <count>[,<after>[,<every>]]]
 //!     [--autumn <seconds>[,<after>[,<every>]]] [--burn <after>[,<every>]]
 //!     [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]]
-//!     [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches]
+//!     [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches] [--condition <sick|dying>]
 //! ```
 //!
 //! The tree stands at the origin; the camera stands `--distance` metres away on the bearing
@@ -66,6 +66,10 @@
 //! (radius 0.45 m by default), and walks it at (vx, vz) m/s once the tree is ready, photographed
 //! every quarter of a second: the leaves and thin stems it walks through give way.
 //!
+//! `--condition <sick|dying>` gives the tree a [`TreeCondition`](bevy_flora::TreeCondition), so
+//! the crown thins and dries; it works in every mode and at every level of detail (the impostor
+//! included: `--mode pool --level 3`), and with `--season` and `--fell`.
+//!
 //! `--hull <tiers>,<sides>[,<lift>[,<jitter>]]` (with `--branches`: every branch drawn, not the trunk
 //! chain only, `CrownStyle::Hull::trunk_only`) draws the crown as a faceted hull of that many
 //! stacked cones ([`CrownStyle::Hull`](bevy_flora::CrownStyle), lift 0.2 and jitter 1 by default)
@@ -89,7 +93,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy_flora::{
     BuckTree, CrownStyle, DropLeaves, FellTree, Felled, FloraFire, FloraGround, FloraPlugin, FloraSeason,
-    FloraWetness, FloraWind, FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge,
+    FloraWetness, FloraWind, FoliagePusher, LodDistances, LodSettings, PooledTree, ProceduralTree, RenderStyle, TreeAge, TreeCondition,
     TreeLod, TreeNotch, TreePool, TreePreset, TreeShape, TrunkStyle, build_pool, build_pool_with_deadfall, build_tree,
     DeadfallKind, DeadfallSettings, PooledDeadfall,
 };
@@ -174,6 +178,8 @@ struct Args {
     prism: Option<u32>,
     /// With `--hull`: draw every branch, not the trunk chain only.
     branches: Option<()>,
+    /// The tree's condition (`TreeCondition`): `sick` or `dying`.
+    condition: Option<TreeCondition>,
 }
 
 fn usage() -> ! {
@@ -185,7 +191,7 @@ fn usage() -> ! {
          [--colliders] [--season <autumn>,<leaf fall>[,<snow>[,<blossom>]]] [--wet <0..1>] [--fell <deg> [--buck <m>] [--lying]] [--slope <deg>] \
          [--on-centre] [--drop <count>[,<after>[,<every>]]] [--autumn <seconds>[,<after>[,<every>]]] \
          [--burn <after>[,<every>]] [--push <x>,<z>[,<radius>[,<vx>,<vz>]]] [--notch <deg>,<depth>[,<height>]] \
-         [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches]"
+         [--hull <tiers>,<sides>[,<lift>[,<jitter>]]] [--prism <sides>] [--branches] [--condition <sick|dying>]"
     );
     std::process::exit(2);
 }
@@ -233,6 +239,7 @@ fn parse_args() -> Args {
         hull: None,
         prism: None,
         branches: None,
+        condition: None,
     };
     let mut have_out = false;
     let mut it = std::env::args().skip(1).peekable();
@@ -364,6 +371,13 @@ fn parse_args() -> Args {
             }
             "--branches" => args.branches = Some(()),
             "--prism" => args.prism = Some(value(&mut it)),
+            "--condition" => {
+                args.condition = match it.next().as_deref() {
+                    Some("sick") => Some(TreeCondition::Sick),
+                    Some("dying") => Some(TreeCondition::Dying),
+                    _ => usage(),
+                };
+            }
             "--notch" => {
                 let p = floats(&it.next().unwrap_or_else(|| usage()));
                 args.notch = match p[..] {
@@ -662,6 +676,9 @@ fn setup(
     };
     if shoot.args.colliders {
         commands.entity(tree).insert(TreeShape::default());
+    }
+    if let Some(condition) = shoot.args.condition {
+        commands.entity(tree).insert(condition);
     }
     fell(&mut commands, tree, &shoot.args);
 }

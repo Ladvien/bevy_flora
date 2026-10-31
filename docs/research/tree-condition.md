@@ -132,15 +132,20 @@ shader with `get_tag(instance_index)`; this crate already rides a pooled look's 
     that would turn first). Sick: 0.35, dying: 0.8 (`TreeCondition::defoliation`). Hidden leaves cast
     no shadow, so a thin crown lets dappled light through. Only leaf cards are hidden: flowers and
     fruit (vertex alpha below 0.5) are the game's to count (`TreeFruit`), so they are drawn as they
-    were, and `FallingLeaves` skips the cards that are hidden (`Card::on_tree`).
+    were; a hull crown keeps its facets. `falling.rs` mirrors the draw (`condition::Decline`): the
+    leaves a shake, a landing, the season or `DropLeaves` let go are leaves the tree still has, and
+    they fall with the tree's tint baked into their vertex colour.
   - Withering: each leaf's colour moves toward the dry leaf colour, by `FloraUniform::withered`, the
     ratio of the dry colour (design default, srgb 0.47, 0.31, 0.11) to the species' leaf colour, as
-    `autumn` is the ratio of the autumn colour; sick 0.5 and dying 1.0 of the way
-    (`TreeCondition::withering`), each leaf by its own draw (0.6 to 1.4 of that), so a sick crown is
-    mottled olive and brown among the green and a dying one is uniformly dry. Wood is not touched.
+    `autumn` is the ratio of the autumn colour; sick 0.5 and dying 1.0 of the way on average
+    (`TreeCondition::withering`), each leaf by its own draw, 0.4 either side of that (never past all or
+    none), so a sick crown is mottled, some leaves nearly green and some nearly brown, and a dying one
+    is dry with a little olive left. Wood is not touched.
   - Impostors: the baked picture is neutral grey, so the same two effects are done per patch of
-    texels (the way the season's patches are): the leafy texels wither and the crown's coverage
-    thins by the class's share, with the alpha-to-coverage it already uses.
+    texels (the way the season's patches are): the colour moves on the leaf core (a soft wood texel
+    next to a leaf would flare under the large ratio) and the crown's coverage thins on the leaf
+    edge, by the class's share, with the alpha-to-coverage it already uses; where a pixel spans
+    several patches the share replaces the patch, so a far crown does not shimmer.
   - A `FloraSeason` autumn or leaf fall and a condition compose (the condition's tint multiplies the
     season's, its hidden leaves are hidden whatever the season does). A device with no flora
     materials (`FloraMaterialSupport` absent) draws plain materials and no class, as it does no glide.

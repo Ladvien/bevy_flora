@@ -266,6 +266,11 @@ pub struct FloraUniform {
     ///
     /// [`FoliageParams::blossom`]: crate::FoliageParams::blossom
     pub blossom: Vec4,
+    /// What a withered leaf's colour is multiplied by (linear rgb: the dry leaf colour over the
+    /// leaf colour, at most 1000 a channel, as for `autumn`) and 1, for any species with leaves:
+    /// the colour a sick or dying tree's leaves move toward ([`TreeCondition`](crate::TreeCondition));
+    /// zero for wood.
+    pub withered: Vec4,
 }
 
 /// Most a channel of the leaf colour may be multiplied by to reach the autumn colour: enough for
@@ -419,6 +424,7 @@ impl FloraUniform {
             bark_mean: Vec4::ZERO,
             autumn: params.foliage.autumn.map_or(Vec4::ZERO, |autumn| colour_ratio(autumn, params.foliage.color)),
             blossom: params.foliage.blossom.map_or(Vec4::ZERO, |blossom| colour_ratio(blossom, params.foliage.color)),
+            withered: colour_ratio(crate::condition::WITHERED_LEAF, params.foliage.color),
         }
     }
 
@@ -431,6 +437,7 @@ impl FloraUniform {
             tint: Vec4::ZERO,
             autumn: Vec4::ZERO,
             blossom: Vec4::ZERO,
+            withered: Vec4::ZERO,
             tree: self.tree.with_y(0.0),
             ..self
         }
@@ -1135,6 +1142,20 @@ mod tests {
         let mut black = maple.clone();
         black.foliage.color = Color::BLACK;
         assert!(FloraUniform::new(&black).autumn.truncate().cmple(Vec3::splat(AUTUMN_RATIO_MAX)).all());
+    }
+
+    #[test]
+    fn a_withered_leaf_takes_the_dry_colour_whatever_the_species_and_wood_never_withers() {
+        let dry = crate::condition::WITHERED_LEAF.to_linear();
+        for preset in [TreePreset::Maple, TreePreset::Oak, TreePreset::Pine, TreePreset::Spruce, TreePreset::Fern, TreePreset::Birch] {
+            let params = preset.params();
+            let uniform = FloraUniform::new(&params);
+            assert_eq!(uniform.withered.w, 1.0, "{preset:?}: evergreens and deciduous trees both wither");
+            let leaf = params.foliage.color.to_linear();
+            let withered = Vec3::new(leaf.red, leaf.green, leaf.blue) * uniform.withered.truncate();
+            assert!(withered.abs_diff_eq(Vec3::new(dry.red, dry.green, dry.blue), 1e-4), "{preset:?}: {withered}");
+            assert_eq!(uniform.wood().withered, Vec4::ZERO, "wood never withers");
+        }
     }
 
     #[test]
