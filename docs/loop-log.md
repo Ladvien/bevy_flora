@@ -436,3 +436,17 @@ the implementation and its docs.
    silhouette thinned by the class.
 4. **D-074 / D-075** on big: try the gallery's cameras placed at the first scenario's views during the warmup.
 5. **D-052 willow curtains**; owner clean-up of #90's locator test; a CPU mirror of `wind_bend`.
+
+**Clean-up (iteration 6).** Merge `63eea41` on `main` (pushed, tree identical to `loop/iter-6`, so the gate
+stood). No release: v0.46.1 was 52 minutes old at the start and under 3 hours old at the end, the 6-hour rule;
+0.47.0 carries this and iteration 5's work. #87 (closed in iteration 5, label `assumed-decision`) has a comment
+on delivery and on the assumed decision. Baseline: copies of main's release binaries under `/tmp/f6/base` (no
+second worktree or target directory: `git worktree list` shows only the clone). A `file_watcher` build reloads
+an embedded shader when its file changes, so a baseline binary run while the shaders in the clone are edited is
+not a baseline: no `.wesl` was edited during the windows quoted above. Removed, mine: `/tmp/f6` (1.9 GB:
+binaries, galleries, captures, bench output, findings, critique), and what this pass built in
+`CARGO_TARGET_DIR`: the release example binaries and the `bevy_flora` rlibs and test binaries of both profiles
+(files modified in the last four hours), the release and debug incremental caches of that window, and
+`package/bevy_flora-0.46.1*`; `df -h /` 12 GB free at the start, 3.4 GB before, 15 GB after. Kept: the target
+directory's dependency builds (71 GB). Leftovers of earlier passes: none found (no `f*_base` in `~` or `/tmp`);
+the branches `loop/iter-1` to `-6` remain on origin, not deleted.
