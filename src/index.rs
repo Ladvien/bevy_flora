@@ -13,6 +13,9 @@
 //!
 //! It is a grid of [`FloraIndex::CELL`] square cells, so a query costs the trees near it, not all
 //! of them: a hundred thousand pooled trees answer [`FloraIndex::nearest`] in microseconds.
+//! A query's `radius` or `max` may be `f32::INFINITY` (or `f32::MAX`) for "wherever it is": the
+//! walk is bounded by the cells the index holds, never by the query's own extent, so an unbounded
+//! query visits every tree (and a ray every cell its track crosses over them) and returns.
 //!
 //! [`ProceduralTreeAsset`]: crate::ProceduralTreeAsset
 
@@ -43,6 +46,11 @@ pub struct FloraIndex {
     obstacle_cells: HashMap<IVec2, Vec<Entity>>,
     /// Each entity's lying wood, with the cells it is in (inclusive corners).
     obstacles: HashMap<Entity, (Vec<Obstacle>, IVec2, IVec2)>,
+    /// The corners (inclusive) of the box of cells any tree has been in: a query never looks outside
+    /// it. Only grows, so it can be larger than the forest is now, never smaller.
+    extent: Option<(IVec2, IVec2)>,
+    /// The same for the lying wood.
+    obstacle_extent: Option<(IVec2, IVec2)>,
 }
 
 /// A tree as [`FloraIndex`] knows it: its trunk, in world space.
@@ -200,6 +208,28 @@ fn cell_of(at: Vec2) -> IVec2 {
     (at / FloraIndex::CELL).floor().as_ivec2()
 }
 
+/// `extent` grown to take in the cells `low` to `high` (inclusive corners).
+fn grow(extent: &mut Option<(IVec2, IVec2)>, low: IVec2, high: IVec2) {
+    *extent = Some(extent.map_or((low, high), |(a, b)| (a.min(low), b.max(high))));
+}
+
+/// The cells of `map` a query over the cells `low` to `high` (inclusive corners) must look in, row
+/// by row. They are cut to `extent`, the box the index fills, so a query of any size (infinite
+/// included) costs at most that box. Where the box holds more cells than `map` has occupied, those
+/// are walked instead, sorted into the same order, so a huge query costs the cells in use.
+fn cells_in(map: &HashMap<IVec2, Vec<Entity>>, extent: Option<(IVec2, IVec2)>, low: IVec2, high: IVec2) -> impl Iterator<Item = IVec2> + use<> {
+    let (low, high) = extent.map_or((IVec2::ONE, IVec2::ZERO), |(a, b)| (low.max(a), high.min(b)));
+    let wide = (i64::from(high.x) - i64::from(low.x) + 1).max(0) * (i64::from(high.y) - i64::from(low.y) + 1).max(0);
+    let (rows, columns, listed) = if wide <= map.len() as i64 {
+        (low.y..=high.y, low.x..=high.x, Vec::new())
+    } else {
+        let mut inside: Vec<IVec2> = map.keys().copied().filter(|c| c.cmpge(low).all() && c.cmple(high).all()).collect();
+        inside.sort_unstable_by_key(|c| (c.y, c.x));
+        (1..=0, 1..=0, inside)
+    };
+    rows.flat_map(move |y| columns.clone().map(move |x| IVec2::new(x, y))).chain(listed)
+}
+
 impl FloraIndex {
     /// The side of a grid cell, in world units (queries are in world units too: [`FloraUnits`](crate::FloraUnits)
     /// only scales what the crate measures in metres).
@@ -227,11 +257,10 @@ impl FloraIndex {
 
     /// The trees whose bark at the foot is within `radius` world units of `at` (world x and z), in an
     /// order that depends only on where they stand (cell by cell, and by position within a cell),
-    /// not on the order they were spawned in.
+    /// not on the order they were spawned in. An infinite `radius` is every tree.
     pub fn within(&self, at: Vec2, radius: f32) -> impl Iterator<Item = &IndexedTree> {
         let (low, high) = (cell_of(at - Vec2::splat(radius)), cell_of(at + Vec2::splat(radius)));
-        (low.y..=high.y)
-            .flat_map(move |y| (low.x..=high.x).map(move |x| IVec2::new(x, y)))
+        cells_in(&self.cells, self.extent, low, high)
             .flat_map(move |cell| {
                 self.cells.get(&cell).into_iter().flatten().filter_map(move |entity| {
                     let (tree, first, _) = self.trees.get(entity)?;
@@ -241,16 +270,19 @@ impl FloraIndex {
             })
     }
 
-    /// The tree whose bark at the foot is nearest `at` (world x and z), within `max` world units;
-    /// of two as near, the first in [`FloraIndex::within`]'s order.
+    /// The tree whose bark at the foot is nearest `at` (world x and z), within `max` world units (an
+    /// infinite `max`: wherever it is, which looks at every tree); of two as near, the first in
+    /// [`FloraIndex::within`]'s order.
     pub fn nearest(&self, at: Vec2, max: f32) -> Option<&IndexedTree> {
         self.within(at, max).min_by(|a, b| a.distance_to(at).total_cmp(&b.distance_to(at)))
     }
 
-    /// The first trunk `ray` meets within `max` world units: what an axe swung, a bullet fired or the
-    /// player's look along it hits. Crowns and leaves do not stop it.
+    /// The first trunk `ray` meets within `max` world units (an infinite `max`: wherever it is,
+    /// bounded by the cells the trees fill): what an axe swung, a bullet fired or the player's look
+    /// along it hits. Crowns and leaves do not stop it.
     pub fn cast_ray(&self, ray: Ray3d, max: f32) -> Option<TreeHit> {
         let mut best: Option<TreeHit> = None;
+        let (box_low, box_high) = self.extent?;
         let consider = |cell: IVec2, best: &mut Option<TreeHit>| {
             for entity in self.cells.get(&cell).into_iter().flatten() {
                 let Some((tree, ..)) = self.trees.get(entity) else { continue };
@@ -261,15 +293,35 @@ impl FloraIndex {
             }
         };
         // Walk the cells the ray crosses over the ground (x, z), nearest first, until a hit is
-        // nearer than the next cell.
+        // nearer than the next cell or the ray has left the cells the index fills.
         let flat = Vec2::new(ray.direction.x, ray.direction.z);
         let start = ray.origin.xz();
-        let mut cell = cell_of(start);
         let speed = flat.length();
         if speed < 1.0e-6 {
-            consider(cell, &mut best);
+            consider(cell_of(start), &mut best);
             return best;
         }
+        // The stretch of the ray (3D distance along it) over that box of cells, in world units: past
+        // it there is nothing to meet, whatever `max` says.
+        let (box_low, box_high) = (box_low.as_vec2() * Self::CELL, (box_high + IVec2::ONE).as_vec2() * Self::CELL);
+        let (mut enter, mut exit) = (0.0_f32, f32::INFINITY);
+        for axis in 0..2 {
+            let (from, rate) = (start[axis], flat[axis]);
+            if rate.abs() < 1.0e-9 {
+                if from < box_low[axis] || from > box_high[axis] {
+                    return None;
+                }
+            } else {
+                let (a, b) = ((box_low[axis] - from) / rate, (box_high[axis] - from) / rate);
+                enter = enter.max(a.min(b));
+                exit = exit.min(a.max(b));
+            }
+        }
+        let reach = max.min(exit);
+        if enter > reach {
+            return None;
+        }
+        let mut cell = cell_of(start + flat * enter);
         let step = IVec2::new(flat.x.signum() as i32, flat.y.signum() as i32);
         let next_edge = |c: i32, s: i32| (c + i32::from(s > 0)) as f32 * Self::CELL;
         // Ray distance (3D) to the next x and y cell edges, and per cell.
@@ -285,7 +337,7 @@ impl FloraIndex {
         loop {
             consider(cell, &mut best);
             let leave = t_next.x.min(t_next.y);
-            if leave > max || best.is_some_and(|hit| hit.distance <= leave) {
+            if leave > reach || best.is_some_and(|hit| hit.distance <= leave) {
                 return best;
             }
             if t_next.x < t_next.y {
@@ -302,6 +354,7 @@ impl FloraIndex {
     fn insert(&mut self, tree: IndexedTree) {
         self.remove(tree.entity);
         let (low, high) = tree.cells();
+        grow(&mut self.extent, low, high);
         let Self { cells, trees, .. } = self;
         // Each cell keeps its trees by where they stand, so a query's order depends on the forest,
         // not on the order the trees were spawned or indexed in.
@@ -337,8 +390,7 @@ impl FloraIndex {
     /// into on the forest floor, which [`FloraIndex::within`] (standing trees) does not hold.
     pub fn obstacles_within(&self, at: Vec2, radius: f32) -> impl Iterator<Item = &Obstacle> {
         let (low, high) = (cell_of(at - Vec2::splat(radius)), cell_of(at + Vec2::splat(radius)));
-        (low.y..=high.y)
-            .flat_map(move |y| (low.x..=high.x).map(move |x| IVec2::new(x, y)))
+        cells_in(&self.obstacle_cells, self.obstacle_extent, low, high)
             .flat_map(move |cell| {
                 self.obstacle_cells.get(&cell).into_iter().flatten().flat_map(move |entity| {
                     let found = self.obstacles.get(entity).filter(|(_, first, _)| first.max(low) == cell);
@@ -366,6 +418,7 @@ impl FloraIndex {
             }
         }
         let (low, high) = (cell_of(lo), cell_of(hi));
+        grow(&mut self.obstacle_extent, low, high);
         for y in low.y..=high.y {
             for x in low.x..=high.x {
                 let list = self.obstacle_cells.entry(IVec2::new(x, y)).or_default();
@@ -739,5 +792,116 @@ mod tests {
         assert!(index.get(fern).unwrap().undergrowth && index.get(juniper).unwrap().undergrowth);
         let trees: Vec<Entity> = index.within(Vec2::ZERO, 10.0).filter(|t| !t.undergrowth).map(|t| t.entity).collect();
         assert_eq!(trees, vec![oak]);
+    }
+
+    /// Runs `f` on its own thread and fails if it has not answered in five seconds: a query that
+    /// walks 2^64 cells never does, and must not hang the whole test run.
+    fn answers<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (send, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(f());
+        });
+        answer.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or_else(|_| panic!("{what} never returned"))
+    }
+
+    /// "The nearest standing tree, wherever it is": the chop clip's lumberjack written the obvious
+    /// way. The walk covered every cell of the bound (2^64 for an infinite one), so it never ended
+    /// (issue #92).
+    #[test]
+    fn an_unbounded_query_answers() {
+        let mut world = World::new();
+        let id = world.spawn_empty().id();
+        let mut index = FloraIndex::default();
+        index.insert(tree(id, 3.0, 4.0));
+        let got = answers("an unbounded query", move || {
+            let from = Vec3::new(-20.0, 1.0, 0.0);
+            let nearest = index.nearest(Vec2::new(500.0, 0.0), f32::INFINITY).map(|t| t.entity);
+            let in_reach = index.within(Vec2::new(500.0, 0.0), f32::MAX).count();
+            // Along +z beside the tree: its ground track never crosses the trunk.
+            let miss = index.cast_ray(Ray3d::new(from, Dir3::Z), f32::INFINITY);
+            let far = index.cast_ray(Ray3d::new(from, Dir3::Z), f32::MAX);
+            // Along the trunk's row from a million metres off still meets it.
+            let hit = index.cast_ray(Ray3d::new(Vec3::new(-1.0e6, 1.0, 4.0), Dir3::X), f32::INFINITY).map(|h| h.tree);
+            // A bound just short of the trunk does not reach it, however far the ray starts.
+            let short = index.cast_ray(Ray3d::new(Vec3::new(-1.0e6, 1.0, 4.0), Dir3::X), 1.0e6);
+            index.remove(id);
+            let (emptied, emptied_ray) = (index.nearest(Vec2::ZERO, f32::INFINITY).is_none(), index.cast_ray(Ray3d::new(from, Dir3::X), f32::INFINITY).is_none());
+            (nearest, in_reach, miss.is_none(), far.is_none(), hit, short.is_none(), emptied, emptied_ray)
+        });
+        assert_eq!(got, (Some(id), 1, true, true, Some(id), true, true, true));
+    }
+
+    /// A query bigger than the forest is cut to the cells the forest fills, and where those are
+    /// mostly empty only the occupied ones are walked: the trees found, and the order they come in,
+    /// are what they were when the whole box was walked cell by cell.
+    #[test]
+    fn a_huge_query_meets_the_same_trees_in_the_same_order() {
+        let mut world = World::new();
+        let mut index = FloraIndex::default();
+        // A grove, a handful of loners 3 km apart (the box they fill is 750 cells wide, 60 of them
+        // occupied), and two trees in one cell.
+        let mut seed = 12345_u32;
+        let mut next = |span: f32| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / (1 << 24) as f32 * span - span / 2.0
+        };
+        let spots: Vec<(f32, f32)> = (0..30).map(|_| (next(40.0), next(40.0))).chain((0..30).map(|_| (next(6000.0), next(6000.0)))).collect();
+        for &(x, z) in &spots {
+            let id = world.spawn_empty().id();
+            index.insert(tree(id, x, z));
+        }
+        // Row by row of first cells, then by where a tree stands, then by entity: `within`'s order.
+        let by_order = |a: &&IndexedTree, b: &&IndexedTree| {
+            let (first_a, first_b) = (a.cells().0, b.cells().0);
+            (first_a.y.cmp(&first_b.y))
+                .then(first_a.x.cmp(&first_b.x))
+                .then(a.base.x.total_cmp(&b.base.x))
+                .then(a.base.z.total_cmp(&b.base.z))
+                .then(a.entity.to_bits().cmp(&b.entity.to_bits()))
+        };
+        for at in [Vec2::ZERO, Vec2::new(-2500.0, 1800.0), Vec2::new(1.0e5, -1.0e5)] {
+            for radius in [5.0, 60.0, 700.0, 2500.0, 1.0e5, 1.0e6, f32::MAX, f32::INFINITY] {
+                let mut found: Vec<&IndexedTree> = index.within(at, radius).collect();
+                let mut want: Vec<&IndexedTree> = index.iter().filter(|t| t.distance_to(at) <= radius).collect();
+                assert_eq!(found.len(), want.len(), "{} trees within {radius} of {at}", want.len());
+                if radius >= 1.0e6 {
+                    // The whole forest is covered, so every tree is met in its first cell.
+                    want.sort_by(by_order);
+                    assert_eq!(found, want, "the order of everything within {radius} of {at}");
+                } else {
+                    found.sort_by_key(|t| t.entity);
+                    want.sort_by_key(|t| t.entity);
+                    assert_eq!(found, want, "the trees within {radius} of {at}");
+                }
+            }
+        }
+        let nearest = |at: Vec2, max: f32| index.nearest(at, max).map(|t| (t.base.x, t.base.z));
+        let brute = |at: Vec2| index.iter().min_by(|a, b| a.distance_to(at).total_cmp(&b.distance_to(at))).map(|t| (t.base.x, t.base.z));
+        for at in [Vec2::ZERO, Vec2::new(-2500.0, 1800.0), Vec2::new(1.0e5, -1.0e5)] {
+            assert_eq!(nearest(at, f32::INFINITY), brute(at), "the nearest tree to {at}");
+        }
+    }
+
+    /// The lying wood's walk is bounded the same way.
+    #[test]
+    fn an_unbounded_obstacle_query_answers() {
+        let mut world = World::new();
+        let mut index = FloraIndex::default();
+        let stump = |entity: Entity, x: f32, z: f32| Obstacle {
+            entity,
+            kind: ObstacleKind::Stump,
+            capsule: WoodCapsule { a: Vec3::new(x, 0.0, z), b: Vec3::new(x, 0.5, z), radius: 0.4 },
+        };
+        let ids: Vec<Entity> = (0..2).map(|_| world.spawn_empty().id()).collect();
+        index.insert_obstacles(ids[0], vec![stump(ids[0], 5.0, 5.0)]);
+        index.insert_obstacles(ids[1], vec![stump(ids[1], -400.0, 900.0)]);
+        let found = answers("an unbounded obstacle query", move || {
+            let all: Vec<Entity> = index.obstacles_within(Vec2::new(1.0e5, 1.0e5), f32::INFINITY).map(|o| o.entity).collect();
+            let near = index.obstacles_within(Vec2::ZERO, 20.0).count();
+            let empty = FloraIndex::default().obstacles_within(Vec2::ZERO, f32::INFINITY).count();
+            (all, near, empty)
+        });
+        // Row by row: the one at z = 5, then the one at z = 900.
+        assert_eq!(found, (vec![ids[0], ids[1]], 1, 0));
     }
 }
