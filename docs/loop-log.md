@@ -890,3 +890,18 @@ implementation and its tests, `bc134dc` the docs, `2e56bdf` the leaf count keeps
    their tips, a greener strand colour, a forked trunk; the fast-growing nodes' pace at a clip's rate (strands
    grow 2 m a year, 0.8 of a leaf's size in one frame); D-074 / D-075 on big; `RadialOutward` facing on a
    growing branch; a CPU mirror of `wind_bend`.
+
+**Clean-up (iteration 9).** Merge `23e7f66` on `main` (pushed; tree identical to `loop/iter-9`, so the gate stood,
+and re-run on the merged tree: 345 lib tests, clippy). No release: v0.47.0 (tag `04:23`) was under 2 hours old at
+the push, the 6-hour rule; the next release is 0.47.1 from 10:23 local on, and carries this pass (the
+CHANGELOG's `[Unreleased]` is written and the README claims it makes are true of the code, not of the clips: the
+eleven clips are re-recorded by that release). No issue referenced or closed (none was open). Baseline kept as
+copies of main's release binaries under `/tmp/f9/base` (no second worktree or target directory: `git worktree
+list` shows only the clone). Removed, mine: `/tmp/f9` (3.4 GB: binaries, three galleries, parity renders, montages,
+bench output, findings, critique, probe copies), the throwaway `tests/zz_probe.rs` (never committed, moved to the
+scratch before the commit and removed with it), and in `CARGO_TARGET_DIR` every file this pass wrote (modified
+after 04:40 today, 2.4 GB: the release and debug incremental caches of `bevy_flora` and its examples, the debug
+test binaries, the release example binaries, `package/bevy_flora-0.47.0*`); `df -h /` 19 GB free at the start,
+11 GB at the lowest, 19 GB after. Kept: the target directory's dependency builds (older than this pass).
+Leftovers of earlier passes: none found (no `f*_base` in `~` or `/tmp`, `git worktree list` shows only the clone);
+the branches `loop/iter-1` to `-9` remain on origin, not deleted.
