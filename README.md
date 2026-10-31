@@ -132,7 +132,7 @@ Main-world cost per frame with every tree growing (a headless `App`, release bui
 | willow | 25.4 ms | 0.90 ms |
 | oak, 2 smoothing passes | 69.8 ms | 0.70 ms |
 
-Shadows follow the growth (the prepass shares the vertex shader), and the grown frames match the CPU path: over 491 gallery scenarios the mean difference between the two renders is 0.08 of 255 (79 PNGs are byte-identical, the worst is a young shrub at 2.11). What differs, and why, is listed on `GpuGrowth` in the docs: smoothing is computed once on the mature mesh and deformed, side counts stay at the mature count, `AllBranches` leaves keep their mature positions, and the `Mesh` assets (picking, physics, culling) are the mature tree. It needs storage buffers in the vertex stage, so not WebGL2; there the trees grow on the CPU.
+Shadows follow the growth (the prepass shares the vertex shader), and the grown frames match the CPU path: over 492 gallery scenarios the mean difference between the two renders is 0.08 of 255 (79 PNGs are byte-identical, the worst is a young shrub at 2.11). What differs, and why, is listed on `GpuGrowth` in the docs: smoothing is computed once on the mature mesh and deformed, side counts stay at the mature count, `AllBranches` leaves keep their mature positions, and the `Mesh` assets (picking, physics, culling) are the mature tree. It needs storage buffers in the vertex stage, so not WebGL2; there the trees grow on the CPU.
 
 ### Planting without a hitch: `BuildInBackground`
 
