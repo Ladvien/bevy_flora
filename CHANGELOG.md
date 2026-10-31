@@ -5,6 +5,54 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [0.46.1] - 2026-10-30
+
+The plant lean is a fixed share of the plant's own height (the owner's 1792016453, "This bush seems to
+be swaying with the wind a lot, but the big trees aren't even a little. This should be more uniform.").
+
+### Changed
+
+- `wind_bend`'s lean measured every species against its own trunk: the height term
+  (`h = local_y * flora.tree.x`, square) is 1.0 at *any* plant's top, so a 0.5 m shrub reached the
+  same `h` an 8 m pine did, and the `scale_y * trunk_height` factor made the lean proportional to the
+  plant's height in units. What decided who moved was the species' `sway` (the shrub presets carried
+  1.2-1.5, the pines' 0.6-0.9), so a bush leaned 4.8% of its own height and the pine 2.8% of its far
+  greater one. The lean now measures the vertex's own distance from the root
+  (`MAIN_BEND * response.x * scale_y * length(rel)`): every species leans a fixed share of its own
+  height, `MAIN_BEND` is unchanged (the top-of-plant lean is reproduced exactly), and the profile down
+  the trunk is linear in that distance rather than a square of the trunk-normalised height.
+- The presets' `wind.sway` is retuned from a 0.2-1.5 spread to a 0.9-1.6 multiplier band (bonsai
+  0.2 -> 0.9, baobab and dragon_tree 0.3 -> 0.9, redwood 0.5 -> 0.9, cypress and the dead tree
+  0.6 -> 0.9, pine, spruce, oak, cypress and the rest 0.7-1.2 -> 0.9-1.1, palm 1.5 -> 1.4, willow
+  1.4 -> 1.6; flutter and the frequencies untouched), so a species' `sway` says what the params doc
+  says it does - a willow over an oak - without a bush out-leaning a pine.
+
+### Tests
+
+- `the_lean_comes_from_the_vertexs_own_distance_from_the_root`: the shader's lean must come from
+  `length(rel)` and must not be trunk-normalised (holds 1792016453 fixed).
+- `a_shrub_and_a_pine_sway_by_near_the_same_share_of_their_own_height`: mirrors the formula over the
+  shipped presets; a pine and a shrub within 0.02 of each other's share, the pine's absolute lean
+  still greater, and the species' sway spread at most 2:1.
+- `the_uniform_holds_the_tree_and_nothing_of_the_weather`: willow's pinned response follows the retune.
+
+### Fixed
+
+- `forest --offscreen` (and `--screenshot`) never got past its first frames on Linux:
+  `WinitSettings::continuous` waits for a window's redraw there (X11 and Wayland), and an offscreen
+  run has no window, so 10 000 pooled trees sat in loading for 30 minutes. Offscreen, the benchmark
+  now runs a reactive update mode with no wait, which polls. `inspect`, which never opens a window,
+  still hangs on Linux the same way.
+
+### Known issues
+
+- The lean counts a tree's `Transform` scale twice (D-073, issue #90): `rel` is in world units and
+  the lean multiplies it by `scale_y` again, so a tree drawn at scale `s` leans `s` times the share
+  of its own height it leans at scale 1. Measured with two mature pines under a steady wind: 3.43% of
+  their height at scale 1, 10.34% at scale 3 (0.46.0: 3.14% and 3.10%). It shows in a `Scatter`
+  forest (scale 0.85-1.15 by default) as a spread of leans, and in a world in feet or centimetres,
+  whose trees are scaled by 3.28 or 100, as trees bent too far. The fix waits for a test change.
+
 ## [0.46.0] - 2026-10-13
 
 The fire's hottest spots and a save of only what burnt (issue #77): a game bucketed the burning
@@ -2734,6 +2782,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.46.1]: https://github.com/Ladvien/bevy_flora/compare/v0.46.0...v0.46.1
 [0.46.0]: https://github.com/Ladvien/bevy_flora/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/Ladvien/bevy_flora/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/Ladvien/bevy_flora/compare/v0.43.0...v0.44.0
