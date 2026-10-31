@@ -1241,7 +1241,23 @@ fn report(bench: &Bench) {
     );
 }
 
-/// CPU time this process has used so far, all threads, in seconds (`ps`, 10 ms resolution).
+/// CPU time this process has used so far, all threads, in seconds, at 10 ms resolution. Linux reads
+/// `utime + stime` from `/proc/self/stat` (clock ticks of 1/100 s: the `USER_HZ` of every Linux ABI
+/// that runs Bevy); `ps -o cputime` would print whole seconds there (`[DD-]hh:mm:ss`), which is up to
+/// 1.7 ms/frame of noise over 600 frames. Elsewhere `ps` prints `[hh:]mm:ss.cc` (macOS).
+#[cfg(target_os = "linux")]
+fn cpu_seconds() -> Option<f64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // `pid (comm) state ppid ...`: the command may hold spaces and parentheses, so count from the
+    // last `)`. After it `state` is field 3 and `utime` and `stime` are fields 14 and 15: skip 11.
+    let after_comm = stat.get(stat.rfind(')')? + 1..)?;
+    let mut fields = after_comm.split_whitespace().skip(11);
+    let utime: f64 = fields.next()?.parse().ok()?;
+    let stime: f64 = fields.next()?.parse().ok()?;
+    Some((utime + stime) / 100.0)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn cpu_seconds() -> Option<f64> {
     let out = std::process::Command::new("ps")
         .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
@@ -1254,4 +1270,22 @@ fn cpu_seconds() -> Option<f64> {
         seconds = seconds * 60.0 + part.parse::<f64>().ok()?;
     }
     Some(seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cpu_seconds;
+
+    /// The `cpu ms/frame` figure divides a difference of two readings by the frames measured, so
+    /// whole-second readings (what `ps` prints on Linux) put up to 1.7 ms/frame of rounding on it.
+    #[test]
+    fn cpu_time_resolves_a_fraction_of_a_second() {
+        let start = cpu_seconds().expect("cpu time");
+        let spin = std::time::Instant::now();
+        while spin.elapsed() < std::time::Duration::from_millis(300) {
+            std::hint::black_box(0u64);
+        }
+        let used = cpu_seconds().expect("cpu time") - start;
+        assert!((0.15..0.6).contains(&used), "300 ms of spinning measured as {used} s");
+    }
 }
