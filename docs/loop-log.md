@@ -305,3 +305,15 @@ the implementation (Fixes #87), `5e81b2f` docs.
    eleven clips, `cargo semver-checks` if installed.
 4. **D-074 / D-075**: a lone gallery scenario draws no leaves; renders not byte-identical run to run on big.
 5. **D-052 willow curtains**; owner clean-up of #90's locator test; a CPU mirror of `wind_bend`.
+
+**Clean-up (iteration 5).** Merge `434f411` on `main` (pushed, tree identical to `loop/iter-5`, so the
+gate stood). No release: v0.46.1 was 49 minutes old, the 6-hour rule; 0.47.0 (breaking: the new
+`IndexedTree` field) carries it. #87 closed by the push (`Fixes #87`), with a comment on delivery; it
+carries `assumed-decision`. Baseline kept as copies of main's three release binaries under
+`/tmp/f5/base` (no second worktree or target directory: `git worktree list` shows only the clone).
+Removed, mine: `/tmp/f5` (720 MB: binaries, captures, findings, critique), the release example
+binaries and incremental caches of `gallery`, `forest`, `compare_gallery` and `zz_probe`, the debug
+incremental caches and `bevy_flora` rlibs and test binary this pass built, and
+`package/bevy_flora-0.46.1*` in `CARGO_TARGET_DIR`; `df -h /` 6.1 GB free before, 12 GB after. Kept: the
+target directory's dependency builds. Leftovers of earlier passes: none found (no `f*_base` in `~` or
+`/tmp`); the branches `loop/iter-1` to `-5` remain on origin, not deleted.
