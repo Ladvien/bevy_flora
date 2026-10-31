@@ -11,7 +11,7 @@ import package::gpu::growth_common::{GrowthAttrs, grown_position, leaf_growth_sc
 import package::shading::common::{flutter_offset, shake_at, wind_bend};
 
 @if(FLORA_LEAF)
-import package::shading::common::{leaf_has_fallen, leaf_hidden, FALLEN_LEAF_CLIP};
+import package::shading::common::{leaf_has_fallen, leaf_hidden, leaf_defoliated, FALLEN_LEAF_CLIP};
 
 @if(FLORA_FIRE && FLORA_LEAF)
 import package::shading::common::{fire_at, leaf_burnt};
@@ -35,15 +35,18 @@ fn vertex(
 ) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
-    // Hidden leaves and flowers leave early, as in `shading/vertex.wesl`.
+    // Hidden leaves and flowers leave early, as in `shading/vertex.wesl`, and so do the leaves a
+    // sick or dying tree has lost (`TreeCondition`).
+@if(FLORA_LEAF)
+    let tag = mesh_functions::get_tag(vertex_no_morph.instance_index);
 @if(FLORA_LEAF && VERTEX_COLORS) {
-    if leaf_hidden(sway, vertex.color) {
+    if leaf_hidden(sway, vertex.color) || leaf_defoliated(sway, vertex.color.a, tag) {
         out.position = FALLEN_LEAF_CLIP;
         return out;
     }
 }
 @if(FLORA_LEAF && !VERTEX_COLORS) {
-    if leaf_has_fallen(sway) {
+    if leaf_has_fallen(sway) || leaf_defoliated(sway, 1.0, tag) {
         out.position = FALLEN_LEAF_CLIP;
         return out;
     }
