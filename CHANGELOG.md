@@ -5,10 +5,10 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
-## [Unreleased]
+## [0.47.0] - 2026-10-31
 
-Per-tree condition (issue #87): a game marks a tree sick or dying, reads it back through `FloraIndex`,
-and the tree is drawn in it. And a willow that weeps (D-052): pendant strands hang to the ground.
+A tree can be sick or dying and is drawn so (issue #87); the willow weeps to the ground (D-052); and a growing
+branch keeps every leaf where it was, so the CPU tree and `GpuGrowth` put them in the same places (D-078).
 
 ### Added
 
@@ -2956,6 +2956,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[0.47.0]: https://github.com/Ladvien/bevy_flora/compare/v0.46.1...v0.47.0
 [0.46.1]: https://github.com/Ladvien/bevy_flora/compare/v0.46.0...v0.46.1
 [0.46.0]: https://github.com/Ladvien/bevy_flora/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/Ladvien/bevy_flora/compare/v0.44.0...v0.45.0
