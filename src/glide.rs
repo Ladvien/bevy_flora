@@ -18,6 +18,7 @@ use bevy::platform::collections::HashMap;
 use bevy::render::storage::ShaderBuffer;
 use bevy::time::Time;
 
+use crate::condition::TreeCondition;
 use crate::felling::TreeStump;
 use crate::pool::{PoolColors, PoolRecolors, RecolorPool, TreePool};
 use crate::push::{PUSH_SLOT, PUSH_VECTORS};
@@ -32,7 +33,8 @@ pub(crate) const MAX_GLIDE_LOOKS: usize = 64;
 /// number.
 pub(crate) const GLIDE_SLOT: usize = PUSH_SLOT + PUSH_VECTORS;
 
-/// The glide vectors: a header (x 1 while a look glides) and two per tag, what the look's wood and
+/// The glide vectors: a header (x 1 while a look glides, y 1 while any tree has a `TreeCondition`)
+/// and two per tag, what the look's wood and
 /// its leaves are multiplied by (linear rgb).
 pub(crate) const GLIDE_VECTORS: usize = 1 + 2 * MAX_GLIDE_LOOKS;
 
@@ -190,13 +192,36 @@ pub(crate) fn glide_looks(
         return;
     }
     tints.0 = wanted;
-    let (Some(buffer), Some(buffers)) = (buffer, buffers.as_deref_mut()) else { return };
+    write_tints(&tints, buffer.as_deref(), buffers.as_deref_mut());
+}
+
+/// Write the glide vectors into the shared buffer in place, when it exists.
+fn write_tints(tints: &GlideTints, buffer: Option<&FloraWindBuffer>, buffers: Option<&mut Assets<ShaderBuffer>>) {
+    let (Some(buffer), Some(buffers)) = (buffer, buffers) else { return };
     let Some(mut shader_buffer) = buffers.get_mut(&buffer.0) else { return };
     if let Some(slice) = shader_buffer.cast_slice_mut::<[f32; 4]>()
         && slice.len() >= GLIDE_SLOT + GLIDE_VECTORS
     {
         slice[GLIDE_SLOT..GLIDE_SLOT + GLIDE_VECTORS].copy_from_slice(&tints.0);
     }
+}
+
+/// Whether any tree has a [`TreeCondition`], for the shaders: the glide header's second lane is 1
+/// while one does (its first is 1 while a look glides). The vertex stages read a mesh's tag only
+/// while one of the two is set, so a forest of healthy trees that glides nowhere reads none: the
+/// tag is per instance, the header one address for every vertex.
+pub(crate) fn sync_condition_flag(
+    trees: Query<(), With<TreeCondition>>,
+    mut tints: ResMut<GlideTints>,
+    buffer: Option<Res<FloraWindBuffer>>,
+    mut buffers: Option<ResMut<Assets<ShaderBuffer>>>,
+) {
+    let any = if trees.is_empty() { 0.0 } else { 1.0 };
+    if tints.0[0][1] == any {
+        return;
+    }
+    tints.0[0][1] = any;
+    write_tints(&tints, buffer.as_deref(), buffers.as_deref_mut());
 }
 
 /// The multipliers of `tag` back to 1.
@@ -263,6 +288,37 @@ mod tests {
         let handle = &app.world().resource::<FloraWindBuffer>().0;
         let buffers = app.world().resource::<Assets<ShaderBuffer>>();
         buffers.get(handle).unwrap().cast_slice::<[f32; 4]>().unwrap()[GLIDE_SLOT..GLIDE_SLOT + GLIDE_VECTORS].to_vec()
+    }
+
+    #[test]
+    fn the_shaders_are_told_while_any_tree_has_a_condition_and_not_otherwise() {
+        use crate::ProceduralTree;
+        let mut app = app();
+        let flag = |app: &App| shared(app)[0][1];
+        app.update();
+        app.update();
+        assert_eq!(flag(&app), 0.0, "no tree has a condition");
+        let tree = app.world_mut().spawn(ProceduralTree(TreePreset::Oak.params())).id();
+        app.update();
+        app.update();
+        assert_eq!(flag(&app), 0.0, "a tree with none");
+        app.world_mut().entity_mut(tree).insert(TreeCondition::Sick);
+        app.update();
+        assert_eq!(flag(&app), 1.0, "one sick tree");
+        assert_eq!(shared(&app)[0][0], 0.0, "and no look glides");
+        // The weather rewritten (a season change) keeps it; so does a healthy tree beside the sick one.
+        app.world_mut().resource_mut::<crate::FloraSeason>().autumn = 0.5;
+        app.world_mut().spawn(ProceduralTree(TreePreset::Oak.params()));
+        app.update();
+        app.update();
+        assert_eq!(flag(&app), 1.0);
+        // Healthy is still a condition (the component is there); taken off or despawned, none is.
+        app.world_mut().entity_mut(tree).insert(TreeCondition::Healthy);
+        app.update();
+        assert_eq!(flag(&app), 1.0);
+        app.world_mut().entity_mut(tree).despawn();
+        app.update();
+        assert_eq!(flag(&app), 0.0);
     }
 
     #[test]

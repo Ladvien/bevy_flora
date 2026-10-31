@@ -40,7 +40,7 @@ use bevy::ui::UiTargetCamera;
 use bevy::window::WindowResolution;
 use bevy_flora::{
     CrownShape, CrownStyle, FloraPlugin, FloraSeason, FloraWind, FoliagePlacement, GpuGrowth, GpuGrowthSupport,
-    LeafOrientation, LeafStyle, MeshData, NodeKind, ProceduralTree, RenderStyle, TreeAge, TreeMeshes, TreeParams,
+    LeafOrientation, LeafStyle, MeshData, NodeKind, ProceduralTree, RenderStyle, TreeAge, TreeCondition, TreeMeshes, TreeParams,
     TreePreset, TrunkStyle, TrunkTermination, build_tree,
 };
 
@@ -60,6 +60,8 @@ struct Scenario {
     age: f32,
     /// The season the scenario is rendered in; summer unless it is one of the season scenarios.
     season: FloraSeason,
+    /// The tree's condition; healthy unless it is one of the condition scenarios.
+    condition: TreeCondition,
 }
 
 fn preset(preset: TreePreset) -> TreeParams {
@@ -72,7 +74,7 @@ fn scenarios() -> Vec<Scenario> {
     let inf = f32::INFINITY;
     let mut list = Vec::new();
     let mut add = |name: String, params: TreeParams, age: f32| {
-        list.push(Scenario { name, params, age, season: FloraSeason::SUMMER });
+        list.push(Scenario { name, params, age, season: FloraSeason::SUMMER, condition: TreeCondition::Healthy });
     };
 
     for p in TreePreset::ALL {
@@ -413,7 +415,7 @@ fn scenarios() -> Vec<Scenario> {
             ("winter", FloraSeason::WINTER),
             ("snow", FloraSeason::SNOW),
         ] {
-            list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season });
+            list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season, condition: TreeCondition::Healthy });
         }
     }
     // A flowering tree's spring: in full blossom on bare branches, flowering as half its leaves
@@ -424,7 +426,7 @@ fn scenarios() -> Vec<Scenario> {
         ("petals", FloraSeason { leaf_fall: 0.1, blossom: 0.3, ..FloraSeason::SUMMER }),
     ] {
         let p = TreePreset::Cherry;
-        list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season });
+        list.push(Scenario { name: format!("season_{}_{name}", p.name()), params: preset(p), age: inf, season, condition: TreeCondition::Healthy });
     }
 
     // The stylised conifers: a faceted hull crown on a flat-shaded prism trunk (`CrownStyle::Hull`,
@@ -444,17 +446,69 @@ fn scenarios() -> Vec<Scenario> {
         params.crown = CrownStyle::Hull { tiers, sides, lift: 0.2, jitter: 1.0, trunk_only: true };
         params.trunk_style = TrunkStyle::Prism { sides: 5 };
         for age in [inf, 2.0, 5.0] {
-            list.push(Scenario { name: format!("{name}_{age}"), params: params.clone(), age, season: FloraSeason::SUMMER });
+            list.push(Scenario { name: format!("{name}_{age}"), params: params.clone(), age, season: FloraSeason::SUMMER, condition: TreeCondition::Healthy });
         }
-        list.push(Scenario { name: format!("{name}_snow"), params, age: inf, season: FloraSeason::SNOW });
+        list.push(Scenario { name: format!("{name}_snow"), params, age: inf, season: FloraSeason::SNOW, condition: TreeCondition::Healthy });
     }
 
     // The evergreen undergrowth presets, in summer and under snow (their needles and fronds stay
     // green in autumn and winter, so the snow is the only change).
     for p in [TreePreset::Juniper, TreePreset::Fern] {
         for (name, season) in [("summer", FloraSeason::SUMMER), ("snow", FloraSeason::SNOW)] {
-            list.push(Scenario { name: format!("undergrowth_{}_{name}", p.name()), params: preset(p), age: inf, season });
+            list.push(Scenario { name: format!("undergrowth_{}_{name}", p.name()), params: preset(p), age: inf, season, condition: TreeCondition::Healthy });
         }
+    }
+
+    // A tree's condition (`TreeCondition`): sick, and dying, on a broadleaf, a conifer, a weeping
+    // tree, the flowering and the fruiting tree (the apple's fruit stays: it is the game's to
+    // count), a palm, a shrub and a fern.
+    for p in [
+        TreePreset::Oak,
+        TreePreset::Maple,
+        TreePreset::Birch,
+        TreePreset::Pine,
+        TreePreset::Spruce,
+        TreePreset::Willow,
+        TreePreset::Cherry,
+        TreePreset::Apple,
+        TreePreset::Palm,
+        TreePreset::Shrub,
+        TreePreset::Fern,
+    ] {
+        for (name, condition) in [("sick", TreeCondition::Sick), ("dying", TreeCondition::Dying)] {
+            list.push(Scenario {
+                name: format!("condition_{}_{name}", p.name()),
+                params: preset(p),
+                age: inf,
+                season: FloraSeason::SUMMER,
+                condition,
+            });
+        }
+    }
+    // Composed with the season (the condition's gaps and dry leaves under autumn colour and falling
+    // leaves), while growing (the GPU's twin of each; the leaves a young tree has are the ones it
+    // will keep), and on the stylised conifer (a hull crown withers and keeps its facets).
+    let mut hull = preset(TreePreset::Spruce);
+    hull.crown = CrownStyle::Hull { tiers: 5, sides: 7, lift: 0.2, jitter: 1.0, trunk_only: true };
+    hull.trunk_style = TrunkStyle::Prism { sides: 5 };
+    for (name, p, age, season, condition) in [
+        ("condition_maple_sick_autumn", TreePreset::Maple, inf, FloraSeason::AUTUMN, TreeCondition::Sick),
+        ("condition_maple_dying_autumn", TreePreset::Maple, inf, FloraSeason::AUTUMN, TreeCondition::Dying),
+        ("condition_oak_sick_falling", TreePreset::Oak, inf, FloraSeason { leaf_fall: 0.5, ..FloraSeason::AUTUMN }, TreeCondition::Sick),
+        ("condition_oak_sick_4", TreePreset::Oak, 4.0, FloraSeason::SUMMER, TreeCondition::Sick),
+        ("condition_oak_dying_6", TreePreset::Oak, 6.0, FloraSeason::SUMMER, TreeCondition::Dying),
+        ("condition_pine_dying_6", TreePreset::Pine, 6.0, FloraSeason::SUMMER, TreeCondition::Dying),
+    ] {
+        list.push(Scenario { name: name.to_string(), params: preset(p), age, season, condition });
+    }
+    for (name, condition) in [("sick", TreeCondition::Sick), ("dying", TreeCondition::Dying)] {
+        list.push(Scenario {
+            name: format!("condition_hull_spruce_{name}"),
+            params: hull.clone(),
+            age: inf,
+            season: FloraSeason::SUMMER,
+            condition,
+        });
     }
 
     list
@@ -826,7 +880,7 @@ fn check_capture(captured: On<ScreenshotCaptured>, mut gallery: ResMut<Gallery>)
 fn drive(
     mut commands: Commands,
     mut gallery: ResMut<Gallery>,
-    mut tree: Single<(&mut ProceduralTree, &mut TreeAge)>,
+    mut tree: Single<(Entity, &mut ProceduralTree, &mut TreeAge)>,
     mut cameras: Query<(&ViewCam, &mut Transform)>,
     mut overlay: Single<&mut Text, With<Overlay>>,
     screenshots: Query<Entity, With<Screenshot>>,
@@ -853,11 +907,17 @@ fn drive(
             let scenario = &gallery.scenarios[gallery.index];
             let (params, age) = (&scenario.params, scenario.age);
 
-            let (tree_params, tree_age) = &mut *tree;
+            let (id, tree_params, tree_age) = &mut *tree;
             tree_params.0 = params.clone();
             tree_params.set_changed();
             tree_age.0 = age;
             tree_age.set_changed();
+            // A healthy scenario has no condition at all, so going from a sick one to it also
+            // exercises taking the component off.
+            match scenario.condition {
+                TreeCondition::Healthy => commands.entity(*id).remove::<TreeCondition>(),
+                condition => commands.entity(*id).insert(condition),
+            };
             if *season != scenario.season {
                 *season = scenario.season;
             }
