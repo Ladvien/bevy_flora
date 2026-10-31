@@ -93,3 +93,18 @@ what it rests on; this file only says what exists. Newest additions last in each
 - Web, not indexed: SpeedTree Modeler manual (Unity), "Branch generator properties", Segments:
   Radial (Absolute, + Relative from the branch radius) and Dynamic LOD,
   <https://docs.unity3d.com/speedtree-modeler/manual/branch-generator-properties.html>.
+
+## Spatial queries (`FloraIndex`)
+
+- `book_real_time_collision_detection_ericson`: Ericson, "Real-Time Collision Detection", chapter 7
+  (uniform grids: dense, sparse and hashed storage; a hashed grid holds only the occupied cells).
+- `10.1145_1730804.1730814`: Laine and Karras 2010, "Efficient Sparse Voxel Octrees" (quotes the
+  Amanatides and Woo regular-grid traversal: the next-plane `t` values per axis, step along the
+  smallest).
+- `eth-cgl-sim_anim-Sol14a`: "SPH Fluids in Computer Graphics" (the hashed grid's occupancy:
+  "generally sparsely filled").
+- `10.1111_j.1467-8659.2005.00829.x`: Teschner et al. 2005, "Collision Detection for Deformable
+  Objects" (spatial subdivision and hashing for neighbourhood queries).
+- Web, not indexed: Clark and Evans 1954, "Distance to Nearest Neighbor as a Measure of Spatial
+  Relationships in Populations", doi `10.2307/1931034` (paywalled); the 1979 generalisation to k
+  dimensions, doi `10.2307/1937660`.
