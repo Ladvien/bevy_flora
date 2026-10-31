@@ -82,3 +82,7 @@ release's pull request, by the same rule as a clip (`AGENTS.md`, step 2). None i
 
 None. A clip longer than 8 seconds belongs on [the book page](https://bevy-coven.github.io/crates/bevy_flora.html),
 as an MP4 with a poster.
+
+## Copies at the old paths
+
+Until 2026-10-31 these files lived directly under `docs/` (and some under other `docs/` folders). Every release published before then has a README on crates.io and docs.rs whose image URLs name those old paths, and a published README never changes. So each moved file also stays at its old path, as an identical copy: git stores the same content once, so a copy costs nothing in the repository's size. **Do not delete them as duplicates**; when one of the files here is re-recorded, the old-path copy is updated with it (`docs/media/` is the one new references use). The org's rule is in [DOCUMENTATION.md](https://github.com/bevy-coven/.github/blob/main/DOCUMENTATION.md#image-and-link-urls-in-a-readme).
