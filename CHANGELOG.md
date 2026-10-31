@@ -5,6 +5,54 @@ All notable changes to `bevy_flora`. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version bump
 (`0.x`) may break the API.
 
+## [Unreleased]
+
+A leaf that appears on a growing branch grows from nothing instead of popping in (`docs/research/leaf-ease-in.md`).
+
+### Changed
+
+- **A leaf eases in** (`FoliagePlacement::AllBranches`: oak, willow, maple, spruce, pine, japanese maple,
+  shrub, cherry, apple, juniper, fern). Leaves keep their places as a branch lengthens (0.47.0), but the
+  one that appeared still appeared at its node's whole leaf size: measured over every `AllBranches` preset,
+  a tree swept from 0 to maturity in 0.05-year steps (the README clip's pace), a leaf was on average a
+  third of its mature size at first sight, one in four more than half of it, the largest at full size (a
+  33 cm oak card out of nothing: an oak popped 1.5 leaves a frame, a willow 16). A branch now carries a
+  real number of leaves (`density * length * height_mod`, at least one), and the leaf whose turn comes
+  next is born at nothing and grows to its size, smoothstep, over the growth of branch the following leaf
+  takes to be born; the leaves before it are whole, so a leaf is never larger than when grown and a
+  mature tree is what it was, byte for byte. At 0.01-year steps no leaf is above 0.03 of its size at
+  first sight (the willow's strands; 0.01 for the rest) and none changes size by more than 0.18 between
+  two steps (both were 1.00 at 0.05-year steps).
+- A young tree carries one more, part-grown, leaf per branch than it did, so a CPU build of one has more
+  foliage: a median 13% more leaf vertices over the young gallery scenarios (up to 60% on a Japanese maple
+  with five leaves), and takes up to 7% longer to build at age 4 (the shrub 0.69 to 0.73 ms, the spruce 0.40
+  to 0.42 ms, the juniper 0.33 to 0.34 ms, the maple 0.32 to 0.33 ms); a mature tree builds as fast as
+  before (within 1%), and a pool, a level of detail or an impostor (built from the mature tree) costs what
+  it did (the forest bench: 10 000 pooled oaks 4.99 to 4.97 ms a frame, 1 000 naive 34.98 to 34.98,
+  1 000 growing on the GPU 176.9 to 176.3, interleaved, medians of four).
+- `GpuGrowth` shows the same: the node buffer's `leaf_count` is the real number (it was truncated), and
+  the vertex stage scales a leaf by `smoothstep(clamp(leaf_count - rank, 0, 1))` times the node's leaf
+  scale (`growth_common.wesl`, `piece_scale`; mirrored in `gpu/frame.rs`), so the CPU tree and the
+  GPU-grown tree agree on a leaf's size as well as its place. CPU against GPU over the gallery: mean of
+  means 0.029 of 255 (0.030 before), worst 1.16 (1.19), and the seven CI scenarios 0.218 and 0.922
+  (0.221 and 0.920).
+- Of the 526 gallery scenarios, 462 are the same images; the 64 that changed are young trees of the
+  eleven `AllBranches` presets (`grow_*`, `age_*`, `*young_*`, `hull_*` at ages 2 and 5, `condition_*`
+  at 4 and 6, `extreme_fastgrow_2`, `extreme_lagthick_6`, `strands_oak_4`), by 0.1 of 255 on average and
+  1.6 at most (`hull_spruce_2`: the stylised hull crown is built from where the leaves are, whatever their
+  size, so a part-grown leaf moves it a little earlier); no scenario at maturity moved (`stats.tsv`
+  columns 1-10 are identical for all of them, on the CPU and under `--gpu`).
+
+### Tests
+
+- `a_leaf_that_appears_grows_from_nothing` (every `AllBranches` preset, 0.01-year steps: no leaf above a
+  tenth of its size at first sight, none moving by more than 0.3 of it between steps; it fails on the old
+  pop, an oak leaf appearing at 0.365 of its size), `a_leaf_is_born_at_nothing_and_reaches_its_size_over_the_next_leafs_growth`
+  (the curve: 0 before its turn, 1 a leaf-spacing later, slow in and out, a branch's first leaf always
+  whole), and `all_branches_leaves_appear_as_the_branch_lengthens` now also requires leaves easing in on
+  the GPU side (`grown_leaves_and_flowers_match_the_cpu_meshers` holds every part-grown leaf's vertices
+  to the CPU mesher's).
+
 ## [0.47.0] - 2026-10-31
 
 A tree can be sick or dying and is drawn so (issue #87); the willow weeps to the ground (D-052); and a growing
@@ -2956,6 +3004,7 @@ The first release.
   four-view renders and per-scenario statistics for visual QA) and `capture_growth` (the README
   clip).
 
+[Unreleased]: https://github.com/Ladvien/bevy_flora/compare/v0.47.0...HEAD
 [0.47.0]: https://github.com/Ladvien/bevy_flora/compare/v0.46.1...v0.47.0
 [0.46.1]: https://github.com/Ladvien/bevy_flora/compare/v0.46.0...v0.46.1
 [0.46.0]: https://github.com/Ladvien/bevy_flora/compare/v0.45.0...v0.46.0
