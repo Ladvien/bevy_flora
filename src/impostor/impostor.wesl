@@ -13,7 +13,8 @@ import bevy_pbr::render::{
 };
 import package::shading::common::{
     flora, flora_wind, wind_bend, shake_at, oct_decode, transmitted_light, leaf_gloss_toward_light, toon_lighting, toon_rim,
-    snow_on, snow_shelter, wet_on, LEAF_FROST,
+    snow_on, snow_shelter, wet_on, LEAF_FROST, tree_condition, condition_defoliation, condition_withering,
+    condition_own_withering, tags_read,
 };
 import package::impostor::impostor_common::impostor_corner;
 
@@ -108,11 +109,40 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     // A gliding look (`RecolorPool::glide`): the wood, and the leaves that have not turned, take
     // the look's blend; turned leaves keep the species' autumn colour.
     var glide = vec3<f32>(1.0);
+    var tag = 0u;
+    if tags_read() {
+        tag = mesh_functions::get_tag(in.instance_index);
+    }
 @if(FLORA_GLIDE)
     if gliding() {
-        glide = glide_tint(mesh_functions::get_tag(in.instance_index), baked.a > 0.5);
+        glide = glide_tint(tag, baked.a > 0.5);
     }
-    color = vec4<f32>(color.rgb * mix(glide, flora.autumn.rgb, turn), color.a * (1.0 - season.y * leafy));
+    // A sick or dying tree (`TreeCondition`, in the mesh's tag): its leafy texels wither toward the
+    // dry leaf colour (from whatever colour the season gives them) and the crown thins by the share
+    // of its leaves the class has lost, in patches like the season's (and, where a pixel spans
+    // several, the share of them), so a far crown shows the class the meshes show. A hull crown
+    // keeps its facets (`flora.tree.y`).
+    var wither = 0.0;
+    var thin = 0.0;
+    // Patches twice the season's width, about a leaf: a crown thinned in single leaf-sized gaps
+    // reads as leaves lost, where finer ones read as noise (`fwidth` stays out of the branch below).
+    let cell = spot / 2.0;
+    let cell_spread = saturate(max(fwidth(cell.x), fwidth(cell.y)) - 0.5);
+    let condition = tree_condition(tag);
+    if condition != 0u {
+        // Where the picture is leaf: the colour moves only where it is mostly leaf (a soft wood
+        // texel next to a leaf would flare, the ratio is large), the coverage thins wherever there
+        // is a trace of one, so the soft edge of a lost leaf goes with it.
+        let leaf_core = smoothstep(0.4, 0.9, baked.a);
+        let leaf_edge = saturate(baked.a * 4.0);
+        let own = fract(sin(dot(floor(cell), vec2<f32>(21.19, 47.83))) * 17317.371);
+        wither = condition_own_withering(condition_withering(condition), mix(own, 0.5, cell_spread)) * leaf_core;
+        let lost = condition_defoliation(condition) * select(1.0, 0.0, flora.tree.y > 0.5);
+        let draw = fract(sin(dot(floor(cell), vec2<f32>(63.1, 17.7))) * 9741.3);
+        thin = mix(step(draw, lost), lost, cell_spread) * leaf_edge;
+    }
+    let tint = mix(mix(glide, flora.autumn.rgb, turn), flora.withered.rgb, wither * flora.withered.w);
+    color = vec4<f32>(color.rgb * tint, color.a * (1.0 - season.y * leafy) * (1.0 - thin));
     // A flowering tree (`FoliageParams::blossom`) wears its flowers in patches as they open, over
     // its leaves or on the bare crown in early spring; the picture was baked without them.
     let flower_spot = fract(sin(dot(floor(spot), vec2<f32>(39.346, 11.135))) * 24634.634);

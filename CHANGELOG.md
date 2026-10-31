@@ -7,8 +7,8 @@ All notable changes to `bevy_flora`. The format follows
 
 ## [Unreleased]
 
-Per-tree condition (issue #87): a game marks a tree sick or dying and reads it back through
-`FloraIndex`.
+Per-tree condition (issue #87): a game marks a tree sick or dying, reads it back through `FloraIndex`,
+and the tree is drawn in it.
 
 ### Added
 
@@ -17,8 +17,32 @@ Per-tree condition (issue #87): a game marks a tree sick or dying and reads it b
   without one is healthy, so a pooled forest pays nothing for the trees that are well; inserting
   `Healthy` or removing the component clears it. It is the tree's own, not its pool's: it survives a
   change of variant, a reload of the pool, and a `PooledTree` taken off its entity and put back. A felled
-  tree keeps the component as it was cut and leaves the index. State only: the crate draws a sick tree as
-  a healthy one (the look is the next slice; recolour with `RecolorTree` or a `PooledLook` meanwhile).
+  tree keeps the component as it was cut and leaves the index.
+- The tree is **drawn in its condition**. A `Sick` crown loses about a third of its leaves
+  (`TreeCondition::defoliation()`, 0.35) and the leaves that stay wither half way to a dry ochre-brown
+  (`TreeCondition::withering()`, 0.5), each its own way, so it is thin and mottled; a `Dying` one loses
+  four fifths (0.8) and what is left is dry (1.0). Wood, fruit and flowers are as they were; the lost
+  leaves are lost in the shadow maps too (a thin crown lets the light through). Every way a tree is
+  drawn shows it: the main pass, the prepass and shadows, every level of detail of a `TreeLod` or a
+  pool, the impostors (patches of the baked crown wither and thin), and trees that grow on the GPU
+  (`GpuGrowth`; CPU against GPU over the condition scenarios: mean of means 0.023 of 255). It composes
+  with `FloraSeason` (a sick tree's leaves wither from the colour the season gives them to the dry
+  colour, a mix and not a product; its lost leaves are lost whatever the season does) and with
+  `RecolorTree` and `PooledLook`. The class travels in bits 8 and 9 of the `MeshTag` of every mesh the
+  tree is drawn with, above the glide tag of a pooled look, so trees of one mesh and material still draw
+  in one batch whatever their conditions, and a tree with no condition draws exactly as before (all 492
+  earlier gallery scenarios, byte for byte). The shaders read the tag only while some tree has a
+  condition or a look glides (the glide header of the shared buffer, `tags_read`), so a forest of healthy
+  trees pays no per-instance fetch. A device with no flora materials (WebGL2) shows the state and not
+  the look.
+- Leaves that fall from a sick or dying tree (a shake, a landing, the season's leaf fall, `DropLeaves`)
+  are leaves it still has, and fall as dry as those left on it.
+- `TreeCondition::defoliation()` and `TreeCondition::withering()`: the shares, public.
+- `FloraUniform::withered`: the ratio of the dry leaf colour to the species' leaf colour (as `autumn` is of
+  the autumn colour), zero for wood.
+- `gallery`: 30 `condition_*` scenarios (sick and dying on eleven presets, a young oak, a young pine,
+  autumn and leaf fall, and the stylised hull conifer); `inspect --condition sick|dying`;
+  `forest --sick <share> --dying <share>`.
 - `IndexedTree::condition` and `FloraIndex::condition_of(entity) -> Option<TreeCondition>` (`None` for a
   tree the index does not hold). The plugin keeps them up to date from `Changed<TreeCondition>` and
   `RemovedComponents<TreeCondition>`, and reads the component whenever it indexes a tree, so a condition
@@ -29,7 +53,8 @@ Per-tree condition (issue #87): a game marks a tree sick or dying and reads it b
 ### Changed
 
 - **Breaking:** `IndexedTree` has a new public field, `condition`, so a struct literal of it needs one
-  (a game builds none: the index hands them out). The next release is a minor one.
+  (a game builds none: the index hands them out); `FloraUniform` has a new public field, `withered`
+  (a struct literal of it needs one; the plugin builds every one). The next release is a minor one.
 
 ### Tests
 
@@ -38,8 +63,14 @@ Per-tree condition (issue #87): a game marks a tree sick or dying and reads it b
   `a_condition_set_before_the_tree_is_indexed_applies_when_it_is`,
   `a_felled_trees_condition_does_not_panic_and_stays_on_its_entity` and
   `a_recolour_and_a_condition_in_one_frame_both_apply_and_equal_looks_still_share_a_material`: the five
-  acceptance criteria of #87. `index.rs`'s `tree()` helper gains `condition: Healthy` (an assumed owner
-  exception: a new field's default in a literal; no assertion changed).
+  acceptance criteria of #87 (the last now also proves that a condition makes no material of its own).
+  `index.rs`'s `tree()` helper gains `condition: Healthy` (an assumed owner exception: a new field's
+  default in a literal; no assertion changed).
+- `the_meshes_of_a_tree_carry_its_condition_as_set_changed_rebuilt_and_cleared`,
+  `a_pooled_trees_meshes_keep_their_looks_tag_beside_the_condition`,
+  `a_declined_leaf_is_lost_by_its_own_draw_and_withers_toward_the_dry_colour`,
+  `a_dying_tree_drops_only_the_leaves_it_has_left_and_they_fall_dry` and
+  `a_withered_leaf_takes_the_dry_colour_whatever_the_species_and_wood_never_withers`.
 
 ## [0.46.1] - 2026-10-30
 

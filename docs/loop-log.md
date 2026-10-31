@@ -317,3 +317,122 @@ incremental caches and `bevy_flora` rlibs and test binary this pass built, and
 `package/bevy_flora-0.46.1*` in `CARGO_TARGET_DIR`; `df -h /` 6.1 GB free before, 12 GB after. Kept: the
 target directory's dependency builds. Leftovers of earlier passes: none found (no `f*_base` in `~` or
 `/tmp`); the branches `loop/iter-1` to `-5` remain on origin, not deleted.
+
+## Iteration 6 — 2026-10-31 — TreeCondition is drawn: a sick crown thins and mottles, a dying one is bare and dry (#87)
+
+Host: this Mac (Apple M5, Metal, macOS 26.6.2), not big. Disk 12 GB free at the start, about 4 GB before
+the clean-up (the shared `CARGO_TARGET_DIR` is 78 GB). HomeStill: `system_status` ok (18 668 documents,
+488 794 embedded chunks), `scribe_health` ok; `distill_search` and `hs distill search` answered a GPU-busy
+500 to every query (bge-m3 wanted 5 000 MB, 2 500 to 2 800 free), so the sources were read with
+`markdown_read` and `paper_search`. Corpus re-scan of `catalog_recent` (200): one relevant paper
+(`10.3832_ifor0538-003`, crown defoliation as an indicator; in the catalog, its conversion did not return
+within the call) and one general text (Flake, "The Computational Beauty of Nature"), as `Research: corpus`.
+
+**State found.** No open issue on `bevy_flora` (the last five, #90-#94, are closed), no `consumer` label, no
+parked branch (`git branch --list 'wiggum/parked-*'` empty), bevy_emerge's family issue F6 (#102) closed and
+no open issue there naming this crate. v0.46.1 was 52 minutes old, so the 6-hour rule allows no release this
+pass; 0.47.0 (breaking: `IndexedTree::condition`, now also `FloraUniform::withered`) carries it.
+
+**Pick.** The look of a condition, the first item of iteration 5's backlog: #87 asks for a sick tree that "the
+player can read ... as a symptom rather than as scenery", and iteration 5 shipped only the state. Ranked:
+(1) the look; (2) release 0.47.0 (blocked until 04:42 local); (3) D-074 / D-075, the two harness bugs: **not
+reproducible here**, `gallery --filter extreme_mesh` and `--filter extreme_crossed_sides` alone drew their
+leaves and HUD at a warmup of 0, 5 and 20 s on Metal, so they cannot be worked on this host (reading
+`gallery.rs`, the four cameras stand at the origin, inside the tree, until `Phase::Apply`, so the leaf
+pipelines may not be requested until then; a suspicion for the next pass on big, not tested); (4) D-052
+willow curtains; (5) a gradual decline. Dropped from the backlog: the `.tree.ron` round trip, which
+`tree_asset::tests::every_preset_survives_a_tree_file` already holds (`from_ron(to_ron(p)) == p` for every
+preset, and equal parameters build the same tree).
+
+**What changed.**
+
+- A tree is drawn in its `TreeCondition`. The class travels in bits 8-9 of the `MeshTag` of every mesh the
+  tree is drawn with, above a pooled look's glide tag (the low byte): `sync_condition_tags` (PostUpdate,
+  only trees that have the component) writes it, `spawn_pooled_trees` and `sync_pooled_looks` carry it with
+  the look's tag, so equal mesh and material still batch and no material is made for a condition (a test
+  holds the material count).
+- The leaf vertex stages (main pass, prepass and shadow maps, GPU growth) hide `TreeCondition::defoliation`
+  of the leaves (sick 0.35, dying 0.8; a per-leaf draw from the leaf's phase, not the season's moment) and
+  move the colour multiplier the season gives each leaf toward a dry ochre-brown by
+  `TreeCondition::withering` (0.5, 1.0, each leaf 0.4 either side) through `FloraUniform::withered`, the
+  ratio of the dry colour to the species' leaf colour. Flowers and fruit (alpha below 0.5) and wood are not
+  touched, so what `TreeFruit` counts is what is drawn; a hull crown keeps its facets. The impostor does it
+  per leaf-sized patch of baked texels. A mix toward the dry colour, not a product with the season's ratio
+  (the first build multiplied, and a sick maple's autumn leaves came out pink-white).
+- Falling leaves: `condition::Decline` mirrors the draw in `falling.rs` (a leaf the shaders hide is not
+  chosen to fall) and the burst carries each leaf's withering in the fourth lane of `ATTRIBUTE_FALL_FACE`
+  for `falling.wesl`, so they fall as dry as those on the tree.
+- The shaders read the tag only while the glide header's lane y or x says some tree has a condition or a look
+  glides (`tags_read`, `glide::sync_condition_flag`).
+- `gallery`: 30 `condition_*` scenarios (522 in all; two join CI's GPU-parity filters, additive);
+  `inspect --condition sick|dying`; `forest --sick <share> --dying <share>`.
+- Breaking: `FloraUniform::withered` is a new public field (with `IndexedTree::condition`, next release
+  0.47.0).
+- **Assumed decision (owner may override)**, to go on #87 (it carries `assumed-decision`): the shares 0.35 and
+  0.8 (the survey's slightly-to-moderately and severely declining grades), the withering 0.5 and 1.0 and the dry
+  colour srgb (0.47, 0.31, 0.11) are design defaults; the alternatives were the species' autumn colour for the
+  dry leaf (a dying maple would look like autumn) and a continuous severity (the issue asks for three
+  classes). Recorded as D-076.
+
+**Sources.** Botanical: `10.3390_f8040137` ("It is a visual indicator of the relative amount of foliage in the
+crown of the assessed tree"; "symptoms displayed on leaves and branches"), `10.1007_s10342-005-0085-3`
+("defoliation by insects becomes first visible in crown transparency ... foliage reduction becomes only
+visible months later"), `10.3389_fpls.2026.1809811` (the grades). Shipping game: Timberborn's dry models (a
+mod's notes on the decompiled game, second hand: "green to ochre", "A grown plant loses no leaves"). Technical:
+Bevy 0.20 `MeshTag` ("the tag is free for you to use for whatever purpose you wish"), `get_tag`; this
+crate's `glide.rs`. All quoted in `docs/research/tree-condition.md`. Pending index: the iForest paper, a
+first-party source for how shipped games draw a dying tree.
+
+**Numbers** (`/tmp/f6/findings.md`, removed with the scratch).
+
+- Gallery, 522 scenarios on CPU and `--gpu`: 522 PNG = 522 rows, none under 100 KB, no flag, no
+  BLANK_CAPTURE / CAPTURE_TIMEOUT, no `ERROR` or `panicked`. Against main's binary the 492 earlier
+  scenarios: `stats.tsv` columns 1-10 identical, and every image identical outside the overlay (0 differing
+  pixels in 492 of 492; the overlay's "(n/N)" counts the list, so the overlay band is masked).
+- GPU parity: all 522 mean of means 0.073, worst 2.109 (`smoothyoung_shrub_4`, as in iteration 4); the 30
+  condition scenarios 0.023 and worst 0.511 (`condition_oak_dying_6`); the nine CI scenarios 0.521 and
+  1.205 (the seven before: 0.581 and 1.205).
+- Forest bench, interleaved base / new, medians of the runs, ms/frame (cpu ms/frame): pool 10 000 4.93 (14.69)
+  -> 4.97 (14.68) +0.9%; naive 1 000 34.81 (18.75) -> 34.95 (18.93) +0.4%; gpu-live 1 000, 200 frames 181.7
+  (248.4) -> 178.9 (244.5) -1.5%. The Mac has a fast mode (pool median 4.5-4.6, cpu 13.9) that hits both
+  binaries and made two earlier windows unusable; a forest with 25% sick and 12% dying trees, 4.75 ms against
+  4.97 healthy (the lost leaves are not drawn). The first build cost +1.8% on the pool (the per-instance tag
+  fetch); with a binary that has the condition code compiled out the same window read +1.0%, and the
+  `tags_read` flag left +0.9%, so the fetch was not all of it. No build code touched, so no build probe.
+- Looked at: `/tmp/f6/after/sheet_*.png` (every condition scenario, front view), `inspect` at levels 0, 1 and 2
+  and the impostor at 70 m and 140 m, a mixed forest screenshot, the falling leaves of a dying oak.
+- Tests: 334 lib (328 + 6 new) and 66 doc green; clippy `--all-targets --all-features -D warnings`,
+  `cargo doc -D warnings`, `cargo build`, `--features serde`, `--release`. Three mutations each fail a test:
+  removal not clearing the tags, `sync_pooled_looks` writing the look's tag without the condition, a drop
+  that ignores the leaves a tree has lost.
+
+**Critique and verdict** (`/tmp/f6/critique.md`): the state, the mesh look on every preset (all levels of
+detail, shadow maps, GPU growth, falling leaves, composed with the season): GREAT. The impostor: GREAT at 70 m,
+and at 140 m a dying crown is faint patches against the sky (four fifths gone), NOT YET only in that its colour
+washes toward the sky. Open flaws: a class change pops (leaves vanish and recolour in one frame, the lost
+leaves do not fall), three classes and no severity, wood and bark untouched, one dry colour for every species,
+a casting impostor's shadow is the healthy silhouette. Two defects of the first build (the autumn product and
+the impostor's salmon fringe) were found by looking, not by a test, and fixed before shipping.
+
+**Gate gaps, said plainly.** `cargo build --examples` (default features) was clippy's `--all-targets
+--all-features` (it compiles every example) because of the disk; no README clip was re-recorded (healthy
+trees draw as before: the 492 images above; the release re-records all eleven). The docs ride in the
+implementation commit (the harness staged them with it). `cargo-semver-checks` is not installed.
+`cargo package --locked` verifies (131 files) and warns that `clipboard-win 5.4.1` in `Cargo.lock` is
+yanked on crates.io (a transitive dependency of Bevy; not touched here).
+
+**Commits** (`loop/iter-6`): `2bdd2b8` Research: tree-condition look, `14d1523` Research: corpus, `5958c9b`
+the implementation and its docs.
+
+### Ranked backlog after iteration 6
+
+1. **Release 0.47.0** (breaking: `IndexedTree::condition`, `FloraUniform::withered`) once v0.46.1 is 6 hours
+   old (04:42 local, Oct 31): re-record the eleven clips, `cargo semver-checks` if installed; a twelfth clip
+   of a blighted stand would show the new look (`AGENTS.md` lists eleven, so that is an owner call).
+2. **A gradual decline**: a class change pops. On a change toward ill the leaves the new class loses should
+   fall (`DropLeaves` from the cards the old class kept and the new one hides) and the colour should glide,
+   so "a copse that dies in one season" is a season, not a frame.
+3. **A dying tree's wood and shadow**: bark greyed and cracked for `Dying`, and a casting impostor's
+   silhouette thinned by the class.
+4. **D-074 / D-075** on big: try the gallery's cameras placed at the first scenario's views during the warmup.
+5. **D-052 willow curtains**; owner clean-up of #90's locator test; a CPU mirror of `wind_bend`.

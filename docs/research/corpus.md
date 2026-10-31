@@ -42,6 +42,8 @@ what it rests on; this file only says what exists. Newest additions last in each
   worldwide".
 - `10.1111_cgf.13263`: "Tree Growth Modelling Constrained by Growth Equations" (2017; added 2026-10-30).
 - `10.14214_sf.a8529`: "A functional model of tree growth and tree architecture" (1997; added 2026-10-30).
+- `The Computational Beauty of Nature -- Anna's Archive`: Flake, "The Computational Beauty of Nature"
+  (a general text on fractals and growth models; found in `catalog_recent` 2026-10-31, not read).
 
 ## Phenology (leaf colour, leaf fall, blossom)
 
@@ -76,6 +78,9 @@ what it rests on; this file only says what exists. Newest additions last in each
   forests" (stands graded by crown dieback, about 10, 30, 50 and 80 per cent; added 2026-10-31).
 - `10.1038_s41598-022-24833-y`: "Canopy dieback and recovery in Australian native forests following
   extreme drought" (a canopy health score per tree; added 2026-10-31).
+- `10.3832_ifor0538-003`: Johnson and Jacob, "Monitoring the effects of air pollution on forest
+  condition in Europe: is crown defoliation an adequate indicator?" (iForest 2010; in the catalog,
+  not yet converted when added 2026-10-31).
 
 ## Game objects and entity state (`TreeCondition`, `FloraIndex`)
 
