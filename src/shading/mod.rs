@@ -1432,13 +1432,44 @@ mod tests {
         assert!(source.find("let rel = world - origin").unwrap_or(source.len()) < source.find("let lean = MAIN_BEND").unwrap_or(0), "`rel` must be defined before the lean reads it");
     }
 
+    /// Issue #90 (D-073): `rel = world - origin` is a distance between two world-space positions,
+    /// so it already carries the tree's `Transform` scale (and `FloraUnits`); a `scale_y` factor in
+    /// the lean counted the scale twice, and a tree drawn at scale `s` leaned `s` times the share of
+    /// its own height it leans at scale 1 (a foot world: 3.28 times as far). `wind_bend` takes no
+    /// scale and none of its six callers hands it one. Comments are stripped first: the lean line
+    /// says in a comment why `scale_y` is absent, and the test above finds the line by that name.
+    #[test]
+    fn wind_bend_takes_no_scale_and_the_lean_has_no_scale_factor() {
+        fn code(source: &str) -> String {
+            source.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n")
+        }
+        let common = code(include_str!("common.wesl"));
+        let signature = common.lines().find(|l| l.contains("fn wind_bend(")).expect("wind_bend's signature");
+        assert!(!signature.contains("scale"), "wind_bend must take no scale: its lean is already in world units: {signature}");
+        let lean = common.lines().find(|l| l.contains("let lean = MAIN_BEND")).expect("wind_bend's lean line");
+        assert!(!lean.contains("scale"), "the lean must not multiply the tree's scale in again: {lean}");
+        for (stage, source) in [
+            ("vertex", include_str!("vertex.wesl")),
+            ("prepass", include_str!("prepass.wesl")),
+            ("growth", include_str!("../gpu/growth.wesl")),
+            ("growth_prepass", include_str!("../gpu/growth_prepass.wesl")),
+            ("impostor", include_str!("../impostor/impostor.wesl")),
+            ("impostor_prepass", include_str!("../impostor/impostor_prepass.wesl")),
+        ] {
+            let source = code(source);
+            let call = source.lines().find(|l| l.contains("wind_bend(")).unwrap_or_else(|| panic!("{stage} calls wind_bend"));
+            assert!(!call.contains("scale") && !call.contains("world_from_local"), "{stage} must not hand wind_bend a scale: {call}");
+        }
+    }
+
     /// The owner's complaint in numbers, mirrored from `wind_bend` (the shader's own formula): a
     /// plant's crown now leans a fixed share of its **own** height, so a 0.5 m shrub and an 8 m pine
     /// sway by near the same percentage — the "more uniform" of 1792016453 — and the species' `sway`
     /// is a multiplier on that share, not the thing that decides who moves.
     ///
-    /// Mirrors the shipped formula (`MAIN_BEND * response.x * scale_y * length(rel)`, then the
-    /// bend-not-stretch renormalisation); if the shader's lean line changes, this has to change
+    /// Mirrors the shipped formula (`MAIN_BEND * response.x * length(rel)`, then the
+    /// bend-not-stretch renormalisation; the `1.0` below stands for the tree's scale, which
+    /// `rel` carries by itself); if the shader's lean line changes, this has to change
     /// with it, and the first test above holds that the two stay in step.
     #[test]
     fn a_shrub_and_a_pine_sway_by_near_the_same_share_of_their_own_height() {
