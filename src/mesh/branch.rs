@@ -108,9 +108,12 @@ pub fn tube_mesh(node: &Node, radial_segments: u32, twist_deg: f32, tile: Vec2) 
 }
 
 /// Rings (axis points) of `node`'s tube: two for straight untwisted wood,
-/// the node's [`Node::axis_points`] when it bends or twists. Independent of age.
+/// the node's [`Node::axis_points`] when it bends or twists. A pendant strand is a
+/// straight rope a few millimetres thick, so the twist of its branch's wood is not drawn
+/// on it. Independent of age.
 pub(crate) fn tube_rings(node: &Node, twist_deg: f32) -> u32 {
-    if twist_deg.abs() > 0.1 || node.bend > 0.0 { node.axis_points() } else { 2 }
+    let twisted = twist_deg.abs() > 0.1 && node.kind != NodeKind::Strand;
+    if twisted || node.bend > 0.0 { node.axis_points() } else { 2 }
 }
 
 /// [`tube_mesh`], appended to `mesh`. A tube with more than `max_rings` rings
