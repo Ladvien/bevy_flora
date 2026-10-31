@@ -17,7 +17,11 @@ TreeParams
 ```
 
 `pipeline::build_tree(params, age)` runs all of it and returns `TreeMeshes`
-(`trunk`, `foliage`, aged `skeleton`, `mature_at`).
+(`trunk`, `foliage`, aged `skeleton`, `mature_at`). `TreeParams::mature_at()` is that last number from the
+skeleton alone (`generate_skeleton(params).mature_at(&params.growth)`, no meshes): the age a tree stops
+changing, the one `Growing` runs to and `TreeMature` reports; it is not `GrowthParams::maturity_age` (the age
+trunk-attached growth reaches its target): sub-branches are born later and the last wood thickens
+`thickening_lag` times a node's duration after it is born.
 
 ## Growth model
 

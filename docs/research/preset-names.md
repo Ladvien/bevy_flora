@@ -10,7 +10,7 @@ bevy_emerge (family issue F6, `Ladvien/bevy_emerge#102`), by Sanctuary and by th
   `ops_tree.rs` (the tree editor's `preset` field, with an error message built by joining
   `TreePreset::ALL.iter().map(|t| t.name())`) and again in `forest_view.rs` (a species is a preset name or a
   `.tree.ron` path); in this repository `examples/capture_growth.rs`, `forest.rs` (three times),
-  `inspect.rs` and `tree_file.rs` (the last one case-insensitively). Seven copies, and `FromStr`, the
+  `inspect.rs` and `tree_file.rs` (the last one case-insensitively). Eight copies, and `FromStr`, the
   language's own name for it, is missing: `"oak".parse::<TreePreset>()` does not compile.
 - The age at which a tree stops changing, to place a tree at a fraction of its growth: Sanctuary's
   `src/prototype/trees.rs` (`grown_age`, fed by `build_tree(&params, f32::INFINITY).mature_at`) builds a whole
@@ -70,10 +70,12 @@ Two additions, no behaviour change.
    `FromStr` documents its input format ("Check the type's documentation for the input formats it knows
    how to parse"): this one's is `name()`'s output, not the `serde` form (`DragonTree`), which stays as saved
    files have it.
-2. `TreeParams::mature_age(&self) -> f32`: the age, in the growth units of `TreeParams::growth`, from which
-   `TreeAge` no longer changes the tree (`generate_skeleton(self).mature_at(&self.growth)`; the skeleton only,
-   no wood, no leaves). Documented on `TreeAge` and `GrowthParams`. A `TreeAge` at or above it draws the
-   mature tree, exactly: that is the one claim the method makes, and the test checks it against the mesh.
+2. `TreeParams::mature_at(&self) -> f32` (the crate's own word: `TreeMeshes::mature_at`, `TreeRender::mature_at`,
+   `Skeleton::mature_at`; not `mature_age`, which would sit beside `GrowthParams::maturity_age`, a different
+   number): the age, in the growth units of `TreeParams::growth`, from which `TreeAge` no longer changes the
+   tree (`generate_skeleton(self).mature_at(&self.growth)`; the skeleton only, no wood, no leaves). Documented
+   on `TreeAge` and `GrowthParams::maturity_age`. A `TreeAge` above it draws the mature tree: that is the one
+   claim the method makes, and the test checks it against the mesh.
 
 ## Parameters
 
@@ -81,14 +83,15 @@ None. No default, preset literal or `Default` impl changes.
 
 ## Validation targets
 
-- `from_name(p.name()) == Some(p)` for all 20 presets; no two presets share a name; `from_name` of `""`, a
-  prefix (`"ma"`), a different case (`"Oak"`), a padded name (`"oak "`) and the serde form (`"DragonTree"`)
-  is `None`; `p.to_string().parse() == Ok(p)`.
-- The error names the input and lists all 20 names in `ALL` order, so a caller can show it as it is.
-- `mature_age()` equals `build_tree(&params, f32::INFINITY).mature_at` bit for bit for every preset and three
-  seeds; it is finite and positive; a tree built at `mature_age()` has exactly the mesh of the tree built at
-  `f32::INFINITY` (vertices and indices, wood and leaves), and one built at half of it does not.
-- `mature_age()` costs the skeleton, not the mesh: measured against `build_tree` in the log.
+- `from_name(p.name()) == Some(p)` for all 20 presets (no two presets share a name: the existing test); the
+  empty string, a prefix, a different case (`"Oak"`), a padded name (`"oak "`) and the serde form
+  (`"DragonTree"`) give `None`; `p.to_string().parse() == Ok(p)`.
+- The error names the input and lists all 20 names, so a caller can show it as it is.
+- `mature_at()` equals `build_tree(&params, f32::INFINITY).mature_at` bit for bit for every preset and three
+  seeds; it is finite and positive; the wood and leaves of a tree built at `mature_at()` are those of the tree
+  built at `f32::INFINITY` (same triangles, vertices within 1e-6 m: the last sliver of thickening at that very
+  age is a float's rounding short), and the wood built at half of it is not.
+- `mature_at()` costs the skeleton, not the mesh: measured against `build_tree` in the log.
 - Nothing a tree draws moves: the gallery's `stats.tsv` columns 1-10 for the scenarios the examples' argument
   parsing could touch are identical (they cannot move: no tree-building file is edited), and the forest
   bench does not change.
@@ -96,8 +99,8 @@ None. No default, preset literal or `Default` impl changes.
 ## What great looks like
 
 `let params = name.parse::<TreePreset>()?.params();` turns a string from a file, a UI or an agent into a
-tree, and the error is a sentence the editor can show. `TreeAge(params.mature_age() * 0.5)` is a half-grown
-tree of any species, without building one to find out. Neither needs a line of the crate's source to be read.
+tree, and the error is a sentence the editor can show. `TreeAge(params.mature_at() * 0.5)` is a tree half way
+through its growing time, of any species, without building one to find out. Neither needs a line of the crate's source to be read.
 
 ## Deviations
 

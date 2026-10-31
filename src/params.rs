@@ -822,6 +822,29 @@ impl TreeParams {
             flared
         }
     }
+
+    /// The age, in the growth units of [`TreeParams::growth`], at which this tree is fully grown:
+    /// the age [`Growing`](crate::Growing) runs it to and [`TreeMature`](crate::TreeMature)
+    /// reports, and above which a [`TreeAge`](crate::TreeAge) changes nothing (at that very age
+    /// the last wood is a float's rounding short of its full radius, under 1e-6 m). A tree's clock
+    /// is its own (an oak and a palm take different numbers), so a caller that places trees at a
+    /// share of their growth, or shows an age range in an editor, asks the tree.
+    ///
+    /// It is read off the skeleton the seed grows (the last branch to thicken, so there is no
+    /// formula from [`GrowthParams`](crate::GrowthParams) alone) and costs that, not a mesh: the
+    /// same number as `build_tree(&params, f32::INFINITY).mature_at`, without the wood and leaves.
+    ///
+    /// ```
+    /// use bevy_flora::{TreeAge, TreePreset};
+    ///
+    /// let params = TreePreset::Oak.params();
+    /// // An oak half way through its growing time (not half its size):
+    /// let age = TreeAge(0.5 * params.mature_at());
+    /// assert!(age.0 > 0.0 && age.0.is_finite());
+    /// ```
+    pub fn mature_at(&self) -> f32 {
+        crate::skeleton::generate_skeleton(self).mature_at(&self.growth)
+    }
 }
 
 impl Default for TreeParams {

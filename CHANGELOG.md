@@ -7,7 +7,7 @@ All notable changes to `bevy_flora`. The format follows
 
 ## [Unreleased]
 
-A change of `TreeCondition` can be drawn as a decline over seconds (`docs/research/condition-glide.md`), and a leaf that appears on a growing branch grows from nothing instead of popping in (`docs/research/leaf-ease-in.md`).
+A change of `TreeCondition` can be drawn as a decline over seconds (`docs/research/condition-glide.md`), a leaf that appears on a growing branch grows from nothing instead of popping in (`docs/research/leaf-ease-in.md`), and a preset is found by its name and a tree says when it is grown, what an editor and a game each wrote for themselves (`docs/research/preset-names.md`).
 
 ### Added
 
@@ -29,6 +29,21 @@ A change of `TreeCondition` can be drawn as a decline over seconds (`docs/resear
   is eight seconds, a frame a second (deterministic: the clock steps 1/60 s a frame). Meshes, the impostor and
   the falling leaves show the same level; the last frame of that run is byte for byte the image of `--condition
   dying`, and the first of a healthy tree.
+- **`TreePreset::from_name`, `FromStr`, `Display` and `UnknownPreset`: a preset from its name**
+  (`docs/research/preset-names.md`). `TreePreset::from_name("dragon_tree")` and `"dragon_tree".parse::<TreePreset>()`
+  are the inverse of `TreePreset::name` (exact, snake_case: `"Oak"`, `"oak "` and the `serde` spelling
+  `"DragonTree"` are not presets) and `Display` prints it, so the two round-trip. `parse`'s error,
+  `UnknownPreset`, is a `std::error::Error` whose message names what was asked for and lists every preset, a
+  sentence a command line or an editor can show as it is. bevy_emerge's tree editor wrote
+  `TreePreset::ALL.iter().find(|t| t.name() == name)` twice and this crate's examples six times; a downstream
+  crate cannot add `FromStr` to a type it does not own.
+- **`TreeParams::mature_at()`: the age at which a tree is fully grown**, in the tree's own growth units (an oak
+  and a palm take different numbers). It is the age `Growing` runs a tree to and `TreeMature` reports, and
+  above it a `TreeAge` changes nothing, so `TreeAge(0.5 * params.mature_at())` is a tree half way through its
+  growing time of any species. It was reachable only by building the whole tree
+  (`build_tree(&params, f32::INFINITY).mature_at`, as Sanctuary's forest did once per kind) or through
+  `generate_skeleton`; this reads the skeleton and returns the same number bit for bit. `TreeAge` and
+  `GrowthParams::maturity_age` (which is not that age) point at it.
 
 ### Changed
 
@@ -85,9 +100,19 @@ A change of `TreeCondition` can be drawn as a decline over seconds (`docs/resear
   1.6 at most (`hull_spruce_2`: the stylised hull crown is built from where the leaves are, whatever their
   size, so a part-grown leaf moves it a little earlier); no scenario at maturity moved (`stats.tsv`
   columns 1-10 are identical for all of them, on the CPU and under `--gpu`).
+- The examples find a preset with `TreePreset::from_name` (`capture_growth`, `forest` for `--preset`,
+  `--species` and `--undergrowth`, `inspect`, `tree_file`: six hand-written `find`s) and `capture_growth`
+  reads a tree's age from `TreeParams::mature_at`; the clips are unchanged by it (the same number, built the
+  same way). `tree_file --export` still takes a name in any case.
 
 ### Tests
 
+- `a_preset_is_found_by_its_name_and_by_nothing_else` (all 20 round-trip through `from_name`, `FromStr` and
+  `Display`; a near miss, a different case, a padded name and the `serde` spelling are refused),
+  `the_error_says_what_was_asked_for_and_what_there_is` (the input and all 20 names, usable as a
+  `Box<dyn Error>`) and `mature_at_is_the_age_a_tree_stops_changing` (every preset, three seeds: the number
+  `build_tree` reports; the wood and leaves at that age are the full-grown ones to under 1e-6 m, the wood at
+  half of it is not).
 - `a_leaf_that_appears_grows_from_nothing` (every `AllBranches` preset, 0.01-year steps: no leaf above a
   tenth of its size at first sight, none moving by more than 0.3 of it between steps; it fails on the old
   pop, an oak leaf appearing at 0.365 of its size), `a_leaf_is_born_at_nothing_and_reaches_its_size_over_the_next_leafs_growth`
