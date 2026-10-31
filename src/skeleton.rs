@@ -21,6 +21,10 @@ pub enum NodeKind {
     Split,
     /// Recursive sub-branch.
     Sub,
+    /// A pendant strand hung from a branch ([`StrandParams`](crate::StrandParams)): one level below
+    /// its branch, grown like a sub-branch, straight (no gravity bend), its leaves spread along its
+    /// whole length.
+    Strand,
 }
 
 /// One straight segment of the skeleton.
@@ -89,9 +93,10 @@ impl Skeleton {
     /// Move every node hanging off a branch onto its parent's (bent) axis at
     /// `attach_t`, parents first so displacements cascade to descendants.
     /// [`Skeleton::aged`] places nodes the same way. With floor avoidance,
-    /// each node's bent wood is then kept above `floor_level`, and a
-    /// sub-branch's wood is kept out of the trunk.
-    fn seat_on_parents(&mut self, branches: &BranchParams, trunk: &TrunkParams, seed: i32) {
+    /// each node's bent wood is then kept above `floor` (`floor_level`, raised by the pipe model's
+    /// thinnest wood when that is on, which thickens a branch's end past the radius it was
+    /// generated with), and a sub-branch's wood is kept out of the trunk.
+    fn seat_on_parents(&mut self, branches: &BranchParams, floor: f32, trunk: &TrunkParams, seed: i32) {
         for i in 1..self.nodes.len() {
             let Some(p) = self.nodes[i].parent else { continue };
             let parent = &self.nodes[p as usize];
@@ -102,7 +107,7 @@ impl Skeleton {
                 node.start += shift;
             }
             if branches.floor_avoidance {
-                self.nodes[i].keep_above(branches.floor_level);
+                self.nodes[i].keep_above(floor);
             }
             if self.nodes[i].kind == NodeKind::Sub {
                 self.nodes[i].keep_out_of_trunk(trunk, seed);
@@ -427,9 +432,87 @@ pub fn generate_skeleton(params: &TreeParams) -> Skeleton {
             node.bend = bend;
         }
     }
-    skeleton.seat_on_parents(&params.branches, &params.trunk, params.seed);
+    let floor = params.branches.floor_level + if params.mesh.pipe_radius_enabled { params.mesh.pipe_radius_min } else { 0.0 };
+    skeleton.seat_on_parents(&params.branches, floor, &params.trunk, params.seed);
+    hang_strands(&mut skeleton, params);
     crate::growth::assign_birth_times(&mut skeleton, &params.growth);
     skeleton
+}
+
+/// Separate random stream for strands, so a tree without them draws nothing and one with them keeps
+/// every other branch where it was.
+const STRAND_SALT: i32 = 0x57A4_D5E7;
+
+/// The shortest a strand is, as a share of the longest it could be there.
+const STRAND_SHORTEST: f32 = 0.5;
+
+/// The thinnest a strand's base is, in metres, whatever `min_twig_radius` says: a strand of no
+/// thickness would be a hairline of degenerate triangles.
+const STRAND_THINNEST: f32 = 0.001;
+
+/// Hang [`StrandParams`](crate::StrandParams) strands from the outer part of every branch of the seated
+/// `skeleton`: each is a [`NodeKind::Strand`] one level below its branch, appended after every other node
+/// (a parent still comes before its children), born when its branch reaches the point it hangs from. A
+/// strand is a straight rope (no gravity bend, and its twist is not drawn: two rings of wood). The
+/// leader, which only continues the trunk, carries none. Each branch draws from a stream of its own
+/// (keyed by its id), so the strands of one branch never move another's.
+fn hang_strands(skeleton: &mut Skeleton, params: &TreeParams) {
+    let s = &params.branches.strands;
+    if s.density <= 0.0 || s.length <= 0.0 {
+        return;
+    }
+    let b = &params.branches;
+    let start = s.start.clamp(0.0, 1.0);
+    let spread = s.spread.clamp(0.0, 90.0).to_radians();
+    let longest = s.length * params.trunk.height;
+    let floor = b.floor_level + s.clearance;
+    let branches = skeleton.nodes.len();
+    for i in 1..branches {
+        let parent = skeleton.nodes[i].clone();
+        if parent.kind == NodeKind::Leader || parent.length <= 0.0 {
+            continue;
+        }
+        let mut rng = SeededRng::from_parts(params.seed ^ STRAND_SALT, parent.id);
+        let expected = s.density * parent.length * (1.0 - start);
+        let count = expected.floor() as u32 + u32::from(rng.next_f32() < expected.fract());
+        for _ in 0..count {
+            let t = rng.range(start, 1.0);
+            let lean = spread * rng.next_f32().sqrt();
+            let around = rng.range(0.0, TAU);
+            let direction = Vec3::new(lean.sin() * around.cos(), -lean.cos(), lean.sin() * around.sin());
+            let at = parent.point_at(t);
+            // As far as it can hang: all of `longest`, or down to the floor, whichever is less.
+            let reach = if b.floor_avoidance { longest.min((at.y - floor).max(0.0) / -direction.y) } else { longest };
+            let length = reach * rng.range(STRAND_SHORTEST, 1.0);
+            let parent_radius = lerp(parent.base_radius, parent.tip_radius, t);
+            let (base_radius, tip_radius) = floored_radii(0.0, 0.0, b.min_twig_radius.max(STRAND_THINNEST), parent_radius);
+            let mut strand = Node {
+                kind: NodeKind::Strand,
+                parent: Some(parent.id),
+                attach_t: t,
+                anchor: at,
+                start: at,
+                direction,
+                length,
+                bend: 0.0,
+                base_radius,
+                tip_radius,
+                depth: parent.depth.saturating_add(1),
+                height_ratio: parent.height_ratio,
+                ..blank_node()
+            };
+            if b.floor_avoidance {
+                strand.keep_above(floor);
+            }
+            strand.keep_out_of_trunk(&params.trunk, params.seed);
+            if strand.length > 0.05 {
+                push_node(skeleton, strand);
+            }
+        }
+    }
+    if skeleton.nodes.len() > branches {
+        skeleton.recount_children();
+    }
 }
 
 /// Placeholder values for fields filled in later (`..blank_node()`).
@@ -1072,5 +1155,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn strands_hang_from_the_wood_and_stop_above_the_floor() {
+        // D-052: the willow's crown was a mound two thirds of its height; a strand keeps hanging past
+        // the arch of its branch, plumb within `spread`, and stops `clearance` above the floor.
+        let params = TreePreset::Willow.params();
+        let strands = &params.branches.strands;
+        let s = generate_skeleton(&params);
+        let plumb = strands.spread.to_radians().cos();
+        let floor = params.branches.floor_level + strands.clearance;
+        let mut count = 0;
+        for (i, n) in s.nodes.iter().enumerate().filter(|(_, n)| n.kind == NodeKind::Strand) {
+            count += 1;
+            let p = n.parent.expect("a strand hangs from a branch") as usize;
+            let parent = &s.nodes[p];
+            assert!(p < i, "strand {i} comes before its branch {p}");
+            assert_ne!(parent.kind, NodeKind::Strand, "strand {i} hangs from a strand");
+            assert_eq!(n.depth, parent.depth + 1);
+            assert!((strands.start..=1.0).contains(&n.attach_t), "strand {i} hangs from {} of its branch", n.attach_t);
+            assert!(n.start.distance(parent.point_at(n.attach_t)) < 1e-4, "strand {i} starts off its branch's wood");
+            assert!(n.direction.y <= -plumb + 1e-4, "strand {i} leans {} off plumb", n.direction.y.acos());
+            let end = s.end(i);
+            assert!(end.y < n.start.y, "strand {i} does not hang");
+            assert!(end.y - n.tip_radius >= floor - 1e-3, "strand {i} ends at {} under the floor {floor}", end.y);
+        }
+        assert!(count >= 200, "only {count} strands on the willow");
+    }
+
+    #[test]
+    fn strands_leave_every_other_branch_where_it_was() {
+        // Strands draw from streams of their own and come after every other node: a tree with them is
+        // the tree without them plus ropes, so no branch moves, and none is born at another age.
+        let params = TreePreset::Willow.params();
+        let mut bare = params.clone();
+        bare.branches.strands.density = 0.0;
+        let with = generate_skeleton(&params);
+        let without = generate_skeleton(&bare);
+        assert!(without.nodes.iter().all(|n| n.kind != NodeKind::Strand));
+        assert!(with.nodes.len() > without.nodes.len());
+        for (a, b) in with.nodes.iter().zip(&without.nodes) {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.start.to_array().map(f32::to_bits), b.start.to_array().map(f32::to_bits), "node {} moved", a.id);
+            assert_eq!(a.length.to_bits(), b.length.to_bits(), "node {} changed length", a.id);
+            assert_eq!(a.birth.to_bits(), b.birth.to_bits(), "node {} changed birth", a.id);
+        }
+        let again = generate_skeleton(&params);
+        assert_eq!(with, again, "the same seed gave another tree");
+    }
+
+    #[test]
+    fn a_tree_that_asks_for_no_strands_has_none() {
+        for preset in TreePreset::ALL {
+            let mut params = preset.params();
+            params.branches.strands.density = 0.0;
+            let s = generate_skeleton(&params);
+            assert!(s.nodes.iter().all(|n| n.kind != NodeKind::Strand), "{} has strands at density 0", preset.name());
+        }
+    }
+
+    #[test]
+    fn strands_on_any_tree_keep_off_the_trunk_and_the_floor() {
+        // The oak with ropes from the base of every branch, plumb, on a raised floor: nothing hangs
+        // through the trunk or below the clearance.
+        let mut params = TreePreset::Oak.params();
+        params.branches.floor_level = 2.0;
+        params.branches.start = 0.1;
+        params.branches.strands = crate::StrandParams { density: 3.0, start: 0.0, length: 1.0, spread: 0.0, clearance: 0.3 };
+        let s = generate_skeleton(&params);
+        let mut count = 0;
+        for (i, n) in s.nodes.iter().enumerate().filter(|(_, n)| n.kind == NodeKind::Strand) {
+            count += 1;
+            for k in 1..=10 {
+                let p = n.point_at(k as f32 / 10.0);
+                assert!(trunk_depth(&params.trunk, params.seed, p) <= 1e-4, "strand {i} runs through the trunk at {p}");
+            }
+            assert!(s.end(i).y >= 2.3 - n.tip_radius - 1e-3, "strand {i} ends at {} under the raised floor", s.end(i).y);
+        }
+        assert!(count > 50, "only {count} strands");
     }
 }

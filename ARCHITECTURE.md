@@ -117,6 +117,20 @@ but never shrink to hairlines. Sub-branches spreading toward the trunk and
 tip-cluster leaves landing inside it are mirrored away (`skeleton::trunk_depth`);
 after seating and the gravity bend, a sub-branch whose wood still enters the trunk
 gets its bend relaxed, or is shortened (`Node::keep_out_of_trunk`).
+
+**Strands** (`BranchParams::strands`, `skeleton::hang_strands`; the weeping habit, off in every preset but the
+willow). After the skeleton is seated, every branch gets `density * length * (1 - start)` slender twigs of
+`NodeKind::Strand`, one level below it, hung from its outer part (`point_at(t)` on its bent axis, `t` from
+`start` to 1): straight (no gravity bend, so two rings of wood; its branch's twist is not drawn on it), plumb
+within `spread`, as long as `length` times the trunk height or down to `clearance` above the floor, a rope's
+radius (`min_twig_radius`, never over the parent's). Strands come after every other node (a parent still
+precedes its children) and draw from streams of their own (`STRAND_SALT`, keyed by the branch id), so a tree
+without them is untouched and one with them keeps every other branch where it was. A strand grows as a
+sub-branch does (born when its branch reaches `attach_t`), carries `AllBranches` leaves along its whole length
+rather than bunched at its base, and its leaf `i` keeps its place on the grown strand at every age (the first
+`distributed_leaf_count` leaves show, as `GpuGrowth` shows them). The pipe model leaves a strand its own
+radius, and its floor check keeps wood `pipe_radius_min` above the floor when it is on.
+
 Each primary's tube and collar get a `root_segment` reaching into the trunk
 (`primary_root`); a branch hugging the trunk (less than half of its direction
 pointing away from it) gets a closed, rounded `root_dome` instead, since a long
@@ -206,7 +220,7 @@ Wood wears a bundled CC0 scan (`BarkScan`, `TreeParams::bark`; the files and the
 
 ## Gameplay shapes (`shape.rs`)
 
-`TreeShape::from_skeleton(skeleton, params, limb_radius)` is pure CPU and reads only the aged skeleton: the trunk is `TRUNK_PIECES` (3; 1 under 3 m) capsules up its axis whose radii follow `trunk_radius_at` scaled by how far the trunk has thickened (`base_radius / trunk_radius_at(0)`, so pipe radii and growth are honoured), the bottom one resting on the ground with at least the radius at 1 m; every other node with length gives one capsule (two, split at the middle, when gravity bends it) per piece whose mean radius reaches `limb_radius`; the crown box covers every node that bears leaves under the foliage placement (the same rule as `leaf_points_for_node`: terminal unless `AllBranches`, not over `radius_threshold`), from its start (`AllBranches`) or tip, padded by `1.5 x leaf_size x leaf_scale x (1 + leaf_size_variation)`. A test checks the box holds every leaf vertex of every preset at four ages. As a component it is opt-in: `update_tree_shapes` (chained after both rebuild systems) re-ages `TreeRender::full` for every tree in this frame's `TreeGenerated` messages and every newly added shape and writes it with `set_if_neq`; pooled trees get their variant's (`PoolVariant::shape`, or `PoolVariant::skeleton` with their own limb radius) once, from `fill_pooled_shapes`. Capsules are axes: wobble, flare and leaf geometry are not in them. `TreeMature` is written by `grow_trees` the frame a growing tree's age reaches `mature_at`.
+`TreeShape::from_skeleton(skeleton, params, limb_radius)` is pure CPU and reads only the aged skeleton: the trunk is `TRUNK_PIECES` (3; 1 under 3 m) capsules up its axis whose radii follow `trunk_radius_at` scaled by how far the trunk has thickened (`base_radius / trunk_radius_at(0)`, so pipe radii and growth are honoured), the bottom one resting on the ground with at least the radius at 1 m; every other node with length gives one capsule (two, split at the middle, when gravity bends it) per piece whose mean radius reaches `limb_radius`; the crown box covers every node that bears leaves under the foliage placement (the same rule as `leaf_points_for_node`: terminal unless `AllBranches`, not over `radius_threshold`), from its wood (`AllBranches`: a bent branch's axis, which arches past both of its ends, so the box follows the axis samples and not just the two ends) or its tip, padded by `1.5 x leaf_size x leaf_scale x (1 + leaf_size_variation)`. A test checks the box holds every leaf vertex of every preset at four ages. As a component it is opt-in: `update_tree_shapes` (chained after both rebuild systems) re-ages `TreeRender::full` for every tree in this frame's `TreeGenerated` messages and every newly added shape and writes it with `set_if_neq`; pooled trees get their variant's (`PoolVariant::shape`, or `PoolVariant::skeleton` with their own limb radius) once, from `fill_pooled_shapes`. Capsules are axes: wobble, flare and leaf geometry are not in them. `TreeMature` is written by `grow_trees` the frame a growing tree's age reaches `mature_at`.
 
 ## Felling (`felling.rs`, `mesh/cut.rs`)
 
