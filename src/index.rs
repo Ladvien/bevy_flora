@@ -17,6 +17,10 @@
 //! walk is bounded by the cells the index holds, never by the query's own extent, so an unbounded
 //! query visits every tree (and a ray every cell its track crosses over them) and returns.
 //!
+//! Each tree also says how well it is: [`IndexedTree::condition`], the [`TreeCondition`] a game set on
+//! the tree's entity (healthy where it set none), so "the sick trees near the blight" is one
+//! [`FloraIndex::within`] and a filter, and [`FloraIndex::condition_of`] answers for one entity.
+//!
 //! [`ProceduralTreeAsset`]: crate::ProceduralTreeAsset
 
 use std::collections::HashMap;
@@ -27,6 +31,7 @@ use bevy::math::{IVec2, Vec2, Vec3, Vec3Swizzles};
 use bevy::shape::Ray3d;
 use bevy::transform::components::GlobalTransform;
 
+use crate::condition::TreeCondition;
 use crate::felling::{Felled, TreeLog, TreeStump};
 use crate::shape::{TreeShape, WoodCapsule};
 use crate::growth::fraction;
@@ -71,6 +76,9 @@ pub struct IndexedTree {
     /// A plant of the forest floor ([`TreeParams::undergrowth`](crate::TreeParams::undergrowth): the
     /// shrub, juniper and fern presets): skip it where only trees count.
     pub undergrowth: bool,
+    /// How well the tree is: its [`TreeCondition`], [`TreeCondition::Healthy`] for a tree without
+    /// one. Kept up to date with the component, as the rest of the entry is with the tree.
+    pub condition: TreeCondition,
 }
 
 /// Where a ray met a trunk: [`FloraIndex::cast_ray`].
@@ -250,6 +258,21 @@ impl FloraIndex {
     /// The tree `entity`, if it is indexed.
     pub fn get(&self, entity: Entity) -> Option<&IndexedTree> {
         self.trees.get(&entity).map(|(tree, ..)| tree)
+    }
+
+    /// How well `entity` is, if it is indexed: its [`TreeCondition`] (healthy for a tree without
+    /// one). `None` for an entity the index does not hold: a felled tree (its component stays on the
+    /// entity), a despawned one, a pooled tree whose pool has not loaded.
+    pub fn condition_of(&self, entity: Entity) -> Option<TreeCondition> {
+        self.get(entity).map(|tree| tree.condition)
+    }
+
+    /// Set the condition of an indexed `entity`; a tree not indexed has no entry to set (it reads its
+    /// component when it is indexed).
+    fn set_condition(&mut self, entity: Entity, condition: TreeCondition) {
+        if let Some((tree, ..)) = self.trees.get_mut(&entity) {
+            tree.condition = condition;
+        }
     }
 
     /// Every indexed tree, in no order.
@@ -473,7 +496,7 @@ impl Trunk {
     }
 
     /// The trunk where `place` stands it, as the index holds it.
-    fn placed(&self, entity: Entity, place: &GlobalTransform, undergrowth: bool) -> IndexedTree {
+    fn placed(&self, entity: Entity, place: &GlobalTransform, undergrowth: bool, condition: TreeCondition) -> IndexedTree {
         let base = place.transform_point(self.start);
         let top = place.transform_point(self.start + self.direction * self.length);
         let height = base.distance(top);
@@ -486,12 +509,14 @@ impl Trunk {
             base_radius: self.base_radius * scale,
             top_radius: self.tip_radius * scale,
             undergrowth,
+            condition,
         }
     }
 }
 
 /// Keep [`FloraIndex`] up to date: trees gone or felled out, trees new, moved, rebuilt or grown
-/// in, and every tree of a pool that has just loaded or changed.
+/// in, every tree of a pool that has just loaded or changed, and a tree whose [`TreeCondition`]
+/// was set, changed or removed.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn index_trees(
     mut index: ResMut<FloraIndex>,
@@ -499,21 +524,27 @@ pub(crate) fn index_trees(
     mut pool_events: MessageReader<AssetEvent<TreePool>>,
     mut gone_procedural: RemovedComponents<ProceduralTree>,
     mut gone_pooled: RemovedComponents<PooledTree>,
+    mut gone_condition: RemovedComponents<TreeCondition>,
+    new_conditions: Query<(Entity, &TreeCondition), Changed<TreeCondition>>,
+    conditions: Query<&TreeCondition>,
     felled: Query<Entity, Added<Felled>>,
     procedural: Query<
-        (Entity, &ProceduralTree, &TreeAge, Option<&TreeRender>, &GlobalTransform),
+        (Entity, &ProceduralTree, &TreeAge, Option<&TreeRender>, &GlobalTransform, Option<&TreeCondition>),
         (
             Without<Felled>,
             Or<(Changed<GlobalTransform>, Changed<ProceduralTree>, Changed<TreeAge>, Changed<TreeRender>)>,
         ),
     >,
-    moved_pooled: Query<(Entity, &PooledTree, &GlobalTransform), (Without<Felled>, Or<(Changed<GlobalTransform>, Changed<PooledTree>)>)>,
-    all_pooled: Query<(Entity, &PooledTree, &GlobalTransform), Without<Felled>>,
+    moved_pooled: Query<
+        (Entity, &PooledTree, &GlobalTransform, Option<&TreeCondition>),
+        (Without<Felled>, Or<(Changed<GlobalTransform>, Changed<PooledTree>)>),
+    >,
+    all_pooled: Query<(Entity, &PooledTree, &GlobalTransform, Option<&TreeCondition>), Without<Felled>>,
 ) {
     for entity in gone_procedural.read().chain(gone_pooled.read()).chain(&felled) {
         index.remove(entity);
     }
-    for (entity, tree, age, render, place) in &procedural {
+    for (entity, tree, age, render, place, condition) in &procedural {
         let shape = match render {
             // Its trunk at the age it shows.
             Some(render) => {
@@ -534,7 +565,16 @@ pub(crate) fn index_trees(
                 }
             }
         };
-        index.insert(shape.placed(entity, place, tree.0.undergrowth));
+        index.insert(shape.placed(entity, place, tree.0.undergrowth, condition.copied().unwrap_or_default()));
+    }
+    // A condition removed, then one set or changed: in that order, so a removal and an insert in
+    // one frame end at the insert. A tree not indexed (despawned, felled, its pool not loaded)
+    // has no entry to change, and reads its component when it is indexed.
+    for entity in gone_condition.read() {
+        index.set_condition(entity, conditions.get(entity).copied().unwrap_or_default());
+    }
+    for (entity, condition) in &new_conditions {
+        index.set_condition(entity, *condition);
     }
     let Some(pools) = pools else { return };
     let mut reloaded = Vec::new();
@@ -543,18 +583,19 @@ pub(crate) fn index_trees(
             reloaded.push(*id);
         }
     }
-    let mut add = |entity: Entity, pooled: &PooledTree, place: &GlobalTransform| {
+    let mut add = |entity: Entity, pooled: &PooledTree, place: &GlobalTransform, condition: Option<&TreeCondition>| {
         let Some(pool) = pools.get(&pooled.pool) else { return };
         let variant = &pool.variants[pooled.variant as usize % pool.variants.len()];
-        index.insert(Trunk::grown(&variant.skeleton.nodes[0], 1.0, 1.0).placed(entity, place, pool.params.undergrowth));
+        let trunk = Trunk::grown(&variant.skeleton.nodes[0], 1.0, 1.0);
+        index.insert(trunk.placed(entity, place, pool.params.undergrowth, condition.copied().unwrap_or_default()));
     };
-    for (entity, pooled, place) in &moved_pooled {
-        add(entity, pooled, place);
+    for (entity, pooled, place, condition) in &moved_pooled {
+        add(entity, pooled, place, condition);
     }
     if !reloaded.is_empty() {
-        for (entity, pooled, place) in &all_pooled {
+        for (entity, pooled, place, condition) in &all_pooled {
             if reloaded.contains(&pooled.pool.id()) {
-                add(entity, pooled, place);
+                add(entity, pooled, place, condition);
             }
         }
     }
@@ -613,7 +654,16 @@ mod tests {
 
     /// A 6 m trunk, 0.5 m round at its foot and 0.25 m at its top, standing at (x, 0, z).
     fn tree(entity: Entity, x: f32, z: f32) -> IndexedTree {
-        IndexedTree { entity, base: Vec3::new(x, 0.0, z), axis: Vec3::Y, height: 6.0, base_radius: 0.5, top_radius: 0.25, undergrowth: false }
+        IndexedTree {
+            entity,
+            base: Vec3::new(x, 0.0, z),
+            axis: Vec3::Y,
+            height: 6.0,
+            base_radius: 0.5,
+            top_radius: 0.25,
+            undergrowth: false,
+            condition: TreeCondition::Healthy,
+        }
     }
 
     #[test]
