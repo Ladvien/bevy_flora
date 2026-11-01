@@ -87,7 +87,7 @@ Right-drag and the wheel orbit, `[` `]` cycle the 20 presets, `Space` grows the 
 
 ## Part of the Coven
 
-`bevy_flora` is one crate of [the Bevy Coven](https://github.com/bevy-coven), a family of Bevy plugins for the parts of a game that only scale with human authoring: levels, set dressing, dialogue, villagers' lives, UI and weather. [Grimoire](https://github.com/bevy-coven/bevy_grimoire), the coven's editor, takes this crate as an optional feature and edits a tree's own `TreeParams` live — see [using flora in Grimoire](https://bevy-coven.github.io/crates/bevy_flora.html#use-it-in-grimoire).
+`bevy_flora` is one crate of [the Bevy Coven](https://github.com/bevy-coven), a family of Bevy plugins for the parts of a game that only scale with human authoring: levels, set dressing, dialogue, villagers' lives, UI and weather. [The Cauldron](https://github.com/bevy-coven/bevy_grimoire), the coven's editor, takes this crate as an optional feature and edits a tree's own `TreeParams` live — see [using flora in the Cauldron](https://bevy-coven.github.io/crates/bevy_flora.html#use-it-in-the-cauldron).
 
 ## Bevy compatibility
 
